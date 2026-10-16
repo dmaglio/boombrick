@@ -19,7 +19,7 @@ RUN pc="${SYSROOT}/usr/lib/pkgconfig/sdl2.pc"; \
 ENV PATH=/usr/local/go/bin:${PATH} \
     CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
     CC=${CROSS_COMPILE}gcc CXX=${CROSS_COMPILE}g++ \
-    CGO_CFLAGS="--sysroot=${SYSROOT} -O2" CGO_LDFLAGS="--sysroot=${SYSROOT}" \
+    CGO_CFLAGS="--sysroot=${SYSROOT} -I${SYSROOT}/usr/include/opus -O2" CGO_LDFLAGS="--sysroot=${SYSROOT}" \
     PKG_CONFIG_SYSROOT_DIR=${SYSROOT} PKG_CONFIG_LIBDIR=${SYSROOT}/usr/lib/pkgconfig
 
 WORKDIR /src

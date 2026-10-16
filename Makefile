@@ -3,7 +3,7 @@ VERSION ?= dev
 PKG     := github.com/ujjwal313/boombrick
 LDFLAGS := -s -w -X $(PKG)/internal/version.Version=$(VERSION)
 
-.PHONY: build run test fonts clean
+.PHONY: build run test fonts fixtures clean
 
 build:
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/desktop/boombrick ./cmd/boombrick
@@ -16,6 +16,9 @@ test:
 
 fonts:
 	scripts/fonts.sh
+
+fixtures:
+	scripts/fixtures.sh
 
 clean:
 	rm -rf dist
@@ -39,6 +42,8 @@ pak: device
 	mkdir -p $(PAK_DIR)
 	cp dist/tg5040/boombrick build/pak/launch.sh LICENSE NOTICE $(PAK_DIR)/
 	cp assets/fonts/OFL-*.txt $(PAK_DIR)/
+	docker run --rm -v "$$(pwd)":/src $(DEVICE_IMAGE) sh -c \
+		'mkdir -p $(PAK_DIR)/lib && cp -L $$SYSROOT/usr/lib/libopus.so.0 $$SYSROOT/usr/lib/libogg.so.0 $(PAK_DIR)/lib/'
 	rm -f dist/Boombrick.pak.zip
 	cd dist/pak && zip -qr ../Boombrick.pak.zip Tools
 	@echo "dist/Boombrick.pak.zip"

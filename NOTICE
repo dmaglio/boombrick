@@ -18,6 +18,14 @@ It includes or links the following third-party components:
   Cormorant Garamond           SIL OFL 1.1           Christian Thalmann
   Lora                         SIL OFL 1.1           Cyreal
   Lucide icons                 ISC, MIT (Feather)    https://lucide.dev
+  dr_mp3, dr_flac              Public domain/MIT-0   https://github.com/mackron/dr_libs (dfe837763100)
+  opusfile                     BSD-3-Clause          https://opus-codec.org (v0.12)
+  libopus, libogg              BSD-3-Clause          https://xiph.org
+  faad2                        GPL-2.0-or-later      https://github.com/knik0/faad2 (2.11.1)
+                               Code from FAAD2 is copyright (c) Nero AG, www.nero.com
+  speexdsp resampler           BSD-3-Clause          https://speex.org (SpeexDSP-1.2.1)
+  dhowden/tag                  BSD-2-Clause          https://github.com/dhowden/tag
+  ALSA library (libasound)     LGPL-2.1              https://www.alsa-project.org
 
 The font licences (OFL-*.txt) are in assets/fonts/ in the source tree and
 next to this file in the pak.
