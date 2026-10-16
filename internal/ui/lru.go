@@ -57,6 +57,13 @@ func (c *LRU[K, V]) remove(e *list.Element) {
 	}
 }
 
+// Clear removes every value, calling evict for each.
+func (c *LRU[K, V]) Clear() {
+	for c.order.Len() > 0 {
+		c.remove(c.order.Back())
+	}
+}
+
 // Len is the number of cached values.
 func (c *LRU[K, V]) Len() int { return c.order.Len() }
 

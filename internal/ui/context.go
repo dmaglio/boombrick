@@ -11,7 +11,9 @@ import (
 	"math"
 	"time"
 
+	"github.com/ujjwal313/boombrick/internal/media"
 	"github.com/ujjwal313/boombrick/internal/theme"
+	"github.com/ujjwal313/boombrick/internal/ui/anim"
 	"github.com/ujjwal313/boombrick/internal/ui/gfx"
 	"github.com/ujjwal313/boombrick/internal/ui/icons"
 	"github.com/ujjwal313/boombrick/internal/ui/raster"
@@ -27,25 +29,72 @@ type Status struct {
 	Battery    int
 }
 
+// Covers supplies album art. Neither method blocks: each returns nil while
+// the picture is being prepared, and none once it's known there is none. A
+// picture is handed over once; the context keeps it as a texture.
+type Covers interface {
+	Cover(c media.Cover, px int) (img *image.NRGBA, none bool)
+	Backdrop(c media.Cover) (img *image.NRGBA, none bool)
+}
+
+// Fade is a change of accent in progress: backgrounds drawn with From show
+// under those drawn with To, which are at T, from 0 to 1. The zero Fade is
+// none, and backgrounds use Accent.
+type Fade struct {
+	From, To theme.Accent
+	T        float32
+	On       bool
+}
+
 // Context is passed to every widget and screen while drawing. It is only used
 // from the UI thread.
 type Context struct {
-	Canvas *gfx.Canvas
-	Fonts  *text.Engine
-	Accent theme.Accent
-	Status Status
-	Now    time.Time
-	Scale  float32 // device pixels per design pixel
-	Alpha  float32 // multiplies the opacity of everything drawn; screens fade with it
+	Canvas     *gfx.Canvas
+	Fonts      *text.Engine
+	Accent     theme.Accent
+	Fade       Fade // a change of accent under way, for the backgrounds
+	Status     Status
+	Now        time.Time
+	Scale      float32 // device pixels per design pixel
+	Alpha      float32 // multiplies the opacity of everything drawn; screens fade with it
+	Covers     Covers  // nil: placeholders only
+	MaxUploads int     // covers turned into textures per frame; the rest wait for the next frames
 
-	texts  *LRU[textKey, textEntry]
-	fits   map[fitKey]string
-	masks  *LRU[raster.Shape, *gfx.Texture]
-	images *LRU[string, *gfx.Texture]
-	icons  map[iconKey]*gfx.Texture
-	tf     []transform
-	clips  []gfx.Rect
+	texts    *TextCache
+	fits     map[fitKey]string
+	masks    *LRU[raster.Shape, *gfx.Texture]
+	images   *LRU[string, *gfx.Texture]
+	icons    map[iconKey]*gfx.Texture
+	covers   *LRU[coverKey, *gfx.Texture]
+	glows    *LRU[glowKey, glowEntry]
+	fadeFrom map[coverKey]time.Time // when each cover arrived, while it fades in
+	uploads  int                    // covers uploaded this frame
+	pending  bool                   // this frame left a cover fading in or waiting to be uploaded
+	tf       []transform
+	clips    []gfx.Rect
+	made     int // text and glow textures made
 }
+
+// TextCache holds the textures of text that has been drawn, up to a budget
+// of bytes, letting the least recently drawn go first. Text draws through the
+// context's own; a screen whose text is large keeps one of its own for it, so
+// as not to push everything else out of the shared one.
+type TextCache struct {
+	lru *LRU[textKey, textEntry]
+}
+
+// NewTextCache returns a cache for budget bytes of textures.
+func NewTextCache(budget int) *TextCache {
+	return &TextCache{NewLRU[textKey, textEntry](budget,
+		func(e textEntry) int { return e.tex.Bytes() },
+		func(e textEntry) { e.tex.Destroy() })}
+}
+
+// Len is the number of texts in the cache.
+func (c *TextCache) Len() int { return c.lru.Len() }
+
+// Clear frees the cache's textures.
+func (c *TextCache) Clear() { c.lru.Clear() }
 
 type textKey struct {
 	s  string
@@ -63,6 +112,28 @@ type fitKey struct {
 	maxW int
 }
 
+type coverKey struct {
+	artist string
+	album  string
+	px     int
+	radius float64 // device pixels
+}
+
+// glowDown is how much smaller than the text its glow is made; a blur this
+// soft loses nothing when the renderer scales it back up.
+const glowDown = 4
+
+type glowKey struct {
+	s  string
+	st text.Style
+	r  int // blur radius, device pixels
+}
+
+type glowEntry struct {
+	tex       *gfx.Texture
+	left, top int // texture pixels (1/glowDown of device) from where the text is drawn to the texture's corner
+}
+
 type iconKey struct {
 	name   string
 	size   int
@@ -78,6 +149,8 @@ const (
 	textBudget  = 24 << 20
 	maskBudget  = 16 << 20
 	imageBudget = 48 << 20
+	coverBudget = 24 << 20
+	glowBudget  = 8 << 20
 	maxFits     = 4096
 )
 
@@ -92,13 +165,17 @@ func NewContext(c *gfx.Canvas, fonts *text.Engine, scale float32) *Context {
 		Accent: theme.Fallback(),
 		Scale:  scale,
 		Alpha:  1,
-		texts: NewLRU[textKey, textEntry](textBudget,
-			func(e textEntry) int { return e.tex.Bytes() },
-			func(e textEntry) { e.tex.Destroy() }),
-		fits:   map[fitKey]string{},
-		masks:  NewLRU[raster.Shape, *gfx.Texture](maskBudget, texSize, texFree),
-		images: NewLRU[string, *gfx.Texture](imageBudget, texSize, texFree),
-		icons:  map[iconKey]*gfx.Texture{},
+		texts:  NewTextCache(textBudget),
+		glows: NewLRU[glowKey, glowEntry](glowBudget,
+			func(e glowEntry) int { return e.tex.Bytes() },
+			func(e glowEntry) { e.tex.Destroy() }),
+		fits:       map[fitKey]string{},
+		masks:      NewLRU[raster.Shape, *gfx.Texture](maskBudget, texSize, texFree),
+		images:     NewLRU[string, *gfx.Texture](imageBudget, texSize, texFree),
+		icons:      map[iconKey]*gfx.Texture{},
+		covers:     NewLRU[coverKey, *gfx.Texture](coverBudget, texSize, texFree),
+		fadeFrom:   map[coverKey]time.Time{},
+		MaxUploads: 3,
 	}
 }
 
@@ -172,29 +249,35 @@ func (u *Context) tint(col color.NRGBA) color.NRGBA {
 	return col
 }
 
-func (u *Context) text(s string, st text.Style) (textEntry, bool) {
+func (u *Context) text(c *TextCache, s string, st text.Style) (textEntry, bool) {
 	k := textKey{s, st}
-	if e, ok := u.texts.Get(k); ok {
+	if e, ok := c.lru.Get(k); ok {
 		return e, true
 	}
 	ds := u.device(st)
 	line := u.Fonts.Shape(s, ds)
 	img, _ := u.Fonts.Rasterize(line, ds)
+	u.made++
 	tex, err := u.Canvas.Upload(img)
 	if err != nil {
 		return textEntry{}, false
 	}
 	e := textEntry{tex: tex, width: float32(line.Width) / u.Scale}
-	u.texts.Put(k, e)
+	c.lru.Put(k, e)
 	return e, true
 }
 
 // Text draws s with the top of its line box at y and returns its advance.
 func (u *Context) Text(s string, st text.Style, x, y float32, col color.NRGBA) float32 {
+	return u.TextIn(u.texts, s, st, x, y, col)
+}
+
+// TextIn draws s as Text does, keeping its texture in c.
+func (u *Context) TextIn(c *TextCache, s string, st text.Style, x, y float32, col color.NRGBA) float32 {
 	if s == "" {
 		return 0
 	}
-	e, ok := u.text(s, st)
+	e, ok := u.text(c, s, st)
 	if !ok {
 		return 0
 	}
@@ -204,9 +287,27 @@ func (u *Context) Text(s string, st text.Style, x, y float32, col color.NRGBA) f
 	return e.width
 }
 
+// PrepareText makes the texture TextIn would draw s with and keeps it in c,
+// drawing nothing, so that a frame to come can draw it without making it. It
+// reports whether it had to be made.
+func (u *Context) PrepareText(c *TextCache, s string, st text.Style) bool {
+	if s == "" {
+		return false
+	}
+	if _, ok := c.lru.Get(textKey{s, st}); ok {
+		return false
+	}
+	u.text(c, s, st)
+	return true
+}
+
+// Made is how many text and glow textures the context has made: a frame that
+// leaves it unchanged drew only what was ready.
+func (u *Context) Made() int { return u.made }
+
 // TextWidth measures s without drawing it.
 func (u *Context) TextWidth(s string, st text.Style) float32 {
-	if e, ok := u.texts.Get(textKey{s, st}); ok {
+	if e, ok := u.texts.lru.Get(textKey{s, st}); ok {
 		return e.width
 	}
 	return float32(u.Fonts.Shape(s, u.device(st)).Width) / u.Scale
@@ -310,4 +411,175 @@ func (u *Context) Image(key string, build func() *image.NRGBA, dst gfx.Rect, col
 		u.images.Put(key, t)
 	}
 	u.Canvas.Draw(t, u.Apply(dst), u.tint(col))
+}
+
+// PutImage uploads img and keeps it under key, as Image keeps what it builds,
+// so an image too slow to build on the UI thread can be made on another
+// goroutine and drawn by Image without building it.
+func (u *Context) PutImage(key string, img *image.NRGBA) {
+	t, err := u.Canvas.Upload(img)
+	if err != nil {
+		return // Image builds it when it is drawn
+	}
+	u.images.Put(key, t)
+}
+
+// BeginFrame starts a frame drawn at now.
+func (u *Context) BeginFrame(now time.Time) {
+	u.Now = now
+	u.uploads, u.pending = 0, false
+}
+
+// Animating reports whether the last frame left a cover fading in, or one
+// waiting for its turn to be uploaded, so another frame is due.
+func (u *Context) Animating() bool { return u.pending }
+
+// Cover returns c's art for an element size design pixels square with
+// corners of radius, and how opaque to draw it: each cover fades in over
+// anim.ArtFade when it first shows. A nil texture means there is no art, or
+// none yet; the caller draws the placeholder then, and under a cover that is
+// still fading in.
+func (u *Context) Cover(c media.Cover, size float32, radius float64) (*gfx.Texture, float32) {
+	if c.Album == "" || u.Covers == nil {
+		return nil, 0
+	}
+	k := coverKey{c.Artist, c.Album, u.Px(size), radius * float64(u.Scale)}
+	t, ok := u.covers.Get(k)
+	if !ok {
+		if u.uploads >= u.MaxUploads {
+			u.pending = true
+			return nil, 0
+		}
+		img, _ := u.Covers.Cover(c, k.px)
+		if img == nil {
+			return nil, 0
+		}
+		// Art smaller than asked for is scaled up when drawn; round it in its own pixels.
+		raster.RoundCorners(img, k.radius*float64(img.Rect.Dx())/float64(k.px))
+		var err error
+		if t, err = u.Canvas.Upload(img); err != nil {
+			return nil, 0
+		}
+		u.uploads++
+		u.covers.Put(k, t)
+		u.fadeFrom[k] = u.Now
+	}
+	return t, u.fadeIn(k)
+}
+
+// fadeIn is how opaque the cover or backdrop k is at u.Now, fading in over
+// anim.ArtFade from when it arrived. While it fades, more frames are due.
+func (u *Context) fadeIn(k coverKey) float32 {
+	from, fading := u.fadeFrom[k]
+	if !fading {
+		return 1
+	}
+	a := float32(u.Now.Sub(from)) / float32(anim.ArtFade)
+	if a >= 1 {
+		delete(u.fadeFrom, k)
+		return 1
+	}
+	u.pending = true
+	return max(a, 0)
+}
+
+// Backdrop returns c's Lyrics backdrop and how opaque to draw it, fading in
+// as covers do. none is true when the album has no art; a nil texture
+// without none means it isn't ready yet.
+func (u *Context) Backdrop(c media.Cover) (t *gfx.Texture, alpha float32, none bool) {
+	if c.Album == "" || u.Covers == nil {
+		return nil, 0, true
+	}
+	k := coverKey{artist: c.Artist, album: c.Album} // px 0 marks the backdrop
+	t, ok := u.covers.Get(k)
+	if !ok {
+		if u.uploads >= u.MaxUploads {
+			u.pending = true
+			return nil, 0, false
+		}
+		img, none := u.Covers.Backdrop(c)
+		if img == nil {
+			return nil, 0, none
+		}
+		var err error
+		if t, err = u.Canvas.Upload(img); err != nil {
+			return nil, 0, false
+		}
+		u.uploads++
+		u.covers.Put(k, t)
+		u.fadeFrom[k] = u.Now
+	}
+	return t, u.fadeIn(k), false
+}
+
+// TextGlow draws a glow behind s as Text draws it at (x, y): the glyphs
+// blurred as CSS's text-shadow blurs them by blur design pixels, in col.
+func (u *Context) TextGlow(s string, st text.Style, x, y, blur float32, col color.NRGBA) {
+	if s == "" {
+		return
+	}
+	e, ok := u.glow(s, st, blur)
+	if !ok {
+		return
+	}
+	dst := gfx.Rect{X: x - float32(e.left*glowDown)/u.Scale, Y: y - float32(e.top*glowDown)/u.Scale,
+		W: float32(e.tex.W*glowDown) / u.Scale, H: float32(e.tex.H*glowDown) / u.Scale}
+	u.Canvas.Draw(e.tex, u.Apply(dst), u.tint(col))
+}
+
+// PrepareGlow makes the glow TextGlow would draw behind s, drawing nothing, as
+// PrepareText does for text, and reports whether it had to be made.
+func (u *Context) PrepareGlow(s string, st text.Style, blur float32) bool {
+	if s == "" {
+		return false
+	}
+	if _, ok := u.glows.Get(glowKey{s, st, u.glowRadius(blur)}); ok {
+		return false
+	}
+	u.glow(s, st, blur)
+	return true
+}
+
+// glowRadius is the box blur radius in device pixels for a CSS blur of blur
+// design pixels: a CSS blur is twice the Gaussian's deviation, and a box blur
+// of radius r comes close to a deviation of r.
+func (u *Context) glowRadius(blur float32) int { return max(int(blur*u.Scale/2+0.5), 1) }
+
+// glow returns the glow of s blurred by blur design pixels, making it the first
+// time.
+func (u *Context) glow(s string, st text.Style, blur float32) (glowEntry, bool) {
+	r := u.glowRadius(blur)
+	k := glowKey{s, st, r}
+	e, ok := u.glows.Get(k)
+	if !ok {
+		ds := u.device(st)
+		ds.Size /= glowDown
+		mask, pad := u.Fonts.Rasterize(u.Fonts.Shape(s, ds), ds)
+		rq := max((r+glowDown/2)/glowDown, 1)
+		m := 3 * rq // room for the glow to spread
+		b := mask.Rect
+		img := image.NewNRGBA(image.Rect(0, 0, b.Dx()+2*m, b.Dy()+2*m))
+		for i := 0; i < len(img.Pix); i += 4 {
+			img.Pix[i], img.Pix[i+1], img.Pix[i+2] = 255, 255, 255
+		}
+		for yy := range b.Dy() {
+			for xx := range b.Dx() {
+				img.Pix[img.PixOffset(xx+m, yy+m)+3] = mask.Pix[mask.PixOffset(xx+b.Min.X, yy+b.Min.Y)+3]
+			}
+		}
+		raster.BlurAlpha(img, rq)
+		u.made++
+		tex, err := u.Canvas.Upload(img)
+		if err != nil {
+			return glowEntry{}, false
+		}
+		e = glowEntry{tex: tex, left: pad + m, top: m}
+		u.glows.Put(k, e)
+	}
+	return e, true
+}
+
+// DrawCover draws a texture from Cover into dst at alpha.
+func (u *Context) DrawCover(t *gfx.Texture, dst gfx.Rect, alpha float32) {
+	u.Canvas.Draw(t, u.Apply(dst), u.tint(color.NRGBA{R: 255, G: 255, B: 255, A: uint8(255*alpha + 0.5)}))
 }

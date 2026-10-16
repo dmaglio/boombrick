@@ -1,14 +1,19 @@
 package ui
 
 import (
+	"bytes"
+	"image"
 	"image/color"
 	"os"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ujjwal313/boombrick/assets"
+	"github.com/ujjwal313/boombrick/internal/media"
 	"github.com/ujjwal313/boombrick/internal/theme"
+	"github.com/ujjwal313/boombrick/internal/ui/anim"
 	"github.com/ujjwal313/boombrick/internal/ui/gfx"
 	"github.com/ujjwal313/boombrick/internal/ui/text"
 )
@@ -49,7 +54,7 @@ func TestScaledTextIsMeasuredInDesignPixels(t *testing.T) {
 		t.Fatalf("width at scale 1.25 = %v design px, at scale 1 = %v", w2, w1)
 	}
 	scaled.Text("Home", text.Body, 0, 0, theme.Paper)
-	e, ok := scaled.texts.Get(textKey{"Home", text.Body})
+	e, ok := scaled.texts.lru.Get(textKey{"Home", text.Body})
 	if !ok {
 		t.Fatal("text was not cached")
 	}
@@ -132,5 +137,111 @@ func TestAlphaFades(t *testing.T) {
 	u.Fill(gfx.Rect{X: 0, Y: 0, W: 10, H: 10}, color.NRGBA{255, 255, 255, 255})
 	if r := off.Image().NRGBAAt(5, 5).R; r < 125 || r > 130 {
 		t.Fatalf("half-faded white over black = %d, want about 127", r)
+	}
+}
+
+func TestTextGlowSpreadsPastTheText(t *testing.T) {
+	u, off := newContext(t, 1)
+	off.Clear(color.NRGBA{0, 0, 0, 255})
+	u.TextGlow("Hello", text.Body, 40, 30, 30, color.NRGBA{255, 255, 255, 255})
+	img := off.Image()
+	if c := img.NRGBAAt(60, 24); c.R == 0 {
+		t.Fatal("no glow just above the line")
+	}
+	if c := img.NRGBAAt(199, 99); c.R != 0 {
+		t.Fatalf("glow far from the text: %v", c)
+	}
+}
+
+// Text drawn through a cache of its own stays out of the shared one, looks
+// the same, and goes with the cache's Clear.
+func TestTextInItsOwnCache(t *testing.T) {
+	shared, sharedOff := newContext(t, 1.25)
+	shared.Text("Low tide radio", text.Body, 10, 10, theme.Paper)
+	u, off := newContext(t, 1.25)
+	c := NewTextCache(1 << 20)
+	if w := u.TextIn(c, "Low tide radio", text.Body, 10, 10, theme.Paper); w != u.TextWidth("Low tide radio", text.Body) {
+		t.Fatalf("TextIn advanced %v", w)
+	}
+	if u.texts.Len() != 0 || c.Len() != 1 {
+		t.Fatalf("shared cache holds %d, own %d", u.texts.Len(), c.Len())
+	}
+	if !bytes.Equal(off.Image().Pix, sharedOff.Image().Pix) {
+		t.Fatal("text from its own cache looks different")
+	}
+	c.Clear()
+	if c.Len() != 0 {
+		t.Fatal("Clear left textures")
+	}
+}
+
+// Text and glows made ahead are drawn without making them again.
+func TestPreparedTextIsNotMadeAgain(t *testing.T) {
+	u, _ := newContext(t, 1.25)
+	c := NewTextCache(1 << 20)
+	if !u.PrepareText(c, "Carry me home", text.Body) || !u.PrepareGlow("Carry me home", text.Body, 30) {
+		t.Fatal("nothing was made")
+	}
+	if u.PrepareText(c, "Carry me home", text.Body) || u.PrepareGlow("Carry me home", text.Body, 30) {
+		t.Fatal("made again")
+	}
+	made := u.Made()
+	u.TextGlow("Carry me home", text.Body, 10, 10, 30, theme.Paper)
+	u.TextIn(c, "Carry me home", text.Body, 10, 10, theme.Paper)
+	if u.Made() != made {
+		t.Fatalf("drawing what was prepared made %d textures", u.Made()-made)
+	}
+	u.Text("Carry me home", text.Body, 10, 10, theme.Paper) // the shared cache hasn't got it
+	if u.Made() != made+1 {
+		t.Fatalf("Made counts %d for a new text", u.Made()-made)
+	}
+}
+
+func TestImageDrawsWhatWasPut(t *testing.T) {
+	u, off := newContext(t, 1)
+	img := image.NewNRGBA(image.Rect(0, 0, 8, 8))
+	for i := 0; i < len(img.Pix); i += 4 {
+		img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = 200, 0, 200, 255
+	}
+	u.PutImage("made elsewhere", img)
+	u.Image("made elsewhere", func() *image.NRGBA {
+		t.Fatal("an image that was put was built again")
+		return nil
+	}, gfx.Rect{X: 0, Y: 0, W: 8, H: 8}, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	if c := off.Image().NRGBAAt(4, 4); c != (color.NRGBA{R: 200, B: 200, A: 255}) {
+		t.Fatalf("drew %v", c)
+	}
+}
+
+// backdrops hands out a backdrop for any album, or says there is none.
+type backdrops struct{ none bool }
+
+func (b backdrops) Cover(media.Cover, int) (*image.NRGBA, bool) { return nil, true }
+func (b backdrops) Backdrop(media.Cover) (*image.NRGBA, bool) {
+	if b.none {
+		return nil, true
+	}
+	return image.NewNRGBA(image.Rect(0, 0, 64, 64)), false
+}
+
+func TestBackdropFadesIn(t *testing.T) {
+	u, _ := newContext(t, 1)
+	u.Covers = backdrops{}
+	c := media.Cover{Artist: "Odalys", Album: "Copper Season", Path: "/m/1.flac"}
+	t0 := time.Unix(0, 0)
+	u.BeginFrame(t0)
+	if tex, a, none := u.Backdrop(c); tex == nil || a != 0 || none {
+		t.Fatalf("first frame: %v, %v, %v", tex, a, none)
+	}
+	u.BeginFrame(t0.Add(anim.ArtFade))
+	if tex, a, _ := u.Backdrop(c); tex == nil || a != 1 {
+		t.Fatalf("after the fade: %v, %v", tex, a)
+	}
+	if n := testing.AllocsPerRun(20, func() { u.Backdrop(c) }); n != 0 {
+		t.Fatalf("a cached backdrop allocates %v times", n)
+	}
+	u.Covers = backdrops{none: true}
+	if _, _, none := u.Backdrop(media.Cover{Album: "Other"}); !none {
+		t.Fatal("an album without art has a backdrop")
 	}
 }

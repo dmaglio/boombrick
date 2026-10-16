@@ -56,6 +56,10 @@ func (v *Value) To(x float64, now time.Time, d time.Duration, e Ease) {
 	v.from, v.to, v.start, v.dur, v.ease = v.At(now), x, now, d, e
 }
 
+// Shift moves the value and its target by d, keeping any animation's timing,
+// as when what it measures moved underneath it.
+func (v *Value) Shift(d float64) { v.from, v.to = v.from+d, v.to+d }
+
 // At returns the value at now.
 func (v *Value) At(now time.Time) float64 {
 	if v.Done(now) {

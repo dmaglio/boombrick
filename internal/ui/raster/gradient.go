@@ -18,7 +18,8 @@ type Stop struct {
 // radial-gradient(rx ry at cx cy, …), interpolating in Oklab. Positions past
 // the last stop take the last colour.
 func RadialGradient(w, h int, cx, cy, rx, ry float64, stops []Stop) *image.NRGBA {
-	// Colours are precomputed along the ray so each pixel costs one sqrt.
+	// Colours are precomputed along the ray, and each column's distance from
+	// the centre, so each pixel costs an add, a sqrt and a multiply.
 	const lutSize = 1024
 	maxT := 0.0
 	for _, p := range [4][2]float64{{0, 0}, {float64(w), 0}, {0, float64(h)}, {float64(w), float64(h)}} {
@@ -29,13 +30,19 @@ func RadialGradient(w, h int, cx, cy, rx, ry float64, stops []Stop) *image.NRGBA
 		c := sample(stops, maxT*float64(i)/lutSize).NRGBA(1)
 		lut[i] = [4]uint8{c.R, c.G, c.B, 255}
 	}
+	dx2 := make([]float64, w)
+	for x := range dx2 {
+		dx := (float64(x) + 0.5 - cx) / rx
+		dx2[x] = dx * dx
+	}
+	k := lutSize / maxT
 	img := image.NewNRGBA(image.Rect(0, 0, w, h))
 	for y := 0; y < h; y++ {
 		dy := (float64(y) + 0.5 - cy) / ry
-		for x := 0; x < w; x++ {
-			dx := (float64(x) + 0.5 - cx) / rx
-			c := lut[int(math.Sqrt(dx*dx+dy*dy)/maxT*lutSize)]
-			copy(img.Pix[img.PixOffset(x, y):], c[:])
+		dy2 := dy * dy
+		row := img.Pix[y*img.Stride : y*img.Stride+4*w]
+		for x, d := range dx2 {
+			*(*[4]uint8)(row[4*x : 4*x+4]) = lut[int(math.Sqrt(d+dy2)*k)]
 		}
 	}
 	return img

@@ -7,8 +7,10 @@ import (
 	"image/color"
 	"math"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
+	"github.com/ujjwal313/boombrick/internal/media"
 	"github.com/ujjwal313/boombrick/internal/ui"
 	"github.com/ujjwal313/boombrick/internal/ui/gfx"
 	"github.com/ujjwal313/boombrick/internal/ui/icons"
@@ -16,24 +18,43 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/text"
 )
 
-// ArtSpec describes generated placeholder art.
+// ArtSpec describes an item's art: the placeholder generated for it and,
+// when it has one, the album whose cover replaces it.
 type ArtSpec struct {
 	Hue     float64
 	Variant int
 	Glyph   string
+	Cover   media.Cover // zero: the placeholder only
+}
+
+// specs remembers SpecFor's answers: screens ask for every item they draw,
+// every frame.
+var specs struct {
+	sync.Mutex
+	m map[string]ArtSpec
 }
 
 // SpecFor derives stable placeholder art for an album or playlist name.
 func SpecFor(name string) ArtSpec {
+	specs.Lock()
+	defer specs.Unlock()
+	if s, ok := specs.m[name]; ok {
+		return s
+	}
+	if len(specs.m) >= 4096 || specs.m == nil {
+		specs.m = map[string]ArtSpec{}
+	}
 	h := fnv.New32a()
 	h.Write([]byte(name))
 	v := h.Sum32()
 	r, _ := utf8.DecodeRuneInString(name)
-	return ArtSpec{Hue: float64(v % 360), Variant: int(v / 360 % 4), Glyph: strings.ToUpper(string(r))}
+	s := ArtSpec{Hue: float64(v % 360), Variant: int(v / 360 % 4), Glyph: strings.ToUpper(string(r))}
+	specs.m[name] = s
+	return s
 }
 
-// Art draws placeholder art for spec, size design pixels square, into box.
-func Art(u *ui.Context, spec ArtSpec, size int, radius float64, box gfx.Rect) {
+// placeholder draws spec's generated art, size design pixels square, into box.
+func placeholder(u *ui.Context, spec ArtSpec, size int, radius float64, box gfx.Rect) {
 	px := u.Px(float32(size))
 	// Draw at the rasterised size so the copy stays 1:1.
 	k := float32(px) / (float32(size) * u.Scale)
@@ -46,6 +67,19 @@ func Art(u *ui.Context, spec ArtSpec, size int, radius float64, box gfx.Rect) {
 		}
 		return raster.Placeholder(px, radius*float64(u.Scale), spec.Hue, spec.Variant, glyph, gx, gy)
 	}, gfx.Rect{X: box.X, Y: box.Y, W: box.W * k, H: box.H * k}, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+}
+
+// Art draws spec's art, size design pixels square with corners of radius,
+// into box: the album's cover once it has arrived, faded in over the
+// placeholder, and the placeholder until then or when there is none.
+func Art(u *ui.Context, spec ArtSpec, size int, radius float64, box gfx.Rect) {
+	t, a := u.Cover(spec.Cover, float32(size), radius)
+	if a < 1 {
+		placeholder(u, spec, size, radius, box)
+	}
+	if t != nil {
+		u.DrawCover(t, box, a)
+	}
 }
 
 // artGlyph renders the letter for variant 2: Cormorant Italic at 90 % of the

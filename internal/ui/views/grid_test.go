@@ -82,3 +82,38 @@ func TestSetCountKeepsFocusInRange(t *testing.T) {
 		t.Fatal("an empty grid has nothing to move to")
 	}
 }
+
+func TestSetCountFocusKeepsTheItemWhereItWas(t *testing.T) {
+	t0 := time.Unix(0, 0)
+	g := Grid{Cols: 1, CellW: 100, CellH: 80, Pad: 10, ViewH: 300}
+	g.SetCount(20)
+	for range 6 {
+		g.Move(input.Down, t0)
+	}
+	now := t0.Add(time.Second)
+	before := g.scroll.At(now) - float64(g.rowTop(g.Focus()))
+	k := g.value(g.Focus()).At(now)
+
+	g.SetCountFocus(25, 9) // three items arrived above the focused one
+	if g.Focus() != 9 {
+		t.Fatalf("focus %d, want 9", g.Focus())
+	}
+	if after := g.scroll.At(now) - float64(g.rowTop(9)); after != before {
+		t.Fatalf("the focused item moved on screen: %v from the view's top, was %v", after, before)
+	}
+	if got := g.value(9).At(now); got != k {
+		t.Fatalf("focus strength %v after the move, want %v", got, k)
+	}
+}
+
+func TestSetCountFocusClampsToTheEnd(t *testing.T) {
+	g := Grid{Cols: 3, CellW: 100, CellH: 100, ViewH: 300}
+	g.SetCount(9)
+	g.SetCountFocus(4, 7)
+	if g.Focus() != 3 || g.Count() != 4 {
+		t.Fatalf("focus %d of %d, want 3 of 4", g.Focus(), g.Count())
+	}
+	if g.scroll.Target() > g.maxScroll() {
+		t.Fatalf("scrolled to %v, past the end at %v", g.scroll.Target(), g.maxScroll())
+	}
+}

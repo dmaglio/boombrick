@@ -48,3 +48,17 @@ func TestEaseOutCubic(t *testing.T) {
 		}
 	}
 }
+
+func TestShiftMovesAValueWithoutRestartingIt(t *testing.T) {
+	t0 := time.Unix(0, 0)
+	var v Value
+	v.Set(10)
+	v.To(20, t0, 100*time.Millisecond, Linear)
+	v.Shift(5)
+	if got := v.At(t0.Add(50 * time.Millisecond)); got != 20 {
+		t.Fatalf("halfway after a shift of 5 = %v, want 20", got)
+	}
+	if v.Target() != 25 || !v.Done(t0.Add(100*time.Millisecond)) {
+		t.Fatalf("target %v, done %v; want 25 and done on time", v.Target(), v.Done(t0.Add(100*time.Millisecond)))
+	}
+}

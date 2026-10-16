@@ -50,6 +50,27 @@ func (g *Grid) SetCount(n int) {
 	g.scroll.Set(min(g.scroll.Target(), g.maxScroll()))
 }
 
+// SetCountFocus sets the number of cells and moves focus to cell f at once,
+// as when the list behind the grid was replaced and the focused item now sits
+// elsewhere in it. The view scrolls by as much as the item moved, so it stays
+// where it was on screen, and its focus strength comes with it.
+func (g *Grid) SetCountFocus(n, f int) {
+	f = min(max(f, 0), max(n-1, 0))
+	if !g.started || f == g.focus {
+		g.SetCount(n)
+		return
+	}
+	k := g.value(g.focus)
+	clear(g.strength) // every other cell's item may have moved too
+	g.strength[f] = k
+	shift := float64(g.rowTop(f) - g.rowTop(g.focus))
+	g.count, g.focus = n, f
+	g.scroll.Shift(shift)
+	if t := g.scroll.Target(); t < 0 || t > g.maxScroll() {
+		g.scroll.Set(min(max(t, 0), g.maxScroll()))
+	}
+}
+
 // SetActive gives the grid focus or takes it away, as when focus moves to
 // buttons beside it; the focused cell's ring follows.
 func (g *Grid) SetActive(on bool, now time.Time) {

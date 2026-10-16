@@ -42,6 +42,20 @@ func TestLRUReplaceFreesTheOldValue(t *testing.T) {
 	}
 }
 
+func TestLRUClearFreesEverything(t *testing.T) {
+	var evicted []string
+	c := newStringLRU(8, &evicted)
+	c.Put("a", "aa")
+	c.Put("b", "bb")
+	c.Clear()
+	if len(evicted) != 2 || c.Len() != 0 || c.Used() != 0 {
+		t.Fatalf("evicted=%v used=%d len=%d", evicted, c.Used(), c.Len())
+	}
+	if _, ok := c.Get("a"); ok {
+		t.Fatal("a value outlived Clear")
+	}
+}
+
 func TestLRUKeepsASingleOversizedValue(t *testing.T) {
 	var evicted []string
 	c := newStringLRU(2, &evicted)
