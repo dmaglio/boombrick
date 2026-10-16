@@ -36,6 +36,7 @@ type Context struct {
 	Status Status
 	Now    time.Time
 	Scale  float32 // device pixels per design pixel
+	Alpha  float32 // multiplies the opacity of everything drawn; screens fade with it
 
 	texts  *LRU[textKey, textEntry]
 	fits   map[fitKey]string
@@ -69,7 +70,7 @@ type iconKey struct {
 	filled bool
 }
 
-type transform struct{ ox, oy, s float32 }
+type transform struct{ ox, oy, s, dx, dy float32 }
 
 // Cache budgets in bytes of texture memory, plus the number of remembered
 // truncations.
@@ -90,6 +91,7 @@ func NewContext(c *gfx.Canvas, fonts *text.Engine, scale float32) *Context {
 		Fonts:  fonts,
 		Accent: theme.Fallback(),
 		Scale:  scale,
+		Alpha:  1,
 		texts: NewLRU[textKey, textEntry](textBudget,
 			func(e textEntry) int { return e.tex.Bytes() },
 			func(e textEntry) { e.tex.Destroy() }),
@@ -101,9 +103,14 @@ func NewContext(c *gfx.Canvas, fonts *text.Engine, scale float32) *Context {
 }
 
 // PushScale scales everything drawn until the matching Pop by s around (ox, oy).
-func (u *Context) PushScale(ox, oy, s float32) { u.tf = append(u.tf, transform{ox, oy, s}) }
+func (u *Context) PushScale(ox, oy, s float32) { u.tf = append(u.tf, transform{ox: ox, oy: oy, s: s}) }
 
-// Pop undoes the most recent PushScale.
+// PushTranslate moves everything drawn until the matching Pop by (dx, dy).
+func (u *Context) PushTranslate(dx, dy float32) {
+	u.tf = append(u.tf, transform{s: 1, dx: dx, dy: dy})
+}
+
+// Pop undoes the most recent PushScale or PushTranslate.
 func (u *Context) Pop() { u.tf = u.tf[:len(u.tf)-1] }
 
 // Apply maps r through the active transforms, innermost first, and into
@@ -111,14 +118,14 @@ func (u *Context) Pop() { u.tf = u.tf[:len(u.tf)-1] }
 func (u *Context) Apply(r gfx.Rect) gfx.Rect {
 	for i := len(u.tf) - 1; i >= 0; i-- {
 		t := u.tf[i]
-		r = gfx.Rect{X: t.ox + (r.X-t.ox)*t.s, Y: t.oy + (r.Y-t.oy)*t.s, W: r.W * t.s, H: r.H * t.s}
+		r = gfx.Rect{X: t.ox + (r.X-t.ox)*t.s + t.dx, Y: t.oy + (r.Y-t.oy)*t.s + t.dy, W: r.W * t.s, H: r.H * t.s}
 	}
 	s := u.Scale
 	return gfx.Rect{X: r.X * s, Y: r.Y * s, W: r.W * s, H: r.H * s}
 }
 
-// Px is v design pixels in whole device pixels: the size to rasterise an
-// image at so it is drawn without stretching.
+// Px is v design pixels as a whole number of device pixels: the size to
+// rasterise at. Draw the result Px(v)/Scale design pixels wide for a 1:1 copy.
 func (u *Context) Px(v float32) int { return int(math.Round(float64(v * u.Scale))) }
 
 // device is st at its device pixel size.
@@ -155,7 +162,15 @@ func intersect(a, b gfx.Rect) gfx.Rect {
 }
 
 // Fill draws a solid rectangle.
-func (u *Context) Fill(r gfx.Rect, col color.NRGBA) { u.Canvas.Fill(u.Apply(r), col) }
+func (u *Context) Fill(r gfx.Rect, col color.NRGBA) { u.Canvas.Fill(u.Apply(r), u.tint(col)) }
+
+// tint applies Alpha to col.
+func (u *Context) tint(col color.NRGBA) color.NRGBA {
+	if u.Alpha < 1 {
+		col.A = uint8(float32(col.A)*max(u.Alpha, 0) + 0.5)
+	}
+	return col
+}
 
 func (u *Context) text(s string, st text.Style) (textEntry, bool) {
 	k := textKey{s, st}
@@ -185,7 +200,7 @@ func (u *Context) Text(s string, st text.Style, x, y float32, col color.NRGBA) f
 	}
 	pad := float32(text.Pad(u.device(st))) / u.Scale
 	dst := gfx.Rect{X: x - pad, Y: y, W: float32(e.tex.W) / u.Scale, H: float32(e.tex.H) / u.Scale}
-	u.Canvas.Draw(e.tex, u.Apply(dst), col)
+	u.Canvas.Draw(e.tex, u.Apply(dst), u.tint(col))
 	return e.width
 }
 
@@ -251,7 +266,7 @@ func (u *Context) Icon(name string, size int, strokeWidth float64, filled bool, 
 		u.icons[k] = t
 	}
 	d := float32(px) / u.Scale
-	u.Canvas.Draw(t, u.Apply(gfx.Rect{X: x, Y: y, W: d, H: d}), col)
+	u.Canvas.Draw(t, u.Apply(gfx.Rect{X: x, Y: y, W: d, H: d}), u.tint(col))
 }
 
 // Shape draws mask s for an element occupying box, stretching the mask if box
@@ -272,10 +287,11 @@ func (u *Context) Shape(s raster.Shape, box gfx.Rect, col color.NRGBA) {
 		}
 		u.masks.Put(ds, t)
 	}
-	// Design pixels per mask pixel.
-	sx, sy := box.W/float32(ds.W), box.H/float32(ds.H)
+	// Design pixels per mask pixel. Relative to s, not ds, so an unscaled box
+	// draws the mask at its rasterised size.
+	sx, sy := box.W/float32(s.W)/u.Scale, box.H/float32(s.H)/u.Scale
 	o := float32(ds.Outset())
-	u.Canvas.Draw(t, u.Apply(gfx.Rect{X: box.X - o*sx, Y: box.Y - o*sy, W: float32(t.W) * sx, H: float32(t.H) * sy}), col)
+	u.Canvas.Draw(t, u.Apply(gfx.Rect{X: box.X - o*sx, Y: box.Y - o*sy, W: float32(t.W) * sx, H: float32(t.H) * sy}), u.tint(col))
 }
 
 // Image draws the cached image named key into dst, building it on first use.
@@ -293,5 +309,5 @@ func (u *Context) Image(key string, build func() *image.NRGBA, dst gfx.Rect, col
 		}
 		u.images.Put(key, t)
 	}
-	u.Canvas.Draw(t, u.Apply(dst), col)
+	u.Canvas.Draw(t, u.Apply(dst), u.tint(col))
 }

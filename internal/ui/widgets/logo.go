@@ -24,7 +24,7 @@ func LogoMark(u *ui.Context, em, x, y float32, col color.NRGBA) {
 			return nil
 		}
 		return img
-	}, gfx.Rect{X: x, Y: y, W: w, H: h}, col)
+	}, gfx.Rect{X: x, Y: y, W: float32(pw) / u.Scale, H: float32(ph) / u.Scale}, col)
 }
 
 // Logo draws the mark and the wordmark: "Boom" upright in ink, "brick" in

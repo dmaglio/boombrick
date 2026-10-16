@@ -1,12 +1,16 @@
 // Package uitest draws UI into memory for tests and compares frames with
-// approved images in testdata. Set BOOMBRICK_UPDATE_GOLDEN=1 to rewrite them.
+// approved images in testdata. Set BOOMBRICK_UPDATE_GOLDEN=1 to rewrite them;
+// a missing image skips its test, since golden images are generated locally
+// and kept out of git.
 package uitest
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"image/draw"
 	"image/png"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -63,8 +67,11 @@ func Golden(t *testing.T, name string, got *image.NRGBA) {
 		return
 	}
 	want, err := readPNG(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Skipf("%s is missing; run with BOOMBRICK_UPDATE_GOLDEN=1 to create it", path)
+	}
 	if err != nil {
-		t.Fatalf("%v (run with BOOMBRICK_UPDATE_GOLDEN=1 to create it)", err)
+		t.Fatal(err)
 	}
 	if want.Bounds() != got.Bounds() {
 		t.Fatalf("%s: size %v, want %v", name, got.Bounds(), want.Bounds())
@@ -86,6 +93,28 @@ func Golden(t *testing.T, name string, got *image.NRGBA) {
 		}
 		t.Fatalf("%s: %d of %d pixels differ; wrote %s", name, bad, total, actual)
 	}
+}
+
+// HardEdge walks img along a row or a column, from one device pixel to
+// another, looking for a step of more than 4 levels between neighbouring
+// pixels, such as a glow cut off by a clip leaves. It reports the first.
+func HardEdge(img *image.NRGBA, from, to image.Point) (image.Point, bool) {
+	d := to.Sub(from)
+	n := max(d.X, -d.X, d.Y, -d.Y)
+	if n == 0 {
+		return image.Point{}, false
+	}
+	step := d.Div(n)
+	for i := range n {
+		p := from.Add(step.Mul(i))
+		a, b := img.NRGBAAt(p.X, p.Y), img.NRGBAAt(p.X+step.X, p.Y+step.Y)
+		for _, c := range [3]int{int(a.R) - int(b.R), int(a.G) - int(b.G), int(a.B) - int(b.B)} {
+			if c > 4 || c < -4 {
+				return p, true
+			}
+		}
+	}
+	return image.Point{}, false
 }
 
 func writePNG(path string, img image.Image) error {

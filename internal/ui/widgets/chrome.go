@@ -14,7 +14,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/text"
 )
 
-// Heights of the fixed bars in device pixels.
+// Heights of the fixed bars in design pixels.
 const (
 	StatusHeight = 44
 	TabsHeight   = 72
@@ -24,7 +24,8 @@ const (
 // TabNames are the top-level tabs in order.
 var TabNames = [...]string{"Home", "Library", "Spotify", "YouTube", "Downloads"}
 
-// StatusBar draws u.Status across the top of the screen.
+// StatusBar draws u.Status across the top of the screen. A negative Battery
+// means there is none to show.
 func StatusBar(u *ui.Context) {
 	s := u.Status
 	const h = StatusHeight
@@ -53,12 +54,14 @@ func StatusBar(u *ui.Context) {
 			u.Text(s.Bluetooth, text.Chrome, x+28, ty, theme.Paper)
 		}})
 	}
-	pct := fmt.Sprintf("%d%%", s.Battery)
-	pw := u.TextWidth(pct, text.ChromeTnum)
-	items = append(items, item{pw + 8 + 40, func(x float32) {
-		u.Text(pct, text.ChromeTnum, x, ty, theme.Paper)
-		Battery(u, x+pw+8, (h-18)/2, s.Battery)
-	}})
+	if s.Battery >= 0 {
+		pct := fmt.Sprintf("%d%%", s.Battery)
+		pw := u.TextWidth(pct, text.ChromeTnum)
+		items = append(items, item{pw + 8 + 40, func(x float32) {
+			u.Text(pct, text.ChromeTnum, x, ty, theme.Paper)
+			Battery(u, x+pw+8, (h-18)/2, s.Battery)
+		}})
+	}
 
 	total := float32(22 * (len(items) - 1))
 	for _, it := range items {
@@ -188,14 +191,20 @@ func hintStyle(key string) GlyphStyle {
 	return HintPill
 }
 
+// Spacing in the hint bar, in design pixels.
+const (
+	hintGap  = 10 // glyph to label
+	hintStep = 30 // between hints
+)
+
 // HintsWidth measures hints as HintBar lays them out, without its padding.
 func HintsWidth(u *ui.Context, hints []Hint) float32 {
 	var w float32
 	for i, h := range hints {
 		if i > 0 {
-			w += 30
+			w += hintStep
 		}
-		w += glyphWidth(u, h.Key, hintStyle(h.Key)) + 10 + u.TextWidth(h.Label, text.Chrome)
+		w += glyphWidth(u, h.Key, hintStyle(h.Key)) + hintGap + u.TextWidth(h.Label, text.Chrome)
 	}
 	return w
 }
@@ -213,7 +222,7 @@ func HintBar(u *ui.Context, hints []Hint) {
 		if h.Key == "A" {
 			border = theme.Gold
 		}
-		x += KeyGlyph(u, h.Key, x, y+(HintsHeight-gs.Height)/2, gs, border) + 10
-		x += u.Text(h.Label, text.Chrome, x, ty, theme.Paper) + 30
+		x += KeyGlyph(u, h.Key, x, y+(HintsHeight-gs.Height)/2, gs, border) + hintGap
+		x += u.Text(h.Label, text.Chrome, x, ty, theme.Paper) + hintStep
 	}
 }

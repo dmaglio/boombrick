@@ -17,6 +17,9 @@ const (
 	// Glow is a CSS box-shadow with GlowSpread and GlowBlur. Like a
 	// box-shadow it is transparent inside the rectangle.
 	Glow
+	// Shadow is a filled rectangle grown by GlowSpread and blurred by
+	// GlowBlur, for drop shadows under art and dialogs.
+	Shadow
 )
 
 // Shape is a W x H rounded rectangle with corner radius Radius. Its mask
@@ -34,7 +37,7 @@ func (s Shape) Outset() int {
 	switch s.Kind {
 	case Ring:
 		return int(math.Ceil(math.Max(0, s.RingOffset+s.RingWidth))) + 1
-	case Glow:
+	case Glow, Shadow:
 		return int(math.Ceil(s.GlowSpread+s.GlowBlur)) + 1
 	}
 	return 0
@@ -59,7 +62,7 @@ func (s Shape) Mask() *image.NRGBA {
 			case Ring:
 				mid := s.RingOffset + s.RingWidth/2
 				a = clamp01(0.5 - (math.Abs(d-mid) - s.RingWidth/2))
-			case Glow:
+			case Glow, Shadow:
 				if sigma <= 0 {
 					a = clamp01(0.5 - (d - s.GlowSpread))
 				} else {

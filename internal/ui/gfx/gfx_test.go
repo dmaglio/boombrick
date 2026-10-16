@@ -23,6 +23,52 @@ func near(a, b color.NRGBA) bool {
 	return d(a.R, b.R) <= 1 && d(a.G, b.G) <= 1 && d(a.B, b.B) <= 1
 }
 
+// covered reports which pixels of img differ from the background.
+func covered(img *image.NRGBA, bg color.NRGBA) image.Rectangle {
+	var r image.Rectangle
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if img.NRGBAAt(x, y) != bg {
+				r = r.Union(image.Rect(x, y, x+1, y+1))
+			}
+		}
+	}
+	return r
+}
+
+// A rectangle at fractional coordinates covers the pixels between its rounded
+// edges, so its size is not rounded separately from its position.
+func TestFillRoundsEdges(t *testing.T) {
+	o, err := NewOffscreen(16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	bg := color.NRGBA{0, 0, 0, 255}
+	o.Clear(bg)
+	o.Fill(Rect{X: 2.5, Y: 1.4, W: 3, H: 3.2}, color.NRGBA{255, 255, 255, 255})
+	if got, want := covered(o.Image(), bg), image.Rect(3, 1, 6, 5); got != want {
+		t.Errorf("fill covers %v, want %v", got, want)
+	}
+}
+
+func TestClipRoundsEdges(t *testing.T) {
+	o, err := NewOffscreen(16, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	bg := color.NRGBA{0, 0, 0, 255}
+	o.Clear(bg)
+	o.Clip(Rect{X: 2.5, Y: 1.4, W: 3, H: 3.2})
+	o.Fill(Rect{X: 0, Y: 0, W: 16, H: 16}, color.NRGBA{255, 255, 255, 255})
+	o.Unclip()
+	if got, want := covered(o.Image(), bg), image.Rect(3, 1, 6, 5); got != want {
+		t.Errorf("clipped draw covers %v, want %v", got, want)
+	}
+}
+
 func TestOffscreenDrawsAndReadsBack(t *testing.T) {
 	o, err := NewOffscreen(64, 32)
 	if err != nil {

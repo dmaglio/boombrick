@@ -75,7 +75,16 @@ func nearInt(v float32, n int) bool { return math.Abs(float64(v)-float64(n)) < 0
 func (c *Canvas) Fill(r Rect, col color.NRGBA) {
 	c.r.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	c.r.SetDrawColor(col.R, col.G, col.B, col.A)
-	c.r.FillRectF(&sdl.FRect{X: r.X, Y: r.Y, W: r.W, H: r.H})
+	x, y, w, h := snapEdges(r)
+	c.r.FillRectF(&sdl.FRect{X: float32(x), Y: float32(y), W: float32(w), H: float32(h)})
+}
+
+// snapEdges rounds r's edges, not its size, to whole pixels. A texture and a
+// clip or fill that meet at the same fractional edge then agree on the row.
+func snapEdges(r Rect) (x, y, w, h int32) {
+	x0, x1 := math.Round(float64(r.X)), math.Round(float64(r.X+r.W))
+	y0, y1 := math.Round(float64(r.Y)), math.Round(float64(r.Y+r.H))
+	return int32(x0), int32(y0), int32(x1 - x0), int32(y1 - y0)
 }
 
 // Clear fills the whole target with an opaque colour.
@@ -89,7 +98,8 @@ func (c *Canvas) Present() { c.r.Present() }
 
 // Clip limits drawing to r until Unclip.
 func (c *Canvas) Clip(r Rect) {
-	c.r.SetClipRect(&sdl.Rect{X: int32(r.X), Y: int32(r.Y), W: int32(r.W), H: int32(r.H)})
+	x, y, w, h := snapEdges(r)
+	c.r.SetClipRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
 }
 
 // Unclip removes the clip rectangle.

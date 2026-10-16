@@ -21,6 +21,9 @@ const (
 	NowPlayingGround
 	// FlatGround is plain ground, used by Settings.
 	FlatGround
+	// StateGround glows from the top centre in the fallback colour, for
+	// sign-in, offline and empty-library screens.
+	StateGround
 )
 
 // DrawBackground fills the screen with kind, coloured by u.Accent. Each
@@ -40,6 +43,12 @@ func DrawBackground(u *ui.Context, kind Background) {
 				{Pos: 0, Color: theme.OKLCH{L: 0.36, C: 0.09, H: acc.Hue}.Oklab()},
 				{Pos: 0.45, Color: theme.OKLCH{L: 0.24, C: 0.05, H: acc.Hue}.Oklab()},
 				{Pos: 0.85, Color: ground},
+			})
+		}
+		if kind == StateGround {
+			return raster.RadialGradient(w, h, 0.5*w, 0, 1.3*w, h, []raster.Stop{
+				{Pos: 0, Color: theme.OklabOf(theme.FallbackGlow)},
+				{Pos: 0.62, Color: ground},
 			})
 		}
 		return raster.RadialGradient(w, h, 0, 0, 1.3*w, h, []raster.Stop{

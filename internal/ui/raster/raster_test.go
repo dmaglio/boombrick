@@ -131,3 +131,15 @@ func TestPlaceholderStripes(t *testing.T) {
 		t.Errorf("stripe %v should be lighter than %v", light, dark)
 	}
 }
+
+func TestShadowFillsInside(t *testing.T) {
+	s := Shape{W: 100, H: 100, Radius: 16, Kind: Shadow, GlowBlur: 20}
+	m := s.Mask()
+	o := s.Outset()
+	if a := alpha(m, o+50, o+50); a < 250 {
+		t.Errorf("shadow centre alpha = %d, want nearly opaque", a)
+	}
+	if near, far := alpha(m, o+50, o-2), alpha(m, o+50, o-20); !(near > far) {
+		t.Errorf("shadow should fade outside: %d, %d", near, far)
+	}
+}

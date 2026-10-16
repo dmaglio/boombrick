@@ -35,6 +35,8 @@ func SpecFor(name string) ArtSpec {
 // Art draws placeholder art for spec, size design pixels square, into box.
 func Art(u *ui.Context, spec ArtSpec, size int, radius float64, box gfx.Rect) {
 	px := u.Px(float32(size))
+	// Draw at the rasterised size so the copy stays 1:1.
+	k := float32(px) / (float32(size) * u.Scale)
 	key := fmt.Sprintf("art:%g:%d:%s:%d:%g", spec.Hue, spec.Variant, spec.Glyph, px, radius)
 	u.Image(key, func() *image.NRGBA {
 		var glyph *image.NRGBA
@@ -43,7 +45,7 @@ func Art(u *ui.Context, spec ArtSpec, size int, radius float64, box gfx.Rect) {
 			glyph, gx, gy = artGlyph(u, spec.Glyph, px)
 		}
 		return raster.Placeholder(px, radius*float64(u.Scale), spec.Hue, spec.Variant, glyph, gx, gy)
-	}, box, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	}, gfx.Rect{X: box.X, Y: box.Y, W: box.W * k, H: box.H * k}, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 }
 
 // artGlyph renders the letter for variant 2: Cormorant Italic at 90 % of the

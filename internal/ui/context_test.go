@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"os"
 	"runtime"
 	"strings"
@@ -110,5 +111,26 @@ func TestFitIsCached(t *testing.T) {
 	}
 	if len(u.fits) != 1 {
 		t.Fatalf("fits cache has %d entries", len(u.fits))
+	}
+}
+
+func TestTranslateNests(t *testing.T) {
+	u := Context{Scale: 1}
+	u.PushTranslate(10, 0)
+	u.PushScale(0, 0, 2)
+	if got, want := u.Apply(gfx.Rect{X: 1, Y: 1, W: 1, H: 1}), (gfx.Rect{X: 12, Y: 2, W: 2, H: 2}); got != want {
+		t.Fatalf("Apply = %v, want %v", got, want)
+	}
+	u.Pop()
+	u.Pop()
+}
+
+func TestAlphaFades(t *testing.T) {
+	u, off := newContext(t, 1)
+	off.Clear(color.NRGBA{0, 0, 0, 255})
+	u.Alpha = 0.5
+	u.Fill(gfx.Rect{X: 0, Y: 0, W: 10, H: 10}, color.NRGBA{255, 255, 255, 255})
+	if r := off.Image().NRGBAAt(5, 5).R; r < 125 || r > 130 {
+		t.Fatalf("half-faded white over black = %d, want about 127", r)
 	}
 }
