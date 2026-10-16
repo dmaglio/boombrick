@@ -21,6 +21,13 @@ type Screen interface {
 	Animating(now time.Time) bool
 }
 
+// DrawReading draws the state Home and the Library show while the first scan
+// runs and nothing is indexed yet.
+func DrawReading(u *ui.Context, musicDir string) {
+	widgets.DrawBackground(u, widgets.StateGround)
+	widgets.EmptyState(u, "Reading your music", "This takes a little while the first time.", musicDir)
+}
+
 // Placeholder stands in for a tab that hasn't been built yet.
 type Placeholder struct {
 	Tab   int

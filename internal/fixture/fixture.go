@@ -22,6 +22,8 @@ type Item struct {
 	Art             widgets.ArtSpec
 	Source          media.Source
 	Progress        float64 // 0-1, Continue listening only
+	Play            func()  // starts the item's music; nil for sample content
+	Queue           func()  // adds the item's music to the queue; nil for sample content
 }
 
 // Row is a titled row on Home.

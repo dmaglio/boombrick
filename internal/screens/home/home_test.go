@@ -1,13 +1,17 @@
 package home
 
 import (
+	"fmt"
 	"image"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/fixture"
+	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
+	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui/anim"
 	"github.com/ujjwal313/boombrick/internal/ui/uitest"
@@ -16,15 +20,169 @@ import (
 
 func TestMain(m *testing.M) { uitest.Main(m) }
 
-// Both of Home's hint sets fit the bar (docs/ui.md, "Button hint bar").
+// Each of Home's hint sets fits the bar (docs/ui.md, "Button hint bar").
 func TestHintsFit(t *testing.T) {
 	u, _ := uitest.NewContext(t, 64, 64)
+	check := func(name string, h *Home) {
+		t.Helper()
+		if w := widgets.HintsWidth(u, h.hints()); w > widgets.MaxHintsWidth {
+			t.Errorf("%s hints are %.1f wide, more than %.1f", name, w, widgets.MaxHintsWidth)
+		}
+	}
 	h := New(fixture.Home())
 	for _, row := range []int{0, 2} {
 		h.row = row
-		if w := widgets.HintsWidth(u, h.hints()); w > widgets.MaxHintsWidth {
-			t.Errorf("row %d hints are %.1f wide, more than %.1f", row, w, widgets.MaxHintsWidth)
+		check(fmt.Sprintf("row %d", row), h)
+	}
+	rows := []fixture.Row{{Title: "Recently added", Items: []fixture.Item{{Title: "A", Play: func() {}, Queue: func() {}}}}}
+	check("playable", func() *Home { h := New(nil); h.SetRows(rows); return h }())
+	check("unset", New(nil))
+	empty := New(nil)
+	empty.SetRows(nil)
+	check("empty", empty)
+}
+
+func TestHintsFollowTheFocusedItem(t *testing.T) {
+	keys := func(h *Home) string {
+		var s []string
+		for _, hint := range h.hints() {
+			s = append(s, hint.Key)
 		}
+		return strings.Join(s, " ")
+	}
+	h := New(nil)
+	if got := keys(h); got != "L1/R1" {
+		t.Fatalf("unset hints %q", got)
+	}
+	h.SetRows(nil)
+	if got := keys(h); got != "Y L1/R1" {
+		t.Fatalf("empty hints %q", got)
+	}
+	h.SetRows([]fixture.Row{{Title: "R", Items: []fixture.Item{{Title: "A", Play: func() {}}}}})
+	if got := keys(h); got != "A L1/R1" {
+		t.Fatalf("no Queue func: hints %q", got)
+	}
+	h.SetRows([]fixture.Row{{Title: "R", Items: []fixture.Item{{Title: "A", Play: func() {}, Queue: func() {}}}}})
+	if got := keys(h); got != "A Y L1/R1" {
+		t.Fatalf("playable hints %q", got)
+	}
+}
+
+// A rescan that empties the library and then refills it doesn't leave the old
+// scroll behind.
+func TestSetRowsResetsScroll(t *testing.T) {
+	h := New(fixture.Home())
+	render(t, h, t0)
+	h.Handle(press(input.Down), t0)
+	h.Handle(press(input.Down), t0)
+	render(t, h, t0.Add(anim.Focus))
+	if h.scroll.Target() == 0 {
+		t.Fatal("scroll should have moved down")
+	}
+	h.SetRows(nil)
+	if got := h.scroll.Target(); got != 0 {
+		t.Fatalf("scroll target %v after emptying, want 0", got)
+	}
+	h.SetRows(fixture.Home()[:2])
+	h.Handle(press(input.Down), t0)
+	now := t0.Add(2 * anim.Focus)
+	render(t, h, now)
+	if got := h.scroll.Target(); got != h.tops[1] || h.tops[1] == 0 {
+		t.Fatalf("scroll target %v after refilling, want the second row's heading %v", got, h.tops[1])
+	}
+}
+
+// A reload that adds or reorders rows leaves focus on the same album, in view.
+func TestSetRowsKeepsFocusOnTheSameItem(t *testing.T) {
+	item := func(title string) fixture.Item { return fixture.Item{Title: title, Subtitle: "Artist"} }
+	items := func(titles ...string) []fixture.Item {
+		var its []fixture.Item
+		for _, s := range titles {
+			its = append(its, item(s))
+		}
+		return its
+	}
+	recent := fixture.Row{Title: "Recently added", Items: items("One", "Two", "Three")}
+	h := New(nil)
+	h.SetRows([]fixture.Row{recent})
+	h.Handle(press(input.Right), t0)
+	h.Handle(press(input.Right), t0) // Three
+	cont := fixture.Row{Title: "Continue listening", Items: items("Two")}
+	recent.Items = items("New", "One", "Two", "Three")
+	h.SetRows([]fixture.Row{cont, recent})
+	if h.row != 1 || h.col != 3 {
+		t.Fatalf("focus moved to row %d col %d, want row 1 col 3 (Recently added, Three)", h.row, h.col)
+	}
+	inView(t, h)
+	h.SetRows([]fixture.Row{{Title: "Recently added", Items: items("X", "Y")}})
+	if h.row != 0 || h.col != 1 {
+		t.Fatalf("focus at row %d col %d, want it clamped to 0, 1", h.row, h.col)
+	}
+	inView(t, h)
+
+	// Scrolled to the end of a long row, then the album focused moves to the
+	// front of it: the row scrolls back.
+	h.SetRows([]fixture.Row{{Title: "Recently added", Items: items("A", "B", "C", "D", "E", "F", "G", "H")}})
+	for range 7 {
+		h.Handle(press(input.Right), t0)
+	}
+	if h.offsets[0].Target() <= 0 {
+		t.Fatal("the row should have scrolled to its last item")
+	}
+	h.SetRows([]fixture.Row{
+		{Title: "Recently added", Items: items("H", "Z")},
+		{Title: "Continue listening", Items: items("A", "B", "C", "D", "E", "F", "G")},
+	})
+	if h.row != 0 || h.col != 0 {
+		t.Fatalf("focus at row %d col %d, want 0, 0 (H)", h.row, h.col)
+	}
+	inView(t, h)
+	if got := h.offsets[0].Target(); got != 0 {
+		t.Fatalf("the row fits, but its offset is %v", got)
+	}
+
+	// The album focused moves along the row, past its right-hand end.
+	h = New(nil)
+	h.SetRows([]fixture.Row{{Title: "Recently added", Items: items("A", "B", "C", "D", "E", "F", "G", "H")}})
+	h.Handle(press(input.Right), t0)
+	h.Handle(press(input.Right), t0) // C
+	h.SetRows([]fixture.Row{{Title: "Recently added", Items: items("X", "Y", "Z", "W", "V", "A", "B", "C")}})
+	if h.row != 0 || h.col != 7 {
+		t.Fatalf("focus at row %d col %d, want 0, 7 (C)", h.row, h.col)
+	}
+	inView(t, h)
+}
+
+// A row kept by title is clamped to how far it can now scroll, though focus
+// is elsewhere.
+func TestSetRowsClampsOtherRowsOffsets(t *testing.T) {
+	item := func(title string) fixture.Item { return fixture.Item{Title: title, Subtitle: "Artist"} }
+	long := fixture.Row{Title: "Recently added"}
+	for _, s := range []string{"A", "B", "C", "D", "E", "F", "G", "H"} {
+		long.Items = append(long.Items, item(s))
+	}
+	cont := fixture.Row{Title: "Continue listening", Items: []fixture.Item{item("X")}}
+	h := New(nil)
+	h.SetRows([]fixture.Row{cont, long})
+	h.Handle(press(input.Down), t0)
+	for range 7 {
+		h.Handle(press(input.Right), t0)
+	}
+	h.Handle(press(input.Up), t0)
+	long.Items = long.Items[:2]
+	h.SetRows([]fixture.Row{cont, long})
+	if got := h.offsets[1].Target(); got != 0 {
+		t.Fatalf("Recently added now fits but stays scrolled to %v", got)
+	}
+}
+
+// inView fails unless the focused item lies between the side paddings.
+func inView(t *testing.T, h *Home) {
+	t.Helper()
+	size, gap := itemSize(h.rows[h.row])
+	x := side + float64(h.col)*(size+gap) - h.offsets[h.row].Target()
+	if x < side-1e-6 || x+size > theme.ScreenW-side+1e-6 {
+		t.Fatalf("the focused item (row %d col %d) is at x %.1f to %.1f, out of view", h.row, h.col, x, x+size)
 	}
 }
 
@@ -130,6 +288,15 @@ func TestRowScrollsSideways(t *testing.T) {
 	if !h.Animating(t0.Add(anim.Focus / 2)) {
 		t.Fatal("the row should be scrolling halfway through")
 	}
+	if h.Animating(t0.Add(anim.Focus)) {
+		t.Fatal("the row should stop scrolling after anim.Focus")
+	}
+	for i := 0; i < 3; i++ {
+		h.Handle(press(input.Left), t0)
+	}
+	if got := h.offsets[0].Target(); got != 0 {
+		t.Fatalf("offset back on the first card = %v, want 0", got)
+	}
 }
 
 // Rows keep their sideways position when focus leaves and comes back.
@@ -139,10 +306,14 @@ func TestRowsRememberTheirOffset(t *testing.T) {
 		h.Handle(press(input.Right), t0)
 	}
 	want := h.offsets[0].Target()
-	h.Handle(press(input.Down), t0)
-	h.Handle(press(input.Up), t0)
-	if h.row != 0 || h.col != 3 {
-		t.Fatalf("focus = %d,%d, want 0,3", h.row, h.col)
+	if want <= 0 {
+		t.Fatalf("offset on the fourth card = %v, want > 0", want)
+	}
+	for _, b := range []input.Button{input.Left, input.Left, input.Down, input.Up} {
+		h.Handle(press(b), t0)
+	}
+	if h.row != 0 || h.col != 1 {
+		t.Fatalf("focus = %d,%d, want 0,1", h.row, h.col)
 	}
 	if got := h.offsets[0].Target(); got != want {
 		t.Fatalf("offset after leaving and returning = %v, want %v", got, want)
@@ -159,9 +330,146 @@ func TestScrolledRowGolden(t *testing.T) {
 	uitest.Golden(t, "home-scrolled", render(t, h, t0.Add(anim.Focus)))
 }
 
+func TestAPlaysTheFocusedItem(t *testing.T) {
+	played := 0
+	rows := fixture.Home()
+	rows[0].Items[0].Play = func() { played++ }
+	rows[0].Items[0].Queue = func() {}
+	h := New(rows)
+	if !h.Handle(press(input.A), t0) || played != 1 {
+		t.Fatalf("A on a playable item: played %d", played)
+	}
+	h.Handle(press(input.Right), t0)
+	if h.Handle(press(input.A), t0) {
+		t.Fatal("A on sample content should do nothing")
+	}
+	if got := h.hints(); len(got) != 5 {
+		t.Fatalf("sample item hints = %v", got)
+	}
+	h.Handle(press(input.Left), t0)
+	if got := h.hints(); len(got) != 3 || got[0].Label != "Play" || got[1].Label != "Add to queue" {
+		t.Fatalf("playable item hints = %v, want A Play, Y Add to queue and L1/R1 Tabs", got)
+	}
+}
+
+func TestAlbumRow(t *testing.T) {
+	if _, ok := AlbumRow(nil, nil, nil); ok {
+		t.Fatal("no albums should give no row")
+	}
+	albums := []*library.Album{{Artist: "Odalys", Title: "Copper Season"}, {Artist: "Kenji Arata", Title: "Afterhours"}}
+	var got, queued []string
+	row, ok := AlbumRow(albums, func(a *library.Album) { got = append(got, a.Title) },
+		func(a *library.Album) { queued = append(queued, a.Title) })
+	if !ok || row.Title != "Recently added" || row.Meta != "2 albums" || len(row.Items) != 2 {
+		t.Fatalf("row = %+v", row)
+	}
+	row.Items[1].Play()
+	if len(got) != 1 || got[0] != "Afterhours" {
+		t.Fatalf("Play started %v", got)
+	}
+	row.Items[0].Queue()
+	if len(queued) != 1 || queued[0] != "Copper Season" {
+		t.Fatalf("Queue added %v", queued)
+	}
+	one, _ := AlbumRow(albums[:1], nil, nil)
+	if one.Meta != "1 album" {
+		t.Fatalf("meta for one album = %q", one.Meta)
+	}
+}
+
+func TestSetRowsKeepsFocusInBounds(t *testing.T) {
+	h := New(fixture.Home())
+	render(t, h, t0)
+	for i := 0; i < 3; i++ {
+		h.Handle(press(input.Down), t0)
+	}
+	h.SetRows(fixture.Home()[:2])
+	if h.row != 1 {
+		t.Fatalf("row = %d after dropping two rows, want 1", h.row)
+	}
+	render(t, h, t0.Add(anim.Focus))
+	if got := h.scroll.Target(); got != h.tops[1] {
+		t.Fatalf("scroll target %v, want the focused row's heading %v", got, h.tops[1])
+	}
+}
+
 func TestReleaseDoesNothing(t *testing.T) {
 	h := New(fixture.Home())
 	if h.Handle(input.Event{Button: input.Right, Kind: input.Release}, t0) {
 		t.Fatal("a release should not move focus")
+	}
+}
+
+func TestContinueRow(t *testing.T) {
+	ix := library.NewIndex([]library.Album{
+		{Artist: "Odalys", Title: "Copper Season", Tracks: []library.Track{{Path: "/a/1"}, {Path: "/a/2"}}},
+	})
+	progress := []resume.Progress{
+		{Artist: "Gone", Album: "Deleted", Path: "/g/1", Fraction: 0.5}, // no longer in the library
+		{Artist: "Odalys", Album: "Copper Season", Path: "/a/2", Frame: 4800, Fraction: 0.7},
+	}
+	var gotAlbum *library.Album
+	var gotTrack int
+	var gotFrame int64
+	row, ok := ContinueRow(progress, ix, func(a *library.Album, track int, frame int64) {
+		gotAlbum, gotTrack, gotFrame = a, track, frame
+	}, nil)
+	if !ok || row.Title != "Continue listening" || row.Meta != "1 in progress" || len(row.Items) != 1 || !row.Continue {
+		t.Fatalf("row = %+v", row)
+	}
+	if it := row.Items[0]; it.Progress != 0.7 || it.Title != "Copper Season" {
+		t.Fatalf("item = %+v", it)
+	}
+	row.Items[0].Play()
+	if gotAlbum != ix.Recent[0] || gotTrack != 1 || gotFrame != 4800 {
+		t.Fatalf("Play resumed %v track %d at %d", gotAlbum, gotTrack, gotFrame)
+	}
+	if _, ok := ContinueRow(nil, ix, nil, nil); ok {
+		t.Fatal("nothing in progress gives no row")
+	}
+}
+
+func TestYQueuesTheFocusedItem(t *testing.T) {
+	queued := 0
+	rows := fixture.Home()
+	rows[0].Items[0].Queue = func() { queued++ }
+	h := New(rows)
+	if !h.Handle(press(input.Y), t0) || queued != 1 {
+		t.Fatal("Y should queue the focused item")
+	}
+}
+
+// While the first scan runs with nothing indexed, Home says the music is
+// being read, with only the tab hint, until rows arrive.
+func TestHomeWhileReading(t *testing.T) {
+	h := New(nil)
+	scans := 0
+	h.SetEmpty("/mnt/SDCARD/Music", func() { scans++ })
+	h.SetReading()
+	uitest.Golden(t, "home-reading", render(t, h, t0))
+	if got := h.hints(); len(got) != 1 || got[0].Key != "L1/R1" {
+		t.Fatalf("hints while reading = %v, want only L1/R1 Tabs", got)
+	}
+	if h.Handle(press(input.Y), t0) || scans != 0 {
+		t.Fatal("Y while reading should not rescan")
+	}
+	h.SetRows(nil)
+	if got := h.hints(); len(got) != 2 || got[0].Key != "Y" {
+		t.Fatalf("hints once the library is known to be empty = %v", got)
+	}
+}
+
+func TestHomeBeforeLoadAndEmpty(t *testing.T) {
+	h := New(nil)
+	if h.Handle(press(input.Down), t0) || h.Handle(press(input.Y), t0) {
+		t.Fatal("before rows are set, Home ignores input")
+	}
+	render(t, h, t0) // chrome only; must not panic
+	scans := 0
+	h.SetEmpty("/mnt/SDCARD/Music", func() { scans++ })
+	h.SetRows([]fixture.Row{{Title: "Recently added"}}) // a row with no items is dropped
+	uitest.Golden(t, "home-empty", render(t, h, t0))
+	if !h.Handle(press(input.Y), t0) || scans != 1 {
+		t.Fatal("Y on the empty Home rescans")
 	}
 }
