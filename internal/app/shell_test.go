@@ -313,3 +313,19 @@ func TestOpenerCalledOnEachOpen(t *testing.T) {
 		t.Fatalf("opened %d times after reopening, want 3", o.opened)
 	}
 }
+
+type ticking struct{ page }
+
+func (ticking) Tick() time.Duration { return 250 * time.Millisecond }
+
+func TestTickFor(t *testing.T) {
+	if got := tickFor(nil); got != time.Second {
+		t.Errorf("tabs tick every %v, want 1s", got)
+	}
+	if got := tickFor(&page{}); got != time.Second {
+		t.Errorf("an overlay without Tick ticks every %v, want 1s", got)
+	}
+	if got := tickFor(&ticking{}); got != 250*time.Millisecond {
+		t.Errorf("an overlay asking for 250ms ticks every %v", got)
+	}
+}

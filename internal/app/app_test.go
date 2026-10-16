@@ -3,10 +3,83 @@ package app
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/ujjwal313/boombrick/internal/library"
+	lrc "github.com/ujjwal313/boombrick/internal/lyrics"
+	"github.com/ujjwal313/boombrick/internal/platform/input"
 	"github.com/ujjwal313/boombrick/internal/player"
+	lyricsscreen "github.com/ujjwal313/boombrick/internal/screens/lyrics"
+	"github.com/ujjwal313/boombrick/internal/screens/nowplaying"
+	"github.com/ujjwal313/boombrick/internal/theme"
+	"github.com/ujjwal313/boombrick/internal/ui"
+	"github.com/ujjwal313/boombrick/internal/ui/anim"
 )
+
+// stillPlayer is enough of a player for Now Playing and Lyrics.
+type stillPlayer struct{ st player.State }
+
+func (p *stillPlayer) State() player.State { return p.st }
+func (p *stillPlayer) Toggle()             {}
+func (p *stillPlayer) Next()               {}
+func (p *stillPlayer) Prev()               {}
+func (p *stillPlayer) SetShuffle(bool)     {}
+func (p *stillPlayer) CycleRepeat()        {}
+func (p *stillPlayer) Seek(time.Duration)  {}
+
+type noLyrics struct{}
+
+func (noLyrics) Lyrics(lrc.Track) (lrc.Lyrics, lrc.State) { return lrc.Lyrics{}, lrc.None }
+
+// Now Playing's Y opens Lyrics, whose B and Y go back to Now Playing.
+func TestLyricsOpensFromNowPlayingAndGoesBack(t *testing.T) {
+	s := newShell(&page{name: "home"})
+	p := &stillPlayer{}
+	np := nowplaying.New(p)
+	addOverlays(s, np, &page{name: "queue"}, nil, p, noLyrics{})
+	s.handle(press(input.Start), t0)
+	for _, back := range []input.Button{input.B, input.Y} {
+		if s.overlay() != np {
+			t.Fatalf("%T is open, want Now Playing", s.overlay())
+		}
+		s.handle(press(input.Y), t0)
+		if _, ok := s.overlay().(*lyricsscreen.Screen); !ok {
+			t.Fatalf("Y on Now Playing opened %T", s.overlay())
+		}
+		s.handle(press(back), t0)
+		if s.overlay() != np {
+			t.Fatalf("%v on Lyrics went to %T, want Now Playing", back, s.overlay())
+		}
+	}
+	s2 := newShell(&page{name: "home"})
+	np2 := nowplaying.New(p)
+	addOverlays(s2, np2, &page{name: "queue"}, nil, p, nil)
+	s2.handle(press(input.Start), t0)
+	if s2.handle(press(input.Y), t0) || len(s2.overlays) != 2 {
+		t.Fatal("without lyrics there is no Lyrics screen")
+	}
+}
+
+// While music plays the loop sleeps until the open screen's next tick counted
+// from the frame's start: drawing the frame doesn't stretch the tick.
+func TestTicksCountFromTheFrameStart(t *testing.T) {
+	s := newShell(&page{name: "home"})
+	s.overlays = []overlay{{button: input.Select, screen: &ticking{}}} // every 250 ms
+	s.openOverlay(0, t0)
+	a := &App{shell: s, repeat: input.NewRepeater(), fade: newAccentFade(theme.Fallback()), ui: &ui.Context{}}
+	a.last.Playing = true
+	start := t0.Add(anim.Push) // the overlay is in place
+	if got := a.timeout(start, start.Add(40*time.Millisecond)); got != 210*time.Millisecond {
+		t.Fatalf("40 ms into the frame: sleep %v, want 210ms", got)
+	}
+	if got := a.timeout(start, start.Add(300*time.Millisecond)); got != 0 {
+		t.Fatalf("a frame longer than the tick: sleep %v", got)
+	}
+	a.last.Playing = false
+	if got := a.timeout(start, start.Add(40*time.Millisecond)); got < time.Second {
+		t.Fatalf("paused: sleep %v, want until the clock's next minute", got)
+	}
+}
 
 // albumCalls records what starting an album asks of the player.
 type albumCalls struct {

@@ -13,6 +13,8 @@ import (
 	"github.com/ujjwal313/boombrick/assets"
 	"github.com/ujjwal313/boombrick/internal/fixture"
 	"github.com/ujjwal313/boombrick/internal/library"
+	lrc "github.com/ujjwal313/boombrick/internal/lyrics"
+	"github.com/ujjwal313/boombrick/internal/media"
 	"github.com/ujjwal313/boombrick/internal/platform"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
 	"github.com/ujjwal313/boombrick/internal/player"
@@ -20,6 +22,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/screens"
 	"github.com/ujjwal313/boombrick/internal/screens/browse"
 	"github.com/ujjwal313/boombrick/internal/screens/home"
+	lyricsscreen "github.com/ujjwal313/boombrick/internal/screens/lyrics"
 	"github.com/ujjwal313/boombrick/internal/screens/nowplaying"
 	"github.com/ujjwal313/boombrick/internal/screens/queue"
 	"github.com/ujjwal313/boombrick/internal/theme"
@@ -36,22 +39,48 @@ type Options struct {
 	Player     *player.Player
 	MusicDir   string // shown by the empty library
 	// Load reads the library and Progress the albums in progress; the app calls
-	// them on a goroutine. Rescan asks for a scan. Scanned receives a value
-	// after a scan that changed the library (and after the first scan), Saved
-	// one after the saved progress moved on to another track or stopped.
+	// them on a goroutine. Rescan asks for a scan. Scanned receives an update
+	// when a scan has written to the library, at most every few seconds while
+	// it runs, and when it ends; Saved receives a value after the saved
+	// progress moved on to another track or stopped.
 	Load     func() (*library.Index, error)
 	Progress func() ([]resume.Progress, error)
 	Rescan   func()
-	Scanned  <-chan struct{}
+	Scanned  <-chan ScanUpdate
 	Saved    <-chan struct{}
 	// Status reads the battery and network for the status bar; the app calls
 	// it on a goroutine every 10 s from start-up.
 	Status func() platform.Status
+	// Covers supplies album art and the playing album's colour. Without it
+	// the screens show placeholders and the accent stays gold.
+	Covers Covers
+	// Lyrics finds tracks' lyrics. Without it there is no Lyrics screen.
+	Lyrics Lyrics
 }
 
-// tick is how often the loop wakes while music plays: the progress bar
-// updates 4 times a second.
-const tick = 250 * time.Millisecond
+// Covers is what the app needs from the art cache.
+type Covers interface {
+	ui.Covers
+	Colour(c media.Cover) (hue, chroma float64, colour, ok bool)
+	Ready() <-chan struct{}
+}
+
+// Lyrics is what the app needs from the lyrics service.
+type Lyrics interface {
+	Lyrics(t lrc.Track) (lrc.Lyrics, lrc.State)
+	Prefetch(ts ...lrc.Track)
+	Ready() <-chan struct{}
+}
+
+// tickFor is how often the loop wakes while music plays with s open: what s
+// asks for, or once a second, which keeps the Queue's clock and the status
+// bar's title current. s is nil on the tabs.
+func tickFor(s screens.Screen) time.Duration {
+	if t, ok := s.(screens.Ticker); ok {
+		return t.Tick()
+	}
+	return time.Second
+}
 
 // App owns the window and dispatches input to the active tab or Now Playing.
 type App struct {
@@ -70,16 +99,18 @@ type App struct {
 	ix         *library.Index
 	last       player.State
 	dirty      bool
+	fade       accentFade
+	grounds    *grounds    // a new accent's backgrounds, rendered before its fade starts
+	arts       atomic.Bool // art finished since poll last looked
+	words      atomic.Bool // lyrics found since poll last looked
 	quit       bool
 	drawn      bool
 	scanEnded  bool // a scan has ended, so an empty index is the library
 	wasAnim    bool
 
-	loading bool // a load is running
-	// another load was asked for while one ran, and whether it needs the index
-	again, againIndex bool
-	results           chan loaded
-	scans, saves      atomic.Bool // a scan has ended or progress was saved since poll last looked
+	loads *loader
+	// set by the forwarding goroutines, taken by poll
+	scanChanged, scanDone, saves atomic.Bool
 
 	statuses chan platform.Status // the latest status reading, for poll
 	stop     chan struct{}        // closed by Close to end the status reader
@@ -88,15 +119,6 @@ type App struct {
 
 	mu     sync.Mutex // guards closed against wake and Quit racing Close
 	closed bool
-}
-
-// loaded is a load's result. A nil index means only progress was read.
-type loaded struct {
-	ix       *library.Index
-	progress []resume.Progress
-	final    bool // a scan had ended when the load began
-	took     time.Duration
-	err      error
 }
 
 // New opens the window and builds the screens.
@@ -140,7 +162,6 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 	u := ui.NewContext(gfx.New(r), fonts, theme.Scale)
-	u.Accent = theme.Derive(fixture.PlayingHue, fixture.PlayingChroma)
 	// Until the first reading, which comes within a frame or so: no battery,
 	// and the Wi-Fi icon rather than the Offline warning.
 	u.Status = ui.Status{Online: true, Battery: -1}
@@ -155,11 +176,14 @@ func New(opts Options) (*App, error) {
 		home:       home.New(nil),
 		nowPlaying: nowplaying.New(opts.Player),
 		queue:      queue.New(opts.Player),
-		results:    make(chan loaded, 1),
 		statuses:   make(chan platform.Status, 1),
 		stop:       make(chan struct{}),
+		fade:       newAccentFade(theme.Fallback()),
 		dirty:      true,
 	}
+	// The first accent's backgrounds are rendered as the first frames need
+	// them; every later one's ahead, on a goroutine.
+	a.grounds = newGrounds(a.fade.target(), renderGrounds, a.wake)
 	if opts.Status != nil {
 		a.reader.Add(1)
 		go func() {
@@ -169,29 +193,67 @@ func New(opts Options) (*App, error) {
 	}
 	a.home.SetEmpty(opts.MusicDir, func() { a.rescan(); a.Toast(screens.Scanning) })
 	a.library = browse.New(a, opts.Player, opts.MusicDir, a.rescan)
-	forward := func(from <-chan struct{}, flag *atomic.Bool) {
-		if from == nil {
-			return
-		}
+	a.loads = newLoader(opts.Load, opts.Progress, a.wake)
+	if opts.Scanned != nil {
 		go func() {
-			for range from {
-				flag.Store(true)
+			for u := range opts.Scanned {
+				if u.Changed {
+					a.scanChanged.Store(true)
+				}
+				if u.Ended {
+					a.scanDone.Store(true)
+				}
 				a.wake()
 			}
 		}()
 	}
-	forward(opts.Scanned, &a.scans)
-	forward(opts.Saved, &a.saves)
+	if opts.Saved != nil {
+		go func() {
+			for range opts.Saved {
+				a.saves.Store(true)
+				a.wake()
+			}
+		}()
+	}
+	if opts.Covers != nil {
+		u.Covers = opts.Covers
+		go func() {
+			for range opts.Covers.Ready() {
+				a.arts.Store(true)
+				a.wake()
+			}
+		}()
+	}
 	a.shell = newShell(a.home,
 		a.library,
 		&screens.Placeholder{Tab: 2, Title: "Spotify"},
 		&screens.Placeholder{Tab: 3, Title: "YouTube"},
 		&screens.Placeholder{Tab: 4, Title: "Downloads"})
-	a.shell.overlays = []overlay{
-		{button: input.Start, screen: a.nowPlaying, can: func() bool { return a.last.Queued }},
-		{button: input.Select, screen: a.queue},
+	addOverlays(a.shell, a.nowPlaying, a.queue, func() bool { return a.last.Queued }, opts.Player, opts.Lyrics)
+	if opts.Lyrics != nil {
+		go func() {
+			for range opts.Lyrics.Ready() {
+				a.words.Store(true)
+				a.wake()
+			}
+		}()
 	}
 	return a, nil
+}
+
+// addOverlays puts the screens that open over the tabs on s: Now Playing on
+// Start, when queued allows, the Queue on Select and, given lyrics, the Lyrics
+// screen, which opens from Now Playing and goes back to it, having no button
+// of its own.
+func addOverlays(s *shell, np *nowplaying.NowPlaying, q screens.Screen, queued func() bool, p lyricsscreen.Player, lyrics lyricsscreen.Source) {
+	nowPlayingAt := s.add(overlay{button: input.Start, screen: np, can: queued})
+	s.add(overlay{button: input.Select, screen: q})
+	if lyrics == nil {
+		return
+	}
+	ly := lyricsscreen.New(p, lyrics, func() { s.openOverlay(nowPlayingAt, time.Now()) })
+	lyricsAt := s.add(overlay{button: input.None, screen: ly})
+	np.SetLyrics(func() { s.openOverlay(lyricsAt, time.Now()) })
 }
 
 // Push opens s on the current tab.
@@ -254,8 +316,13 @@ func (a *App) Run() error {
 				a.drawn = true
 				a.opts.Log.Info("first frame", "since_start", time.Since(a.opts.Started).Round(time.Millisecond))
 				// The database holds last session's library; show it now and
-				// refresh when a scan ends. Loading waits for the first frame.
-				a.load(true)
+				// refresh when a scan writes to it. Loading waits for the first
+				// frame. What this reads includes any scan that already ended.
+				if a.scanDone.Swap(false) {
+					a.scanEnded = true
+				}
+				a.scanChanged.Store(false)
+				a.loads.start(true, a.scanEnded)
 			}
 		}
 		a.wasAnim = anim
@@ -280,15 +347,14 @@ func (a *App) poll() {
 	st := a.opts.Player.State()
 	l := a.last
 	if a.drawn {
-		if a.scans.Swap(false) {
+		ended, changed, saved := a.scanDone.Swap(false), a.scanChanged.Swap(false), a.saves.Swap(false)
+		if ended {
 			a.scanEnded = true
-			a.load(true)
-		} else if a.saves.Swap(false) {
-			a.load(false) // Continue listening moves on
 		}
-		select {
-		case r := <-a.results:
-			a.loading = false
+		if read, index := reloadAfter(ended, changed, saved, a.ix != nil); read {
+			a.loads.start(index, a.scanEnded)
+		}
+		if r, ok := a.loads.take(a.scanEnded); ok {
 			switch {
 			case r.err != nil:
 				a.opts.Log.Error("load library", "err", r.err)
@@ -306,16 +372,20 @@ func (a *App) poll() {
 				}
 				a.showHome(r.progress)
 			}
-			if a.again {
-				a.again = false
-				index := a.againIndex
-				a.againIndex = false
-				a.load(index)
-			}
 			a.dirty = true
-		default:
 		}
 	}
+	art := a.arts.Swap(false)
+	if art {
+		a.dirty = true
+	}
+	if a.words.Swap(false) {
+		a.dirty = true
+	}
+	if st.Queued && (st.Track.Path != l.Track.Path || !l.Queued) {
+		a.prefetch(st)
+	}
+	a.followAccent(st, art || st.Track != l.Track || st.Queued != l.Queued, time.Now())
 	if st.Err != nil && l.Err == nil {
 		a.opts.Log.Warn("playback paused by an output error", "err", st.Err)
 	}
@@ -326,34 +396,48 @@ func (a *App) poll() {
 		}
 		a.dirty = true
 	}
-	if a.shell.open >= 0 && st.Elapsed/tick != l.Elapsed/tick {
+	if p := tickFor(a.shell.overlay()); a.shell.open >= 0 && st.Elapsed/p != l.Elapsed/p {
 		a.dirty = true
 	}
 	a.last = st
 }
 
-// load reads the progress, and the index too when index is set, on a
-// goroutine, then wakes the loop to show them.
-func (a *App) load(index bool) {
-	if a.loading {
-		a.again, a.againIndex = true, a.againIndex || index
+// prefetch asks for the lyrics of the track now playing and the one after,
+// so they are there when the Lyrics screen opens.
+func (a *App) prefetch(st player.State) {
+	if a.opts.Lyrics == nil {
 		return
 	}
-	a.loading = true
-	final := a.scanEnded
-	go func() {
-		start := time.Now()
-		r := loaded{final: final}
-		if index {
-			r.ix, r.err = a.opts.Load()
+	ts := []lrc.Track{screens.PlayingLyricsTrack(st)}
+	if q, pos := a.opts.Player.Queue(nil); pos+1 < len(q) {
+		ts = append(ts, screens.LyricsTrack(q[pos+1]))
+	}
+	a.opts.Lyrics.Prefetch(ts...)
+}
+
+// followAccent keeps the accent with what is playing: when check is set it
+// works out st's accent and asks for its backgrounds if it is new, and once
+// they are rendered it puts them in the context and starts the fade.
+func (a *App) followAccent(st player.State, check bool, now time.Time) {
+	if check {
+		if acc, ok := accentFor(a.colours(), st); ok {
+			a.grounds.ask(acc)
 		}
-		if r.err == nil {
-			r.progress, r.err = a.opts.Progress()
+	}
+	if acc, gs, ok := a.grounds.take(); ok {
+		for _, g := range gs {
+			a.ui.PutImage(g.key, g.img)
 		}
-		r.took = time.Since(start)
-		a.results <- r
-		a.wake()
-	}()
+		a.fade.set(acc, now)
+	}
+}
+
+// colours is the art cache as the accent asks it, or nil without one.
+func (a *App) colours() colours {
+	if a.opts.Covers == nil {
+		return nil
+	}
+	return a.opts.Covers
 }
 
 // showHome fills Home's rows from the index and the albums in progress.
@@ -402,29 +486,18 @@ func (a *App) rescan() {
 }
 
 func (a *App) animating(now time.Time) bool {
-	return a.shell.animating(now)
+	return a.shell.animating(now) || a.fade.animating(now) || a.ui.Animating()
 }
 
 func (a *App) draw(now time.Time) {
-	a.ui.Now = now
+	a.ui.BeginFrame(now)
+	a.ui.Accent, a.ui.Fade = a.fade.at(now)
 	a.shell.draw(a.ui)
 	a.ui.Canvas.Present()
 }
 
 func (a *App) wait(now time.Time) {
-	timeout := time.Until(now.Truncate(time.Minute).Add(time.Minute))
-	if a.animating(now) {
-		timeout = 0
-	}
-	if a.last.Playing {
-		timeout = min(timeout, tick)
-	}
-	if next, ok := a.repeat.Next(); ok {
-		timeout = min(timeout, time.Until(next))
-	}
-	if w, ok := a.shell.wake(now); ok {
-		timeout = min(timeout, time.Until(w))
-	}
+	timeout := a.timeout(now, time.Now())
 	var ev sdl.Event
 	if timeout <= 0 {
 		ev = sdl.PollEvent()
@@ -437,6 +510,27 @@ func (a *App) wait(now time.Time) {
 	for _, e := range a.repeat.Due(time.Now()) {
 		a.dispatch(e)
 	}
+}
+
+// timeout is how long the loop may sleep, at now, after the frame begun at
+// start: until the clock's next minute, or sooner the next key repeat, toast
+// or, while music plays, the open screen's next tick. The tick counts from the
+// frame's start, so the time the frame took to draw doesn't lengthen it.
+func (a *App) timeout(start, now time.Time) time.Duration {
+	timeout := start.Truncate(time.Minute).Add(time.Minute).Sub(now)
+	if a.animating(start) {
+		timeout = 0
+	}
+	if a.last.Playing {
+		timeout = min(timeout, start.Add(tickFor(a.shell.overlay())).Sub(now))
+	}
+	if next, ok := a.repeat.Next(); ok {
+		timeout = min(timeout, next.Sub(now))
+	}
+	if w, ok := a.shell.wake(start); ok {
+		timeout = min(timeout, w.Sub(now))
+	}
+	return max(timeout, 0)
 }
 
 func (a *App) event(ev sdl.Event) {

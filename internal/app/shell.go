@@ -48,10 +48,24 @@ func newShell(roots ...screens.Screen) *shell {
 	return s
 }
 
+// add puts o over the tabs and returns its index, to open it by.
+func (s *shell) add(o overlay) int {
+	s.overlays = append(s.overlays, o)
+	return len(s.overlays) - 1
+}
+
 // top is the current tab's top page.
 func (s *shell) top() screens.Screen {
 	st := s.stacks[s.tab]
 	return st[len(st)-1]
+}
+
+// overlay is the open overlay's screen, or nil.
+func (s *shell) overlay() screens.Screen {
+	if s.open < 0 {
+		return nil
+	}
+	return s.overlays[s.open].screen
 }
 
 // active is the screen input goes to.

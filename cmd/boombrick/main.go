@@ -17,10 +17,13 @@ import (
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/app"
+	"github.com/ujjwal313/boombrick/internal/art"
 	"github.com/ujjwal313/boombrick/internal/audio/alsa"
 	"github.com/ujjwal313/boombrick/internal/audio/decode"
 	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/logx"
+	"github.com/ujjwal313/boombrick/internal/lyrics"
+	"github.com/ujjwal313/boombrick/internal/netx"
 	"github.com/ujjwal313/boombrick/internal/platform"
 	"github.com/ujjwal313/boombrick/internal/player"
 	"github.com/ujjwal313/boombrick/internal/resume"
@@ -81,9 +84,26 @@ func run(started time.Time) error {
 		return err
 	}
 
+	// Album art and lyrics are found off the UI thread; what isn't with the
+	// music is looked up online while the device is. They close after the
+	// player, so the music stops at once on quitting, and before the database.
+	web := netx.NewClient()
+	online := func() bool { return platform.ReadStatus("/sys").Online }
+	covers := art.New(art.Options{
+		DB:     db.DB,
+		Dir:    filepath.Join(paths.Data, "cache", "art"),
+		Lookup: art.NewLookup(web),
+		Online: online,
+		Log:    log,
+	})
+	defer covers.Close()
+	words := lyrics.New(lyrics.Options{DB: db.DB, Fetch: lyrics.NewClient(web), Online: online, Log: log})
+	defer words.Close()
+
 	p := player.New(alsa.New(), decode.Open, log)
 	defer p.Close()
 	p.SetLevelling(prefs.Bool(settings.VolumeLevelling))
+
 	// Reading the saved queue and opening its track mustn't hold up the first
 	// frame.
 	restored := make(chan struct{})
@@ -114,13 +134,23 @@ func run(started time.Time) error {
 	// Scans run one at a time on their own goroutine: at start-up, then each
 	// time the app asks. Asking while a scan runs queues one more.
 	formats := library.Formats{Supported: decode.Supported, Duration: decode.Duration}
-	// The app hears of the first scan and of any that changed the library.
-	scanReq, scanned := make(chan struct{}, 1), make(chan struct{}, 1)
+	// The app hears when a scan writes to the library, at most every 10 s while
+	// it runs, and when each scan ends.
+	scanReq, scanned := make(chan struct{}, 1), make(chan app.ScanUpdate, 1)
+	// tell hands u to the app, merged with one it hasn't taken yet. The
+	// scanner is the only sender, so there is room after the drain.
+	tell := func(u app.ScanUpdate) {
+		select {
+		case old := <-scanned:
+			u.Changed, u.Ended = u.Changed || old.Changed, u.Ended || old.Ended
+		default:
+		}
+		scanned <- u
+	}
 	scanReq <- struct{}{}
 	go func() {
 		defer close(scanDone)
 		defer close(scanned)
-		first := true
 		for {
 			select {
 			case <-ctx.Done():
@@ -131,25 +161,29 @@ func run(started time.Time) error {
 				return
 			}
 			start := time.Now()
-			st, err := library.Scan(ctx, db.DB, paths.Music, formats)
-			changed := first
+			var told time.Time
+			wroteAny := false
+			wrote := func(library.Stats) {
+				wroteAny = true
+				if time.Since(told) >= 10*time.Second {
+					told = time.Now()
+					tell(app.ScanUpdate{Changed: true})
+				}
+			}
+			st, err := library.ScanWithProgress(ctx, db.DB, paths.Music, formats, wrote)
+			changed := false
 			switch {
 			case errors.Is(err, context.Canceled):
 				return
 			case err != nil:
 				log.Error("scan", "root", paths.Music, "err", err)
+				changed = wroteAny // batches already written are worth loading
 			default:
 				log.Info("scanned", "root", paths.Music, "tracks", st.Total, "added", st.Added,
 					"updated", st.Updated, "removed", st.Removed, "took", time.Since(start).Round(time.Millisecond))
-				changed = changed || st.Added+st.Updated+st.Removed > 0
+				changed = st.Added+st.Updated+st.Removed > 0
 			}
-			first = false
-			if changed {
-				select {
-				case scanned <- struct{}{}:
-				default:
-				}
-			}
+			tell(app.ScanUpdate{Changed: changed, Ended: true})
 		}
 	}()
 	rescan := func() {
@@ -204,6 +238,8 @@ func run(started time.Time) error {
 		Scanned:    scanned,
 		Saved:      savedTrack,
 		Status:     func() platform.Status { return platform.ReadStatus("/sys") },
+		Covers:     covers,
+		Lyrics:     words,
 	})
 	if err != nil {
 		return err
