@@ -1,0 +1,5 @@
+/dist/
+*.test
+*.out
+*.actual.png
+/docs

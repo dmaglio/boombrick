@@ -1,0 +1,297 @@
+// Package ui is the drawing context shared by widgets and screens. It wraps
+// the canvas with caches for text, icons, masks and images, applies the scale
+// transforms used by focus animation, and carries per-frame state. Callers work
+// in design pixels; the context draws at Scale device pixels per design pixel
+// and rasterises at device size so nothing is stretched.
+package ui
+
+import (
+	"image"
+	"image/color"
+	"math"
+	"time"
+
+	"github.com/ujjwal313/boombrick/internal/theme"
+	"github.com/ujjwal313/boombrick/internal/ui/gfx"
+	"github.com/ujjwal313/boombrick/internal/ui/icons"
+	"github.com/ujjwal313/boombrick/internal/ui/raster"
+	"github.com/ujjwal313/boombrick/internal/ui/text"
+)
+
+// Status is what the status bar shows.
+type Status struct {
+	Time       string
+	NowPlaying string
+	Online     bool
+	Bluetooth  string
+	Battery    int
+}
+
+// Context is passed to every widget and screen while drawing. It is only used
+// from the UI thread.
+type Context struct {
+	Canvas *gfx.Canvas
+	Fonts  *text.Engine
+	Accent theme.Accent
+	Status Status
+	Now    time.Time
+	Scale  float32 // device pixels per design pixel
+
+	texts  *LRU[textKey, textEntry]
+	fits   map[fitKey]string
+	masks  *LRU[raster.Shape, *gfx.Texture]
+	images *LRU[string, *gfx.Texture]
+	icons  map[iconKey]*gfx.Texture
+	tf     []transform
+	clips  []gfx.Rect
+}
+
+type textKey struct {
+	s  string
+	st text.Style
+}
+
+type textEntry struct {
+	tex   *gfx.Texture
+	width float32 // advance in design pixels
+}
+
+type fitKey struct {
+	s    string
+	st   text.Style
+	maxW int
+}
+
+type iconKey struct {
+	name   string
+	size   int
+	sw     float64
+	filled bool
+}
+
+type transform struct{ ox, oy, s float32 }
+
+// Cache budgets in bytes of texture memory, plus the number of remembered
+// truncations.
+const (
+	textBudget  = 24 << 20
+	maskBudget  = 16 << 20
+	imageBudget = 48 << 20
+	maxFits     = 4096
+)
+
+// NewContext creates a context that draws to c using fonts, with scale device
+// pixels per design pixel.
+func NewContext(c *gfx.Canvas, fonts *text.Engine, scale float32) *Context {
+	texSize := func(t *gfx.Texture) int { return t.Bytes() }
+	texFree := func(t *gfx.Texture) { t.Destroy() }
+	return &Context{
+		Canvas: c,
+		Fonts:  fonts,
+		Accent: theme.Fallback(),
+		Scale:  scale,
+		texts: NewLRU[textKey, textEntry](textBudget,
+			func(e textEntry) int { return e.tex.Bytes() },
+			func(e textEntry) { e.tex.Destroy() }),
+		fits:   map[fitKey]string{},
+		masks:  NewLRU[raster.Shape, *gfx.Texture](maskBudget, texSize, texFree),
+		images: NewLRU[string, *gfx.Texture](imageBudget, texSize, texFree),
+		icons:  map[iconKey]*gfx.Texture{},
+	}
+}
+
+// PushScale scales everything drawn until the matching Pop by s around (ox, oy).
+func (u *Context) PushScale(ox, oy, s float32) { u.tf = append(u.tf, transform{ox, oy, s}) }
+
+// Pop undoes the most recent PushScale.
+func (u *Context) Pop() { u.tf = u.tf[:len(u.tf)-1] }
+
+// Apply maps r through the active transforms, innermost first, and into
+// device pixels.
+func (u *Context) Apply(r gfx.Rect) gfx.Rect {
+	for i := len(u.tf) - 1; i >= 0; i-- {
+		t := u.tf[i]
+		r = gfx.Rect{X: t.ox + (r.X-t.ox)*t.s, Y: t.oy + (r.Y-t.oy)*t.s, W: r.W * t.s, H: r.H * t.s}
+	}
+	s := u.Scale
+	return gfx.Rect{X: r.X * s, Y: r.Y * s, W: r.W * s, H: r.H * s}
+}
+
+// Px is v design pixels in whole device pixels: the size to rasterise an
+// image at so it is drawn without stretching.
+func (u *Context) Px(v float32) int { return int(math.Round(float64(v * u.Scale))) }
+
+// device is st at its device pixel size.
+func (u *Context) device(st text.Style) text.Style {
+	st.Size *= u.Scale
+	return st
+}
+
+// PushClip restricts drawing to r, intersected with any enclosing clip, until
+// the matching PopClip.
+func (u *Context) PushClip(r gfx.Rect) {
+	r = u.Apply(r)
+	if n := len(u.clips); n > 0 {
+		r = intersect(u.clips[n-1], r)
+	}
+	u.clips = append(u.clips, r)
+	u.Canvas.Clip(r)
+}
+
+// PopClip restores the previous clip.
+func (u *Context) PopClip() {
+	u.clips = u.clips[:len(u.clips)-1]
+	if n := len(u.clips); n > 0 {
+		u.Canvas.Clip(u.clips[n-1])
+	} else {
+		u.Canvas.Unclip()
+	}
+}
+
+func intersect(a, b gfx.Rect) gfx.Rect {
+	x0, y0 := max(a.X, b.X), max(a.Y, b.Y)
+	x1, y1 := min(a.X+a.W, b.X+b.W), min(a.Y+a.H, b.Y+b.H)
+	return gfx.Rect{X: x0, Y: y0, W: max(0, x1-x0), H: max(0, y1-y0)}
+}
+
+// Fill draws a solid rectangle.
+func (u *Context) Fill(r gfx.Rect, col color.NRGBA) { u.Canvas.Fill(u.Apply(r), col) }
+
+func (u *Context) text(s string, st text.Style) (textEntry, bool) {
+	k := textKey{s, st}
+	if e, ok := u.texts.Get(k); ok {
+		return e, true
+	}
+	ds := u.device(st)
+	line := u.Fonts.Shape(s, ds)
+	img, _ := u.Fonts.Rasterize(line, ds)
+	tex, err := u.Canvas.Upload(img)
+	if err != nil {
+		return textEntry{}, false
+	}
+	e := textEntry{tex: tex, width: float32(line.Width) / u.Scale}
+	u.texts.Put(k, e)
+	return e, true
+}
+
+// Text draws s with the top of its line box at y and returns its advance.
+func (u *Context) Text(s string, st text.Style, x, y float32, col color.NRGBA) float32 {
+	if s == "" {
+		return 0
+	}
+	e, ok := u.text(s, st)
+	if !ok {
+		return 0
+	}
+	pad := float32(text.Pad(u.device(st))) / u.Scale
+	dst := gfx.Rect{X: x - pad, Y: y, W: float32(e.tex.W) / u.Scale, H: float32(e.tex.H) / u.Scale}
+	u.Canvas.Draw(e.tex, u.Apply(dst), col)
+	return e.width
+}
+
+// TextWidth measures s without drawing it.
+func (u *Context) TextWidth(s string, st text.Style) float32 {
+	if e, ok := u.texts.Get(textKey{s, st}); ok {
+		return e.width
+	}
+	return float32(u.Fonts.Shape(s, u.device(st)).Width) / u.Scale
+}
+
+// Fit returns s shortened with an ellipsis to fit maxW. Results are cached
+// because shaping during every frame would be wasteful.
+func (u *Context) Fit(s string, st text.Style, maxW float32) string {
+	dw := int(maxW * u.Scale)
+	k := fitKey{s, st, dw}
+	if f, ok := u.fits[k]; ok {
+		return f
+	}
+	if len(u.fits) >= maxFits {
+		clear(u.fits)
+	}
+	f := u.Fonts.Fit(s, u.device(st), dw)
+	u.fits[k] = f
+	return f
+}
+
+// LineHeight is the height of st's line box.
+func (u *Context) LineHeight(st text.Style) float32 {
+	a, d := u.Fonts.Metrics(u.device(st))
+	return float32(a+d) / u.Scale
+}
+
+// Ascent is the distance from the top of st's line box to its baseline.
+func (u *Context) Ascent(st text.Style) float32 {
+	a, _ := u.Fonts.Metrics(u.device(st))
+	return float32(a) / u.Scale
+}
+
+// CenterY is the y at which st's line box sits centred in [top, top+h).
+func (u *Context) CenterY(st text.Style, top, h float32) float32 {
+	return top + (h-u.LineHeight(st))/2
+}
+
+// Baseline is the y at which to draw st so its baseline lands on baseline.
+func (u *Context) Baseline(st text.Style, baseline float32) float32 {
+	return baseline - u.Ascent(st)
+}
+
+// Icon draws an icon size design pixels square with its top-left at (x, y).
+func (u *Context) Icon(name string, size int, strokeWidth float64, filled bool, x, y float32, col color.NRGBA) {
+	px := u.Px(float32(size))
+	k := iconKey{name, px, strokeWidth, filled}
+	t, ok := u.icons[k]
+	if !ok {
+		img, err := icons.Rasterize(name, px, strokeWidth, filled)
+		if err != nil {
+			return
+		}
+		if t, err = u.Canvas.Upload(img); err != nil {
+			return
+		}
+		u.icons[k] = t
+	}
+	d := float32(px) / u.Scale
+	u.Canvas.Draw(t, u.Apply(gfx.Rect{X: x, Y: y, W: d, H: d}), col)
+}
+
+// Shape draws mask s for an element occupying box, stretching the mask if box
+// differs from s's size. s is in design pixels; the mask is rendered at device
+// size.
+func (u *Context) Shape(s raster.Shape, box gfx.Rect, col color.NRGBA) {
+	k := float64(u.Scale)
+	ds := raster.Shape{
+		W: u.Px(float32(s.W)), H: u.Px(float32(s.H)), Kind: s.Kind,
+		Radius: s.Radius * k, RingOffset: s.RingOffset * k, RingWidth: s.RingWidth * k,
+		GlowSpread: s.GlowSpread * k, GlowBlur: s.GlowBlur * k,
+	}
+	t, ok := u.masks.Get(ds)
+	if !ok {
+		var err error
+		if t, err = u.Canvas.Upload(ds.Mask()); err != nil {
+			return
+		}
+		u.masks.Put(ds, t)
+	}
+	// Design pixels per mask pixel.
+	sx, sy := box.W/float32(ds.W), box.H/float32(ds.H)
+	o := float32(ds.Outset())
+	u.Canvas.Draw(t, u.Apply(gfx.Rect{X: box.X - o*sx, Y: box.Y - o*sy, W: float32(t.W) * sx, H: float32(t.H) * sy}), col)
+}
+
+// Image draws the cached image named key into dst, building it on first use.
+// A nil result from build is retried on the next call.
+func (u *Context) Image(key string, build func() *image.NRGBA, dst gfx.Rect, col color.NRGBA) {
+	t, ok := u.images.Get(key)
+	if !ok {
+		img := build()
+		if img == nil {
+			return
+		}
+		var err error
+		if t, err = u.Canvas.Upload(img); err != nil {
+			return
+		}
+		u.images.Put(key, t)
+	}
+	u.Canvas.Draw(t, u.Apply(dst), col)
+}

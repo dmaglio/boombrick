@@ -1,0 +1,43 @@
+// Package screens defines the Screen interface and screens shared by tabs.
+package screens
+
+import (
+	"time"
+
+	"github.com/ujjwal313/boombrick/internal/platform/input"
+	"github.com/ujjwal313/boombrick/internal/theme"
+	"github.com/ujjwal313/boombrick/internal/ui"
+	"github.com/ujjwal313/boombrick/internal/ui/text"
+	"github.com/ujjwal313/boombrick/internal/ui/widgets"
+)
+
+// Screen is one full frame of UI.
+type Screen interface {
+	// Handle applies a button event and reports whether the frame changed.
+	Handle(ev input.Event, now time.Time) bool
+	// Draw renders the whole frame.
+	Draw(u *ui.Context)
+	// Animating reports whether another frame is needed at now even without input.
+	Animating(now time.Time) bool
+}
+
+// Placeholder stands in for a tab that hasn't been built yet.
+type Placeholder struct {
+	Tab   int
+	Title string
+}
+
+// Handle ignores input.
+func (p *Placeholder) Handle(input.Event, time.Time) bool { return false }
+
+// Animating is always false.
+func (p *Placeholder) Animating(time.Time) bool { return false }
+
+// Draw shows the tab chrome and the tab's name.
+func (p *Placeholder) Draw(u *ui.Context) {
+	widgets.DrawBackground(u, widgets.TabGround)
+	widgets.StatusBar(u)
+	widgets.Tabs(u, p.Tab)
+	u.Text(p.Title, text.Heading, 32, widgets.StatusHeight+widgets.TabsHeight+14, theme.Paper)
+	widgets.HintBar(u, []widgets.Hint{{Key: "L1/R1", Label: "Tabs"}})
+}

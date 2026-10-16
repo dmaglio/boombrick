@@ -1,0 +1,23 @@
+Boombrick
+Copyright (C) 2026 The Boombrick authors
+
+Boombrick is free software, released under the GNU General Public License
+version 3. See LICENSE.
+
+It includes or links the following third-party components:
+
+  SDL2                         zlib License          https://libsdl.org
+  go-sdl2                      BSD-3-Clause          https://github.com/veandco/go-sdl2
+  go-text typesetting, render  BSD-3-Clause/Unlicense https://github.com/go-text
+  oksvg, rasterx               BSD-3-Clause          https://github.com/srwiley
+  golang.org/x/image           BSD-3-Clause          https://golang.org/x/image
+  golang.org/x/net             BSD-3-Clause          https://golang.org/x/net
+  golang.org/x/text            BSD-3-Clause          https://golang.org/x/text
+  go-sqlite3                   MIT                   https://github.com/mattn/go-sqlite3
+  SQLite                       Public domain         https://sqlite.org
+  Cormorant Garamond           SIL OFL 1.1           Christian Thalmann
+  Lora                         SIL OFL 1.1           Cyreal
+  Lucide icons                 ISC, MIT (Feather)    https://lucide.dev
+
+The font licences (OFL-*.txt) are in assets/fonts/ in the source tree and
+next to this file in the pak.

@@ -1,0 +1,61 @@
+package gfx
+
+import (
+	"image"
+	"image/color"
+	"os"
+	"runtime"
+	"testing"
+)
+
+func TestMain(m *testing.M) {
+	runtime.LockOSThread()
+	os.Exit(m.Run())
+}
+
+func near(a, b color.NRGBA) bool {
+	d := func(x, y uint8) int {
+		if x > y {
+			return int(x - y)
+		}
+		return int(y - x)
+	}
+	return d(a.R, b.R) <= 1 && d(a.G, b.G) <= 1 && d(a.B, b.B) <= 1
+}
+
+func TestOffscreenDrawsAndReadsBack(t *testing.T) {
+	o, err := NewOffscreen(64, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+
+	ground := color.NRGBA{23, 21, 20, 255}
+	red := color.NRGBA{255, 0, 0, 255}
+	gold := color.NRGBA{225, 173, 102, 255}
+
+	o.Clear(ground)
+	o.Fill(Rect{X: 0, Y: 0, W: 16, H: 16}, red)
+
+	mask := image.NewNRGBA(image.Rect(0, 0, 8, 8))
+	for i := range mask.Pix {
+		mask.Pix[i] = 255
+	}
+	tex, err := o.Upload(mask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tex.Destroy()
+	o.Draw(tex, Rect{X: 32, Y: 0, W: 8, H: 8}, gold)
+
+	img := o.Image()
+	if got := img.NRGBAAt(4, 4); !near(got, red) {
+		t.Errorf("filled pixel = %v, want red", got)
+	}
+	if got := img.NRGBAAt(20, 20); !near(got, ground) {
+		t.Errorf("background = %v, want ground", got)
+	}
+	if got := img.NRGBAAt(36, 4); !near(got, gold) {
+		t.Errorf("tinted texture = %v, want gold", got)
+	}
+}
