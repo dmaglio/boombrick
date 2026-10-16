@@ -1,0 +1,208 @@
+package resume
+
+import (
+	"database/sql"
+	"path/filepath"
+	"reflect"
+	"testing"
+	"time"
+
+	"github.com/ujjwal313/boombrick/internal/player"
+	"github.com/ujjwal313/boombrick/internal/store"
+)
+
+func openDB(t *testing.T) *sql.DB {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "resume.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return st.DB
+}
+
+func snapshot() player.Snapshot {
+	return player.Snapshot{
+		Queue: []player.Track{
+			{Path: "/m/A/X/01.flac", Title: "One", Artist: "A", AlbumArtist: "A", Album: "X", Gain: -3.5, Peak: 0.8, HasGain: true,
+				AlbumGain: -4.25, AlbumPeak: 0.9, HasAlbumGain: true, Duration: 3 * time.Minute},
+			{Path: "/m/A/X/02.flac", Title: "Two", Artist: "A", AlbumArtist: "A", Album: "X"},
+		},
+		Order: []int{1, 0}, Pos: 1, Frame: 12345, Fraction: 0.25, AlbumRun: true, Shuffle: true, Repeat: player.RepeatAll,
+	}
+}
+
+func TestSaveLoadRoundTrip(t *testing.T) {
+	db := openDB(t)
+	if _, ok, err := Load(db); ok || err != nil {
+		t.Fatalf("Load of an empty database = %v, %v", ok, err)
+	}
+	want := snapshot()
+	if err := Save(db, want); err != nil {
+		t.Fatal(err)
+	}
+	want.Queue = want.Queue[:1] // saving again with a shorter queue replaces it
+	want.Order, want.Pos = []int{0}, 0
+	if err := Save(db, want); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := Load(db)
+	if err != nil || !ok {
+		t.Fatalf("Load = %v, %v", ok, err)
+	}
+	want.Fraction = 0     // not part of the saved queue
+	want.AlbumRun = false // nor is the album run
+	want.Version = 0      // nor is the version
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Load = %+v\nwant   %+v", got, want)
+	}
+}
+
+func TestSaverRewritesTheQueueOnlyWhenItChanged(t *testing.T) {
+	db := openDB(t)
+	sv := NewSaver(db)
+	s := snapshot()
+	s.Version = 1
+	if err := sv.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	// Clear the saved queue behind the saver's back: an unchanged version
+	// mustn't rewrite it, a new one must.
+	if _, err := db.Exec(`DELETE FROM queue`); err != nil {
+		t.Fatal(err)
+	}
+	s.Frame = 99
+	if err := sv.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := Load(db); ok {
+		t.Fatal("an unchanged queue was written again")
+	}
+	s.Version = 2
+	if err := sv.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := Load(db); err != nil || !ok || got.Frame != 99 || len(got.Queue) != 2 {
+		t.Fatalf("Load after a new version = %+v, %v, %v", got, ok, err)
+	}
+}
+
+func TestOddSnapshotsSaveAndLoadAsNothing(t *testing.T) {
+	q := snapshot().Queue
+	for _, s := range []player.Snapshot{
+		{},
+		{Pos: 3, Order: []int{0}},
+		{Queue: q, Order: []int{0, 1}, Pos: 2},
+		{Queue: q, Order: []int{0, 2}, Pos: 1},
+		{Queue: q, Order: []int{0}, Pos: 0},
+		{Queue: q, Order: []int{1, 0}, Pos: -1},
+	} {
+		db := openDB(t)
+		if err := Save(db, s); err != nil {
+			t.Fatalf("Save(%+v) = %v", s, err)
+		}
+		if _, ok, err := Load(db); ok || err != nil {
+			t.Fatalf("Load after saving %d tracks in order %v at %d = %v, %v; want nothing", len(s.Queue), s.Order, s.Pos, ok, err)
+		}
+	}
+}
+
+func TestLoadRejectsABadOrder(t *testing.T) {
+	db := openDB(t)
+	if err := Save(db, snapshot()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE playback_state SET play_order = '1,x'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := Load(db); err == nil || ok {
+		t.Fatalf("Load with a non-numeric play order = %v, %v; want an error", ok, err)
+	}
+}
+
+func TestRecentPutsTheLatestFirst(t *testing.T) {
+	db := openDB(t)
+	s := snapshot()
+	s.Order, s.Pos = []int{0, 1}, 0
+	for _, album := range []string{"X", "Y", "Z", "X"} {
+		s.Queue[0].Album = album
+		if err := Save(db, s); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond) // well within a second of each other
+	}
+	got, err := Recent(db, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Album != "X" || got[1].Album != "Z" {
+		t.Fatalf("Recent(2) = %+v; want X, then Z", got)
+	}
+	if d := time.Since(got[0].Updated); d < 0 || d > time.Minute {
+		t.Fatalf("X was updated %v ago", d)
+	}
+}
+
+func TestProgressWithoutAnAlbumArtistIsKeptUnderTheArtist(t *testing.T) {
+	db := openDB(t)
+	s := snapshot()
+	s.Queue[0].AlbumArtist, s.Queue[0].Artist = "", "B"
+	s.Order, s.Pos = []int{0, 1}, 0
+	if err := Save(db, s); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Recent(db, 10)
+	if err != nil || len(got) != 1 || got[0].Artist != "B" || got[0].Album != "X" {
+		t.Fatalf("Recent = %+v, %v; want X under B", got, err)
+	}
+}
+
+func TestRecentListsAlbumsInProgress(t *testing.T) {
+	db := openDB(t)
+	s := snapshot()
+	if err := Save(db, s); err != nil {
+		t.Fatal(err)
+	}
+	s.Queue[0].Album, s.Queue[0].Path, s.Order, s.Pos = "Y", "/m/A/Y/01.flac", []int{0, 1}, 0
+	s.Fraction = 0.99 // finished albums drop off
+	if err := Save(db, s); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Recent(db, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Album != "X" || got[0].Artist != "A" || got[0].Path != "/m/A/X/01.flac" || got[0].Frame != 12345 {
+		t.Fatalf("Recent = %+v", got)
+	}
+}
+
+// A song that wasn't queued as part of its album leaves no progress, though
+// the queue and position are saved.
+func TestSongsOutsideAnAlbumRunLeaveNoProgress(t *testing.T) {
+	db := openDB(t)
+	s := snapshot()
+	s.AlbumRun = false
+	if err := Save(db, s); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Recent(db, 10); err != nil || len(got) != 0 {
+		t.Fatalf("Recent = %+v, %v; want none", got, err)
+	}
+	if got, ok, err := Load(db); err != nil || !ok || got.Frame != s.Frame {
+		t.Fatalf("Load = %+v, %v, %v; want the queue saved", got, ok, err)
+	}
+}
+
+func TestRecentOmitsAnAlbumPlayedOut(t *testing.T) {
+	db := openDB(t)
+	s := snapshot()
+	s.Fraction = 1
+	if err := Save(db, s); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Recent(db, 10)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("Recent = %+v, %v; want none", got, err)
+	}
+}
