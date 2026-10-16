@@ -1,5 +1,6 @@
-// Package platform holds device integration: where data lives, and (in
-// subpackages) input, power and connectivity.
+// Package platform holds device integration: where data lives, the battery
+// and network state the status bar shows, and (in subpackages) input, power
+// and connectivity.
 package platform
 
 import (
