@@ -85,7 +85,7 @@ type Player struct {
 	gen               uint64 // bumped whenever what should follow cur changes
 	empties           int    // tracks in a row that produced no audio
 	cued              bool   // cur was restored paused and hasn't been resumed
-	cuedFrame         int64  // where it was cued
+	startFrame        int64  // where cur was started, cued or last sought to
 	playedOut         bool   // the queue ended and cur was dropped
 	levelling, closed bool
 	wg                sync.WaitGroup // priming goroutines
@@ -228,7 +228,7 @@ func (p *Player) startAtLocked(frame int64) {
 		t := p.queue[p.order[p.pos]]
 		src, err := p.openTrack(t, p.levelling, p.albumModeLocked())
 		if err == nil {
-			p.cur, p.curRate, p.curFrames = src, src.SampleRate(), src.Frames()
+			p.cur, p.curRate, p.curFrames, p.startFrame = src, src.SampleRate(), src.Frames(), max(frame, 0)
 			p.engine.PlayFrom(src, frame)
 			p.primeLocked()
 			return
@@ -248,6 +248,7 @@ func (p *Player) startAtLocked(frame int64) {
 
 func (p *Player) stopLocked() {
 	p.cur, p.next, p.cued = nil, nil, false
+	p.startFrame = 0
 	p.gen++
 	p.engine.Stop()
 }
@@ -321,7 +322,7 @@ func (p *Player) ended(end audio.End) {
 	}
 	if end.Next != nil && end.Next == p.next {
 		// The primed track took over without a gap.
-		p.cur, p.pos, p.curRate, p.curFrames = p.next, p.nextPos, p.nextRate, p.nextFrames
+		p.cur, p.pos, p.curRate, p.curFrames, p.startFrame = p.next, p.nextPos, p.nextRate, p.nextFrames, 0
 		p.primeLocked()
 		return
 	}
@@ -384,6 +385,22 @@ func (p *Player) Prev() {
 		return
 	}
 	p.startLocked()
+}
+
+// Seek moves the current track to d from its start, clamped to its length.
+// It does nothing when no track is loaded.
+func (p *Player) Seek(d time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cur == nil || p.curRate <= 0 {
+		return
+	}
+	f := max(int64(d)*int64(p.curRate)/int64(time.Second), 0)
+	if p.curFrames > 0 {
+		f = min(f, p.curFrames)
+	}
+	p.startFrame = f
+	p.engine.SeekFrame(f)
 }
 
 // SetShuffle turns shuffle on or off without interrupting the current track.
@@ -537,9 +554,7 @@ func (p *Player) State() State {
 		// The engine hasn't picked the new source up yet.
 		s.Playing, s.Rate = !p.cued, p.curRate
 		if p.curRate > 0 {
-			if p.cued {
-				s.Elapsed = duration(p.cuedFrame, p.curRate)
-			}
+			s.Elapsed = duration(p.startFrame, p.curRate)
 			if p.curFrames > 0 {
 				s.Duration = duration(p.curFrames, p.curRate)
 			}
@@ -548,10 +563,7 @@ func (p *Player) State() State {
 	}
 	s.Playing, s.Rate, s.Err = st.Playing, st.Rate, st.Err
 	if st.Rate > 0 {
-		frame := st.Frame
-		if p.cued && frame < p.cuedFrame {
-			frame = p.cuedFrame // the engine hasn't finished cueing it
-		}
+		frame := max(st.Frame, p.startFrame) // the engine hasn't reached the start yet
 		s.Elapsed = duration(frame, st.Rate)
 		if st.Frames > 0 {
 			s.Duration = duration(st.Frames, st.Rate)
@@ -611,9 +623,9 @@ func (p *Player) Snapshot() (Snapshot, bool) {
 			elapsed, total = float64(st.Frame), float64(st.Frames)
 		}
 	}
-	if p.cued && s.Frame < p.cuedFrame {
-		// Restored, and the engine hasn't cued it yet.
-		s.Frame = p.cuedFrame
+	if (p.cur != nil || p.cued) && s.Frame < p.startFrame {
+		// Started, cued or sought, and the engine hasn't got there yet.
+		s.Frame = p.startFrame
 		if p.curFrames > 0 {
 			elapsed, total = float64(s.Frame), float64(p.curFrames)
 		}
@@ -694,7 +706,7 @@ func (p *Player) Restore(s Snapshot) {
 	p.version++
 	t := p.queue[p.order[p.pos]]
 	// Kept even if the track won't open, so the next save doesn't lose the position.
-	p.cued, p.cuedFrame, p.playedOut = true, max(s.Frame, 0), false
+	p.cued, p.startFrame, p.playedOut = true, max(s.Frame, 0), false
 	src, err := p.openTrack(t, p.levelling, p.albumModeLocked())
 	if err != nil {
 		p.log.Warn("can't resume track", "path", t.Path, "err", err)

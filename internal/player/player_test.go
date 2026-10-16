@@ -826,3 +826,86 @@ func TestSwitchingLevellingModeReprimes(t *testing.T) {
 	p.Enqueue(queue("x")) // the queue is no longer one album
 	eventually(t, "2 to be opened again", func() bool { return opens(f, "2") == 2 })
 }
+
+func TestPlayFromShowsItsStartBeforeTheEngine(t *testing.T) {
+	f := &files{length: map[string]int64{"a": long, "b": long}}
+	out := gated{entered: make(chan struct{}, 1), gate: make(chan struct{})}
+	p := New(out, f.open, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { p.Close() })
+	t.Cleanup(func() { close(out.gate) })
+
+	p.Play(queue("a"), 0)
+	<-out.entered // the engine is stuck mid-write on a
+	p.PlayFrom(queue("b"), 0, 96000)
+	if s := p.State(); s.Track.Path != "b" || s.Elapsed != 2*time.Second {
+		t.Fatalf("state right after PlayFrom = %+v, want b at 2s", s)
+	}
+	if snap, _ := p.Snapshot(); snap.Frame != 96000 {
+		t.Fatalf("snapshot frame %d right after PlayFrom, want 96000", snap.Frame)
+	}
+}
+
+func TestSeek(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"a": 48000 * 60})
+	p.Seek(time.Second) // nothing queued: nothing happens
+	p.Play(queue("a"), 0)
+	p.Seek(30 * time.Second)
+	if s := p.State(); s.Elapsed < 30*time.Second {
+		t.Fatalf("elapsed %v right after seeking to 30s", s.Elapsed)
+	}
+	eventually(t, "the seek", func() bool {
+		e := p.State().Elapsed
+		return e >= 30*time.Second && e < 40*time.Second
+	})
+	p.Seek(2 * time.Second)
+	eventually(t, "the seek back", func() bool { return p.State().Elapsed < 10*time.Second })
+	p.Seek(time.Hour)
+	if s := p.State(); s.Elapsed > time.Minute {
+		t.Fatalf("seeking past the end shows %v of a 1 min track", s.Elapsed)
+	}
+}
+
+func TestRemovingTheNextTrackPrimesTheOneAfter(t *testing.T) {
+	p, f := newPlayer(t, map[string]int64{"a": long, "b": long, "c": long})
+	p.Play(queue("a", "b", "c"), 0)
+	eventually(t, "b to be primed", func() bool { return slices.Contains(f.log(), "b") })
+	p.Remove(1)
+	eventually(t, "c to be primed", func() bool { return slices.Contains(f.log(), "c") })
+	p.Next()
+	if s := p.State(); s.Track.Path != "c" || s.Count != 2 {
+		t.Fatalf("after removing b and skipping: %+v", s)
+	}
+}
+
+func TestMovingATrackUpToNextPrimesIt(t *testing.T) {
+	p, f := newPlayer(t, map[string]int64{"a": long, "b": long, "c": long, "d": long})
+	p.Play(queue("a", "b", "c", "d"), 0)
+	eventually(t, "b to be primed", func() bool { return slices.Contains(f.log(), "b") })
+	p.Move(3, 1)
+	eventually(t, "d to be primed", func() bool { return slices.Contains(f.log(), "d") })
+	p.Next()
+	if s := p.State(); s.Track.Path != "d" {
+		t.Fatalf("after moving d up and skipping, playing %q", s.Track.Path)
+	}
+}
+
+func TestRemoveWithShuffle(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"a": long, "b": long, "c": long, "d": long, "e": long})
+	p.SetShuffle(true)
+	p.Play(queue("a", "b", "c", "d", "e"), 2)
+	before, pos := p.Queue(nil)
+	gone := before[pos+2].Path
+	p.Remove(pos + 2)
+	after, pos2 := p.Queue(nil)
+	if len(after) != 4 || pos2 != pos || after[pos2].Path != before[pos].Path {
+		t.Fatalf("after removing: %d tracks, current %d (%q); before: current %d (%q)",
+			len(after), pos2, after[pos2].Path, pos, before[pos].Path)
+	}
+	seen := map[string]bool{}
+	for _, tr := range after {
+		if tr.Path == gone || seen[tr.Path] {
+			t.Fatalf("queue after removing %q: %v", gone, after)
+		}
+		seen[tr.Path] = true
+	}
+}
