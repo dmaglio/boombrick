@@ -1,6 +1,6 @@
 module github.com/ujjwal313/boombrick
 
-go 1.25
+go 1.25.0
 
 require (
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
@@ -10,10 +10,9 @@ require (
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/veandco/go-sdl2 v0.4.40
+	golang.org/x/crypto/x509roots/fallback v0.0.0-20260721213823-31914c699bfc
 	golang.org/x/image v0.36.0
+	golang.org/x/text v0.34.0
 )
 
-require (
-	golang.org/x/net v0.25.0 // indirect
-	golang.org/x/text v0.34.0 // indirect
-)
+require golang.org/x/net v0.25.0 // indirect
