@@ -3,6 +3,7 @@ module github.com/ujjwal313/boombrick
 go 1.25
 
 require (
+	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/go-text/render v0.2.1
 	github.com/go-text/typesetting v0.3.5
 	github.com/mattn/go-sqlite3 v1.14.52

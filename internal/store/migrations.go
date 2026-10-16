@@ -12,6 +12,61 @@ var migrations = []string{
 		key   TEXT PRIMARY KEY,
 		value TEXT NOT NULL
 	) WITHOUT ROWID`,
+	`CREATE TABLE tracks (
+		id     INTEGER PRIMARY KEY,
+		path   TEXT NOT NULL UNIQUE,
+		size   INTEGER NOT NULL,
+		mtime  INTEGER NOT NULL,
+		artist TEXT NOT NULL,
+		album  TEXT NOT NULL,
+		title  TEXT NOT NULL,
+		number INTEGER NOT NULL,
+		added  INTEGER NOT NULL
+	);
+	CREATE INDEX tracks_album ON tracks (artist, album)`,
+	`ALTER TABLE tracks ADD COLUMN album_artist TEXT NOT NULL DEFAULT '';
+	ALTER TABLE tracks ADD COLUMN disc INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE tracks ADD COLUMN year INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE tracks ADD COLUMN gain REAL;
+	ALTER TABLE tracks ADD COLUMN peak REAL;
+	UPDATE tracks SET mtime = 0;
+	CREATE TABLE queue (
+		pos          INTEGER PRIMARY KEY,
+		path         TEXT NOT NULL,
+		title        TEXT NOT NULL,
+		artist       TEXT NOT NULL,
+		album_artist TEXT NOT NULL,
+		album        TEXT NOT NULL,
+		gain         REAL NOT NULL,
+		peak         REAL NOT NULL,
+		has_gain     INTEGER NOT NULL
+	);
+	CREATE TABLE playback_state (
+		id         INTEGER PRIMARY KEY CHECK (id = 1),
+		pos        INTEGER NOT NULL,
+		frame      INTEGER NOT NULL,
+		shuffle    INTEGER NOT NULL,
+		repeat     INTEGER NOT NULL,
+		play_order TEXT NOT NULL
+	);
+	CREATE TABLE progress (
+		artist   TEXT NOT NULL,
+		album    TEXT NOT NULL,
+		path     TEXT NOT NULL,
+		frame    INTEGER NOT NULL,
+		fraction REAL NOT NULL,
+		updated  INTEGER NOT NULL,
+		PRIMARY KEY (artist, album)
+	)`,
+	`ALTER TABLE tracks ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE tracks ADD COLUMN album_gain REAL;
+	ALTER TABLE tracks ADD COLUMN album_peak REAL;
+	UPDATE tracks SET mtime = 0;
+	ALTER TABLE queue ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE queue ADD COLUMN album_gain REAL NOT NULL DEFAULT 0;
+	ALTER TABLE queue ADD COLUMN album_peak REAL NOT NULL DEFAULT 0;
+	ALTER TABLE queue ADD COLUMN has_album_gain INTEGER NOT NULL DEFAULT 0;
+	UPDATE progress SET updated = updated * 1000`,
 }
 
 func migrate(db *sql.DB) error {
