@@ -85,4 +85,38 @@ tone 48000 -ac 2 -c:a libopus -b:a 96k "${meta[@]}" "$lib/tagged.opus"
 tone 44100 -ac 2 -c:a aac -b:a 128k "${meta[@]}" "$lib/tagged.m4a"
 ls -l "$lib"
 
+# Short tones carrying a 64 x 64 red picture, one per container.
+art="$(dirname "$out")/../../art/testdata"
+mkdir -p "$art"
+ffmpeg -loglevel error -y -f lavfi -i "color=c=red:s=64x64" -frames:v 1 "$art/cover.jpg"
+withart() {
+	ffmpeg -loglevel error -y -f lavfi -i "sine=frequency=440:sample_rate=44100:duration=1" -i "$art/cover.jpg" \
+		-map 0:a -map 1:v -c:v copy -disposition:v attached_pic "$@"
+}
+withart -c:a libmp3lame -b:a 128k -id3v2_version 3 "$art/art.mp3"
+withart -c:a flac "$art/art.flac"
+withart -c:a aac -b:a 128k "$art/art.m4a"
+# Ogg carries pictures as a base64 FLAC picture block in its comments.
+pic="$(python3 - "$art/cover.jpg" <<'PY'
+import base64, struct, sys
+d = open(sys.argv[1], "rb").read()
+mime = b"image/jpeg"
+block = struct.pack(">II", 3, len(mime)) + mime + struct.pack(">IIIIII", 0, 64, 64, 24, 0, len(d)) + d
+print(base64.b64encode(block).decode())
+PY
+)"
+ffmpeg -loglevel error -y -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=1" -c:a libopus -b:a 96k \
+	-metadata METADATA_BLOCK_PICTURE="$pic" "$art/art.opus"
+ls -l "$art"
+
+# Tones carrying two lines of LRC in their tags. ID3's USLT is built by the
+# test itself.
+words="$(dirname "$out")/../../lyrics/testdata"
+mkdir -p "$words"
+lrc=$'[00:00.20]First line\n[00:00.60]Second line'
+tone 44100 -ac 2 -c:a flac -metadata lyrics="$lrc" "$words/lyrics.flac"
+tone 48000 -ac 2 -c:a libopus -b:a 96k -metadata lyrics="$lrc" "$words/lyrics.opus"
+tone 44100 -ac 2 -c:a aac -b:a 128k -metadata lyrics="$lrc" "$words/lyrics.m4a"
+ls -l "$words"
+
 ls -l "$out"
