@@ -9,6 +9,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/media"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
 	"github.com/ujjwal313/boombrick/internal/player"
+	"github.com/ujjwal313/boombrick/internal/screens"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
 	"github.com/ujjwal313/boombrick/internal/ui/anim"
@@ -37,6 +38,15 @@ const (
 	repeatCtl
 	controlCount
 )
+
+// lyricsPill is the focus index of the Lyrics pill, under the controls.
+const lyricsPill = controlCount
+
+// The Lyrics pill (docs/ui.md, screen 02, "Bottom row"): 48 high with a
+// 1.5 px border, holding a Y glyph, the lyrics icon and "Lyrics".
+const lyricsH = 48
+
+var lyricsText = text.Style{Face: text.Lora, Size: 22}
 
 // controlOffset is each control's centre relative to the column's centre, in
 // design pixels. Fixed offsets keep prev and next clear of the 108 px
@@ -69,7 +79,8 @@ var (
 type NowPlaying struct {
 	p      Player
 	focus  int
-	values [controlCount]anim.Value // focus strength per control
+	values [controlCount + 1]anim.Value // focus strength per control
+	lyrics func()                       // opens the Lyrics screen; nil: no pill
 }
 
 // New creates the screen with focus on play/pause.
@@ -77,6 +88,16 @@ func New(p Player) *NowPlaying {
 	n := &NowPlaying{p: p, focus: playCtl}
 	n.values[playCtl].Set(1)
 	return n
+}
+
+// SetLyrics gives the screen its Lyrics pill and Y button, which call open.
+func (n *NowPlaying) SetLyrics(open func()) { n.lyrics = open }
+
+// moveTo moves focus to f.
+func (n *NowPlaying) moveTo(f int, now time.Time) {
+	n.values[n.focus].To(0, now, anim.Focus, anim.EaseOutCubic)
+	n.focus = f
+	n.values[f].To(1, now, anim.Focus, anim.EaseOutCubic)
 }
 
 // Handle moves focus along the controls, activates them with A and changes
@@ -87,6 +108,9 @@ func (n *NowPlaying) Handle(ev input.Event, now time.Time) bool {
 	}
 	switch ev.Button {
 	case input.Left, input.Right:
+		if n.focus == lyricsPill {
+			return false
+		}
 		f := n.focus - 1
 		if ev.Button == input.Right {
 			f = n.focus + 1
@@ -95,15 +119,31 @@ func (n *NowPlaying) Handle(ev input.Event, now time.Time) bool {
 		if f == n.focus {
 			return false
 		}
-		n.values[n.focus].To(0, now, anim.Focus, anim.EaseOutCubic)
-		n.focus = f
-		n.values[f].To(1, now, anim.Focus, anim.EaseOutCubic)
+		n.moveTo(f, now)
+		return true
+	case input.Down:
+		if n.lyrics == nil || n.focus == lyricsPill {
+			return false
+		}
+		n.moveTo(lyricsPill, now)
+		return true
+	case input.Up:
+		if n.focus != lyricsPill {
+			return false
+		}
+		n.moveTo(playCtl, now)
 		return true
 	case input.A:
 		if ev.Kind != input.Press {
 			return false
 		}
 		n.activate()
+		return true
+	case input.Y:
+		if ev.Kind != input.Press || n.lyrics == nil {
+			return false
+		}
+		n.lyrics()
 		return true
 	case input.L1:
 		n.p.Prev()
@@ -127,11 +167,17 @@ func (n *NowPlaying) activate() {
 		n.p.Next()
 	case repeatCtl:
 		n.p.CycleRepeat()
+	case lyricsPill:
+		n.lyrics()
 	}
 }
 
-// Animating reports whether focus is moving. The app redraws the progress
-// bar on its own 4-a-second tick while music plays.
+// Tick asks for frames 4 times a second while music plays, for the progress
+// bar (docs/ui.md, "Motion").
+func (n *NowPlaying) Tick() time.Duration { return 250 * time.Millisecond }
+
+// Animating reports whether focus is moving. The progress bar is redrawn on
+// Tick while music plays.
 func (n *NowPlaying) Animating(now time.Time) bool {
 	for i := range n.values {
 		if !n.values[i].Done(now) {
@@ -155,12 +201,15 @@ func (n *NowPlaying) Draw(u *ui.Context) {
 	shadow := art
 	shadow.Y += 24
 	u.Shape(raster.Shape{W: artSize, H: artSize, Radius: 16, Kind: raster.Shadow, GlowBlur: 60}, shadow, color.NRGBA{A: 128})
-	widgets.Art(u, widgets.SpecFor(s.Track.Album), artSize, 16, art)
+	widgets.Art(u, screens.TrackArt(s.Track), artSize, 16, art)
 
 	x := art.X + artSize + colGap
 	w := float32(theme.ScreenW) - side - x
 	titleH, artistH, albumH, timeH := u.LineHeight(titleStyle), u.LineHeight(artistStyle), u.LineHeight(albumStyle), u.LineHeight(timeStyle)
 	h := 32 + groupGap + titleH + artistH + albumH + groupGap + knob + 8 + timeH + groupGap + ctlRow
+	if n.lyrics != nil {
+		h += groupGap + lyricsH
+	}
 	y := top + (bottom-top-h)/2
 
 	bw := widgets.Badge(u, media.Local, x, y, false)
@@ -175,6 +224,9 @@ func (n *NowPlaying) Draw(u *ui.Context) {
 	drawProgress(u, s, x, y, w)
 	y += knob + 8 + timeH + groupGap
 	n.drawControls(u, s, x, y, w)
+	if n.lyrics != nil {
+		n.drawLyricsPill(u, x, y+ctlRow+groupGap)
+	}
 
 	widgets.HintBar(u, n.hints(s))
 }
@@ -264,10 +316,37 @@ func drawControl(u *ui.Context, s player.State, i int, cx, cy float32, box gfx.R
 	}
 }
 
+// drawLyricsPill draws the Lyrics pill at (x, y), focusable like a button.
+func (n *NowPlaying) drawLyricsPill(u *ui.Context, x, y float32) {
+	g := widgets.HintRound.Height
+	w := 12 + g + 10 + 24 + 8 + u.TextWidth("Lyrics", lyricsText) + 18
+	box := gfx.Rect{X: x, Y: y, W: w, H: lyricsH}
+	k := float32(n.values[lyricsPill].At(u.Now))
+	u.PushScale(x+w/2, y, 1+0.06*k)
+	defer u.Pop()
+	widgets.FocusGlow(u, box, lyricsH/2, k)
+	widgets.FocusRing(u, box, lyricsH/2, k, theme.Ground)
+	u.Shape(raster.Shape{W: int(w), H: lyricsH, Radius: lyricsH / 2, Kind: raster.Ring, RingOffset: -1.5, RingWidth: 1.5},
+		box, theme.PaperA(0.30))
+	cx := x + 12
+	cx += widgets.KeyGlyph(u, "Y", cx, y+(lyricsH-g)/2, widgets.HintRound, theme.PaperA(0.55)) + 10
+	u.Icon("lyrics", 24, 2, false, cx, y+(lyricsH-24)/2, theme.Paper)
+	u.Text("Lyrics", lyricsText, cx+24+8, u.CenterY(lyricsText, y, lyricsH), theme.Paper)
+}
+
 func (n *NowPlaying) hints(s player.State) []widgets.Hint {
-	label := [controlCount]string{"Shuffle", "Previous", "Pause", "Next", "Repeat"}[n.focus]
-	if n.focus == playCtl && !s.Playing {
-		label = "Play"
+	var label string
+	if n.focus == lyricsPill {
+		label = "Lyrics"
+	} else {
+		label = [controlCount]string{"Shuffle", "Previous", "Pause", "Next", "Repeat"}[n.focus]
+		if n.focus == playCtl && !s.Playing {
+			label = "Play"
+		}
 	}
-	return []widgets.Hint{{Key: "A", Label: label}, {Key: "B", Label: "Back"}, {Key: "L1/R1", Label: "Track"}}
+	hints := []widgets.Hint{{Key: "A", Label: label}, {Key: "B", Label: "Back"}}
+	if n.lyrics != nil {
+		hints = append(hints, widgets.Hint{Key: "Y", Label: "Lyrics"})
+	}
+	return append(hints, widgets.Hint{Key: "L1/R1", Label: "Track"})
 }

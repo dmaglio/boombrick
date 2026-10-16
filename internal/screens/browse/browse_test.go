@@ -300,3 +300,49 @@ func TestSongCounts(t *testing.T) {
 		t.Errorf("two albums: %q", got)
 	}
 }
+
+// A reload that inserts albums, artists and songs ahead of the focused ones
+// keeps focus on the same items.
+func TestLibraryKeepsFocusAcrossReloads(t *testing.T) {
+	l := New(&fakeNav{}, &fakePlayer{}, "/m", nil)
+	ix := sampleIndex()
+	l.SetIndex(ix)
+	render(t, l, t0) // lays out the album grid
+	for f := range filterCount {
+		l.filter = f
+		l.views[f].SetFocus(l.views[f].Count()-1, t0)
+	}
+	album, artist, song := ix.Albums[len(ix.Albums)-1], ix.Artists[len(ix.Artists)-1], ix.Songs[len(ix.Songs)-1]
+
+	more := []library.Album{{Artist: "Aaron", Title: "Aardvark", Tracks: []library.Track{
+		{Path: "/m/aa/1.flac", Title: "Aa", Artist: "Aaron", Album: "Aardvark"},
+	}}}
+	for _, a := range ix.Recent {
+		more = append(more, *a)
+	}
+	ix2 := library.NewIndex(more)
+	l.SetIndex(ix2)
+	if a := ix2.Albums[l.views[albumsFilter].Focus()]; a.Title != album.Title {
+		t.Errorf("album focus moved to %q, want %q", a.Title, album.Title)
+	}
+	if a := ix2.Artists[l.views[artistsFilter].Focus()]; a.Name != artist.Name {
+		t.Errorf("artist focus moved to %q, want %q", a.Name, artist.Name)
+	}
+	if s := ix2.Songs[l.views[songsFilter].Focus()]; s.Path != song.Path {
+		t.Errorf("song focus moved to %q, want %q", s.Path, song.Path)
+	}
+}
+
+func TestLibraryAlbumsWithArt(t *testing.T) {
+	l := New(&fakeNav{}, &fakePlayer{}, "/m", nil)
+	l.SetIndex(sampleIndex())
+	u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	uitest.WithCovers(u)
+	u.Accent = theme.Derive(fixture.PlayingHue, fixture.PlayingChroma)
+	u.Status = fixture.Status()
+	for _, at := range []time.Time{t0, t0.Add(anim.ArtFade)} {
+		u.BeginFrame(at)
+		l.Draw(u)
+	}
+	uitest.Golden(t, "library-albums-art", off.Image())
+}

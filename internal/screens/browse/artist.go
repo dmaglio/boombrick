@@ -81,7 +81,7 @@ func drawAlbums(u *ui.Context, g *views.Grid, albums []*library.Album, top float
 		a := albums[i]
 		widgets.CardGlow(u, x, y, gridArt, k)
 		u.PushClip(below(top))
-		widgets.Card(u, widgets.CardItem{Title: a.Title, Subtitle: sub(a), Art: widgets.SpecFor(a.Title)}, x, y, gridArt, k, true)
+		widgets.Card(u, widgets.CardItem{Title: a.Title, Subtitle: sub(a), Art: screens.AlbumArt(a)}, x, y, gridArt, k, true)
 		u.PopClip()
 	})
 	u.PopClip()

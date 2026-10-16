@@ -269,7 +269,7 @@ func (q *Queue) drawPanel(u *ui.Context, y float32) {
 	box := gfx.Rect{X: side, Y: y, W: w, H: panelH}
 	u.Shape(raster.Shape{W: int(w), H: panelH, Radius: 14, Kind: raster.Ring, RingOffset: -1.5, RingWidth: 1.5},
 		box, fadeTo(u.Accent.Color, 0.5))
-	widgets.Art(u, widgets.SpecFor(st.Track.Album), panelAr, 8, gfx.Rect{X: side + 12, Y: y + 12, W: panelAr, H: panelAr})
+	widgets.Art(u, screens.TrackArt(st.Track), panelAr, 8, gfx.Rect{X: side + 12, Y: y + 12, W: panelAr, H: panelAr})
 	x := float32(side + 12 + panelAr + 16)
 	clock := screens.Clock(st.Elapsed) + " / " + screens.Clock(st.Duration)
 	cw := u.TextWidth(clock, timeText)
@@ -292,7 +292,7 @@ func (q *Queue) drawList(u *ui.Context, now time.Time) {
 	u.PushClip(gfx.Rect{X: 0, Y: widgets.StatusHeight, W: theme.ScreenW, H: bottom - widgets.StatusHeight})
 	q.list.Draw(now, side, q.listTop, func(i int, x, y, k float32) {
 		t := up[i]
-		art := widgets.SpecFor(t.Album)
+		art := screens.TrackArt(t)
 		r := widgets.Row{Index: strconv.Itoa(i + 1), Grip: q.moving, Art: &art, Title: t.Title, Subtitle: t.Artist}
 		if t.Duration > 0 {
 			r.Duration = screens.Clock(t.Duration)

@@ -10,6 +10,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui/anim"
 	"github.com/ujjwal313/boombrick/internal/ui/uitest"
+	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
 func TestMain(m *testing.M) { uitest.Main(m) }
@@ -115,4 +116,73 @@ func TestHintFollowsFocusAndState(t *testing.T) {
 	if h := n.hints(f.st); h[0].Label != "Next" {
 		t.Fatalf("on next: A hint %q, want Next", h[0].Label)
 	}
+}
+
+func TestGoldenWithArt(t *testing.T) {
+	u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	uitest.WithCovers(u)
+	u.Accent = theme.Derive(fixture.PlayingHue, fixture.PlayingChroma)
+	u.Status = fixture.Status()
+	n := New(playing())
+	for _, at := range []time.Time{t0, t0.Add(anim.ArtFade)} {
+		u.BeginFrame(at)
+		n.Draw(u)
+	}
+	if u.Animating() {
+		t.Fatal("the cover is still fading in")
+	}
+	uitest.Golden(t, "nowplaying-art", off.Image())
+}
+
+func TestLyricsPill(t *testing.T) {
+	f := playing()
+	n := New(f)
+	opened := 0
+	n.SetLyrics(func() { opened++ })
+	if !n.Handle(press(input.Down), t0) || n.focus != lyricsPill {
+		t.Fatalf("Down focused %d, want the Lyrics pill", n.focus)
+	}
+	if n.Handle(press(input.Left), t0) || n.Handle(press(input.Down), t0) {
+		t.Fatal("focus moved off the pill sideways or down")
+	}
+	if h := n.hints(f.st); h[0].Label != "Lyrics" {
+		t.Fatalf("A hint on the pill: %q", h[0].Label)
+	}
+	n.Handle(press(input.A), t0)
+	n.Handle(press(input.Up), t0)
+	if n.focus != playCtl {
+		t.Fatalf("Up from the pill focused %d, want play/pause", n.focus)
+	}
+	n.Handle(press(input.Y), t0)
+	if opened != 2 {
+		t.Fatalf("A on the pill and Y opened Lyrics %d times, want 2", opened)
+	}
+}
+
+func TestNoLyricsPillWithoutLyrics(t *testing.T) {
+	n := New(playing())
+	if n.Handle(press(input.Down), t0) || n.Handle(press(input.Y), t0) {
+		t.Fatal("Down or Y did something with no Lyrics screen to open")
+	}
+}
+
+func TestHintsWithLyricsFit(t *testing.T) {
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	f := playing()
+	n := New(f)
+	n.SetLyrics(func() {})
+	if w := widgets.HintsWidth(u, n.hints(f.st)); w > widgets.MaxHintsWidth {
+		t.Fatalf("hints are %v wide, more than %v", w, widgets.MaxHintsWidth)
+	}
+}
+
+func TestGoldenWithLyricsPill(t *testing.T) {
+	u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	u.Accent = theme.Derive(fixture.PlayingHue, fixture.PlayingChroma)
+	u.Status = fixture.Status()
+	u.Now = t0
+	n := New(playing())
+	n.SetLyrics(func() {})
+	n.Draw(u)
+	uitest.Golden(t, "nowplaying-lyrics", off.Image())
 }

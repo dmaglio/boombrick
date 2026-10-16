@@ -21,6 +21,13 @@ type Screen interface {
 	Animating(now time.Time) bool
 }
 
+// Ticker is a screen that shows the playing track's time and wants a frame
+// that often while music plays. Screens without it get one a second. Tick
+// returns a positive duration; the app divides elapsed time by it.
+type Ticker interface {
+	Tick() time.Duration
+}
+
 // DrawReading draws the state Home and the Library show while the first scan
 // runs and nothing is indexed yet.
 func DrawReading(u *ui.Context, musicDir string) {

@@ -141,7 +141,7 @@ func ContinueRow(progress []resume.Progress, ix *library.Index, play func(a *lib
 			continue
 		}
 		frame := pr.Frame
-		it := fixture.Item{Title: a.Title, Subtitle: a.Artist, Art: widgets.SpecFor(a.Title), Source: media.Local,
+		it := fixture.Item{Title: a.Title, Subtitle: a.Artist, Art: screens.AlbumArt(a), Source: media.Local,
 			Progress: pr.Fraction, Play: func() { play(a, track, frame) }}
 		if queue != nil {
 			it.Queue = func() { queue(a) }
@@ -168,7 +168,7 @@ func AlbumRow(albums []*library.Album, play, queue func(*library.Album)) (fixtur
 	items := make([]fixture.Item, min(len(albums), maxRecent))
 	for i := range items {
 		a := albums[i]
-		items[i] = fixture.Item{Title: a.Title, Subtitle: a.Artist, Art: widgets.SpecFor(a.Title), Source: media.Local,
+		items[i] = fixture.Item{Title: a.Title, Subtitle: a.Artist, Art: screens.AlbumArt(a), Source: media.Local,
 			Play: func() { play(a) }}
 		if queue != nil {
 			items[i].Queue = func() { queue(a) }

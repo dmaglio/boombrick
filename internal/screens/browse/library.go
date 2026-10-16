@@ -1,6 +1,7 @@
 package browse
 
 import (
+	"slices"
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/library"
@@ -66,12 +67,39 @@ func New(nav screens.Nav, p Player, musicDir string, rescan func()) *Library {
 	return l
 }
 
-// SetIndex shows ix, keeping each filter's focus where it can.
+// SetIndex shows ix, keeping each filter's focus on the same album, artist or
+// song when it is still there.
 func (l *Library) SetIndex(ix *library.Index) {
+	old := l.ix
 	l.ix = ix
-	l.views[albumsFilter].SetCount(len(ix.Albums))
-	l.views[artistsFilter].SetCount(len(ix.Artists))
-	l.views[songsFilter].SetCount(len(ix.Songs))
+	if old == nil {
+		l.views[albumsFilter].SetCount(len(ix.Albums))
+		l.views[artistsFilter].SetCount(len(ix.Artists))
+		l.views[songsFilter].SetCount(len(ix.Songs))
+		return
+	}
+	g := &l.views[albumsFilter]
+	g.SetCountFocus(len(ix.Albums), refocus(old.Albums, ix.Albums, g.Focus(),
+		func(a *library.Album) [2]string { return [2]string{a.Artist, a.Title} }))
+	g = &l.views[artistsFilter]
+	g.SetCountFocus(len(ix.Artists), refocus(old.Artists, ix.Artists, g.Focus(),
+		func(a *library.Artist) string { return a.Name }))
+	g = &l.views[songsFilter]
+	g.SetCountFocus(len(ix.Songs), refocus(old.Songs, ix.Songs, g.Focus(),
+		func(s *library.Track) string { return s.Path }))
+}
+
+// refocus finds the item that was at f in old within now, by key; without it
+// focus keeps its position.
+func refocus[T any, K comparable](old, now []T, f int, key func(T) K) int {
+	if f < 0 || f >= len(old) {
+		return f
+	}
+	k := key(old[f])
+	if i := slices.IndexFunc(now, func(x T) bool { return key(x) == k }); i >= 0 {
+		return i
+	}
+	return f
 }
 
 // SetReading says the first scan is running and nothing is indexed yet;
@@ -217,11 +245,11 @@ func (l *Library) drawView(u *ui.Context) {
 		var r widgets.Row
 		if l.filter == artistsFilter {
 			ar := l.ix.Artists[i]
-			art := widgets.SpecFor(ar.Name)
+			art := screens.ArtistArt(ar)
 			r = widgets.Row{Art: &art, Round: true, Title: ar.Name, Subtitle: artistLine(len(ar.Albums), ar.Songs)}
 		} else {
 			s := l.ix.Songs[i]
-			art := widgets.SpecFor(s.Album)
+			art := screens.SongArt(s)
 			r = widgets.Row{Art: &art, Title: s.Title, Subtitle: s.Artist + " · " + s.Album, Playing: s.Path == playing}
 			if s.Duration > 0 {
 				r.Duration = screens.Clock(s.Duration)

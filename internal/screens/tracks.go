@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/library"
+	"github.com/ujjwal313/boombrick/internal/lyrics"
 	"github.com/ujjwal313/boombrick/internal/player"
 )
 
@@ -59,4 +60,19 @@ func Count(n int) string {
 		s = s[:i] + "," + s[i:]
 	}
 	return s
+}
+
+// LyricsTrack is what finding a queued track's lyrics needs.
+func LyricsTrack(t player.Track) lyrics.Track {
+	return lyrics.Track{Path: t.Path, Title: t.Title, Artist: t.Artist, Album: t.Album, Duration: t.Duration}
+}
+
+// PlayingLyricsTrack is LyricsTrack for the track st is on, with the length
+// the decoder found when the library has none.
+func PlayingLyricsTrack(st player.State) lyrics.Track {
+	t := LyricsTrack(st.Track)
+	if t.Duration <= 0 {
+		t.Duration = st.Duration
+	}
+	return t
 }

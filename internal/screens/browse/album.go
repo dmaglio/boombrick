@@ -158,7 +158,7 @@ func (pg *AlbumPage) Draw(u *ui.Context) {
 	a := pg.album
 	widgets.DrawBackground(u, widgets.TabGround)
 
-	widgets.Art(u, widgets.SpecFor(a.Title), albumArt, widgets.CardRadius, gfx.Rect{X: side, Y: albumTop, W: albumArt, H: albumArt})
+	widgets.Art(u, screens.AlbumArt(a), albumArt, widgets.CardRadius, gfx.Rect{X: side, Y: albumTop, W: albumArt, H: albumArt})
 	y := float32(albumTop + albumArt + pad)
 	u.Text(u.Fit(a.Title, text.Heading, albumArt), text.Heading, side, y, theme.Paper)
 	y += u.LineHeight(text.Heading)

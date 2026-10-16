@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/library"
+	"github.com/ujjwal313/boombrick/internal/lyrics"
+	"github.com/ujjwal313/boombrick/internal/player"
 )
 
 func TestFormatting(t *testing.T) {
@@ -34,5 +36,24 @@ func TestTrackOf(t *testing.T) {
 	lt.AlbumArtist = "Various Artists"
 	if TrackOf(&lt).AlbumArtist != "Various Artists" {
 		t.Fatal("an album artist tag wins")
+	}
+}
+
+func TestLyricsTrack(t *testing.T) {
+	got := LyricsTrack(player.Track{Path: "/m/1.flac", Title: "Rust", Artist: "Odalys", AlbumArtist: "Various Artists",
+		Album: "Copper Season", Duration: 222 * time.Second})
+	if got != (lyrics.Track{Path: "/m/1.flac", Title: "Rust", Artist: "Odalys", Album: "Copper Season", Duration: 222 * time.Second}) {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestPlayingLyricsTrack(t *testing.T) {
+	st := player.State{Queued: true, Duration: 223 * time.Second, Track: player.Track{Path: "/m/1.flac", Title: "Rust"}}
+	if got := PlayingLyricsTrack(st); got.Duration != 223*time.Second {
+		t.Fatalf("without a length from the library: %v, want the decoder's", got.Duration)
+	}
+	st.Track.Duration = 222 * time.Second
+	if got := PlayingLyricsTrack(st); got.Duration != 222*time.Second {
+		t.Fatalf("with one: %v, want the library's", got.Duration)
 	}
 }
