@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -409,5 +410,72 @@ func TestScanStoresLengths(t *testing.T) {
 	}
 	if a := albums[0]; a.Tracks[0].Duration != 90*time.Second || a.Duration != 180*time.Second {
 		t.Fatalf("track %v, album %v; want 1m30s and 3m0s", a.Tracks[0].Duration, a.Duration)
+	}
+}
+
+func TestScanWritesInBatches(t *testing.T) {
+	db := openDB(t)
+	root := t.TempDir()
+	for i := range 5 {
+		touch(t, root, fmt.Sprintf("A/B/%02d x.mp3", i+1), "x")
+	}
+	var seen []int
+	wrote := func(st Stats) {
+		var n int
+		if err := db.QueryRow(`SELECT count(*) FROM tracks`).Scan(&n); err != nil {
+			t.Error(err)
+		}
+		if n != st.Added {
+			t.Errorf("after a batch the table holds %d tracks, Stats says %d", n, st.Added)
+		}
+		seen = append(seen, st.Added)
+	}
+	st, err := scan(context.Background(), db, root, formats, 2, wrote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Added != 5 || !slices.Equal(seen, []int{2, 4}) {
+		t.Fatalf("added %d, batches reported %v; want 5 and [2 4]", st.Added, seen)
+	}
+}
+
+func TestCancelledScanKeepsWrittenBatchesAndRemovesNothing(t *testing.T) {
+	db := openDB(t)
+	root := t.TempDir()
+	old := touch(t, root, "Old/Gone/01 a.mp3", "x")
+	if _, err := Scan(context.Background(), db, root, formats); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(old)
+	for i := range 4 {
+		touch(t, root, fmt.Sprintf("New/Album/%02d x.mp3", i+1), "x")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err := scan(ctx, db, root, formats, 2, func(Stats) { cancel() })
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("scan cancelled after a batch = %v, want context.Canceled", err)
+	}
+	var paths []string
+	rows, _ := db.Query(`SELECT path FROM tracks ORDER BY path`)
+	for rows.Next() {
+		var p string
+		rows.Scan(&p)
+		paths = append(paths, filepath.ToSlash(strings.TrimPrefix(p, root)))
+	}
+	rows.Close()
+	if !slices.Equal(paths, []string{"/New/Album/01 x.mp3", "/New/Album/02 x.mp3", "/Old/Gone/01 a.mp3"}) {
+		t.Fatalf("tracks after a cancelled scan: %v", paths)
+	}
+}
+
+func TestAlbumDirSkipsDiscFolders(t *testing.T) {
+	for _, c := range []struct{ path, want string }{
+		{"/m/A/B/01.mp3", "/m/A/B"},
+		{"/m/A/B/CD2/01.mp3", "/m/A/B"},
+		{"/m/A/B/Disc 1/01.mp3", "/m/A/B"},
+	} {
+		if got := filepath.ToSlash(AlbumDir(filepath.FromSlash(c.path))); got != c.want {
+			t.Errorf("AlbumDir(%q) = %q, want %q", c.path, got, c.want)
+		}
 	}
 }

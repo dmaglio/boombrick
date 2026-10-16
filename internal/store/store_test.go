@@ -93,3 +93,35 @@ func TestMigrationThreeKeepsTracks(t *testing.T) {
 		}
 	}
 }
+
+func TestArtTable(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "boombrick.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.DB.Exec(`INSERT INTO art (key, file, source, track, track_mtime, dir_mtime, source_mtime, hue, chroma, colour, looked_up)
+		VALUES ('Odalys' || char(31) || 'Copper Season', 'abc', '/m/cover.jpg', '/m/01.mp3', 1, 2, 3, 35.5, 0.12, 1, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	var hue float64
+	var colour bool
+	if err := s.DB.QueryRow(`SELECT hue, colour FROM art`).Scan(&hue, &colour); err != nil || hue != 35.5 || !colour {
+		t.Fatalf("read back hue %v colour %v: %v", hue, colour, err)
+	}
+}
+
+func TestLyricsTable(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "boombrick.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.DB.Exec(`INSERT INTO lyrics (path, body, instrumental, fetched) VALUES ('/m/1.flac', '[00:01.00]Rust', 0, 5)`); err != nil {
+		t.Fatal(err)
+	}
+	var body string
+	if err := s.DB.QueryRow(`SELECT body FROM lyrics`).Scan(&body); err != nil || body != "[00:01.00]Rust" {
+		t.Fatalf("read back %q: %v", body, err)
+	}
+}

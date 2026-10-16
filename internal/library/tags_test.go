@@ -139,3 +139,18 @@ func TestYear(t *testing.T) {
 		}
 	}
 }
+
+func TestReadTagsSurvivesDamagedTags(t *testing.T) {
+	cases := map[string][]byte{
+		// An ID3 header and a frame claiming far more than the file holds.
+		"id3": append([]byte("ID3\x03\x00\x00\x00\x00\x01\x00TIT2\x00\x00\x10\x00\x00\x00"), 0, 'a'),
+		// An MP4 moov, udta, meta and ilst nested with sizes past the end.
+		"mp4": []byte("\x00\x00\x00\x18ftypM4A \x00\x00\x00\x00M4A \x00\x00\x7f\x00moov\x00\x00\x7f\x00udta\x00\x00\x7f\x00meta\x00\x00\x00\x00\x00\x00\x7f\x00ilst\x00\x00\x7f\x00\xa9nam\x00\x00\x7f\x00data"),
+	}
+	for name, data := range cases {
+		path := filepath.Join(t.TempDir(), "x.mp3")
+		os.WriteFile(path, data, 0o644)
+		ReadTags(path) // must not panic
+		t.Log(name, "ok")
+	}
+}

@@ -67,6 +67,25 @@ var migrations = []string{
 	ALTER TABLE queue ADD COLUMN album_peak REAL NOT NULL DEFAULT 0;
 	ALTER TABLE queue ADD COLUMN has_album_gain INTEGER NOT NULL DEFAULT 0;
 	UPDATE progress SET updated = updated * 1000`,
+	`CREATE TABLE art (
+		key          TEXT PRIMARY KEY,
+		file         TEXT NOT NULL,
+		source       TEXT NOT NULL,
+		track        TEXT NOT NULL,
+		track_mtime  INTEGER NOT NULL,
+		dir_mtime    INTEGER NOT NULL,
+		source_mtime INTEGER NOT NULL,
+		hue          REAL NOT NULL,
+		chroma       REAL NOT NULL,
+		colour       INTEGER NOT NULL,
+		looked_up    INTEGER NOT NULL
+	)`,
+	`CREATE TABLE lyrics (
+		path         TEXT PRIMARY KEY,
+		body         TEXT NOT NULL,
+		instrumental INTEGER NOT NULL,
+		fetched      INTEGER NOT NULL
+	)`,
 }
 
 func migrate(db *sql.DB) error {

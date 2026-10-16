@@ -51,14 +51,37 @@ type Formats struct {
 	Duration  func(path string) (time.Duration, error)
 }
 
+// batchSize is how many changed files a scan writes in one transaction. The
+// first scan of a big card then shows albums while it runs.
+const batchSize = 500
+
+const upsertTrack = `INSERT INTO tracks (path, size, mtime, artist, album_artist, album, title, disc, number, year, gain, peak, album_gain, album_peak, duration_ms, added)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT (path) DO UPDATE SET size = excluded.size, mtime = excluded.mtime, artist = excluded.artist,
+		album_artist = excluded.album_artist, album = excluded.album, title = excluded.title, disc = excluded.disc,
+		number = excluded.number, year = excluded.year, gain = excluded.gain, peak = excluded.peak,
+		album_gain = excluded.album_gain, album_peak = excluded.album_peak,
+		duration_ms = excluded.duration_ms`
+
 // Scan walks root and brings the tracks table in line with it: new and changed
 // files are indexed, rows for missing files removed. Only files f supports
 // are indexed; hidden files and folders are skipped. A root that can't
 // be read leaves the index untouched. Files are read without a transaction
-// open, since tags on a slow card take a while, and every change is then
-// written in one short one. Cancelling ctx stops the walk, writes nothing and
-// returns the context's error.
+// open, since tags on a slow card take a while, and changes are written in
+// short transactions of up to 500 files. Rows for missing files go only once
+// the whole walk has finished. Cancelling ctx stops the walk, keeps the
+// batches already written, removes nothing and returns the context's error.
 func Scan(ctx context.Context, db *sql.DB, root string, f Formats) (Stats, error) {
+	return scan(ctx, db, root, f, batchSize, nil)
+}
+
+// ScanWithProgress is Scan, calling wrote with the counts so far each time a
+// batch has been written before the end.
+func ScanWithProgress(ctx context.Context, db *sql.DB, root string, f Formats, wrote func(Stats)) (Stats, error) {
+	return scan(ctx, db, root, f, batchSize, wrote)
+}
+
+func scan(ctx context.Context, db *sql.DB, root string, f Formats, batch int, wrote func(Stats)) (Stats, error) {
 	// An unreadable root (card not mounted, folder missing) says nothing about
 	// what is indexed, so leave the table alone.
 	if _, err := os.ReadDir(root); err != nil {
@@ -83,11 +106,7 @@ func Scan(ctx context.Context, db *sql.DB, root string, f Formats) (Stats, error
 		return Stats{}, err
 	}
 
-	type change struct {
-		path        string
-		size, mtime int64
-		t           Track
-	}
+	now := time.Now().Unix()
 	var st Stats
 	var changes []change
 	seen := map[string]bool{}
@@ -129,50 +148,72 @@ func Scan(ctx context.Context, db *sql.DB, root string, f Formats) (Stats, error
 		} else {
 			st.Added++
 		}
+		if len(changes) >= batch {
+			if err := writeChanges(db, changes, nil, now); err != nil {
+				return err
+			}
+			changes = changes[:0]
+			if wrote != nil {
+				wrote(st)
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		return Stats{}, err
 	}
 
+	var gone []string
+	for path := range known {
+		if !seen[path] && !under(path, unreadable) {
+			gone = append(gone, path)
+		}
+	}
+	if err := writeChanges(db, changes, gone, now); err != nil {
+		return Stats{}, err
+	}
+	st.Removed = len(gone)
+	st.Total = len(seen)
+	return st, nil
+}
+
+// change is a file the scan found new or changed.
+type change struct {
+	path        string
+	size, mtime int64
+	t           Track
+}
+
+// writeChanges stores changes, stamped as added at now, and deletes the rows
+// for the paths in gone, in one transaction.
+func writeChanges(db *sql.DB, changes []change, gone []string, now int64) error {
+	if len(changes) == 0 && len(gone) == 0 {
+		return nil
+	}
 	tx, err := db.Begin()
 	if err != nil {
-		return Stats{}, err
+		return err
 	}
 	defer tx.Rollback()
-	upsert, err := tx.Prepare(`INSERT INTO tracks (path, size, mtime, artist, album_artist, album, title, disc, number, year, gain, peak, album_gain, album_peak, duration_ms, added)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (path) DO UPDATE SET size = excluded.size, mtime = excluded.mtime, artist = excluded.artist,
-			album_artist = excluded.album_artist, album = excluded.album, title = excluded.title, disc = excluded.disc,
-			number = excluded.number, year = excluded.year, gain = excluded.gain, peak = excluded.peak,
-			album_gain = excluded.album_gain, album_peak = excluded.album_peak,
-			duration_ms = excluded.duration_ms`)
+	upsert, err := tx.Prepare(upsertTrack)
 	if err != nil {
-		return Stats{}, err
+		return err
 	}
 	defer upsert.Close()
-	now := time.Now().Unix()
 	for _, c := range changes {
 		t := c.t
 		if _, err := upsert.Exec(c.path, c.size, c.mtime, t.Artist, t.AlbumArtist, t.Album, t.Title, t.Disc, t.Number,
 			t.Year, nullable(t.Gain, t.HasGain), nullable(t.Peak, t.HasGain), nullable(t.AlbumGain, t.HasAlbumGain),
 			nullable(t.AlbumPeak, t.HasAlbumGain), t.Duration.Milliseconds(), now); err != nil {
-			return Stats{}, err
+			return err
 		}
 	}
-	for path := range known {
-		if !seen[path] && !under(path, unreadable) {
-			if _, err := tx.Exec(`DELETE FROM tracks WHERE path = ?`, path); err != nil {
-				return Stats{}, err
-			}
-			st.Removed++
+	for _, path := range gone {
+		if _, err := tx.Exec(`DELETE FROM tracks WHERE path = ?`, path); err != nil {
+			return err
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return Stats{}, err
-	}
-	st.Total = len(seen)
-	return st, nil
+	return tx.Commit()
 }
 
 // describe is a file's metadata: its tags where it has them, its place in the
@@ -226,6 +267,13 @@ func under(path string, dirs []string) bool {
 // discFolder matches folder names like "CD1", "CD 2", "Disc 2" and "disk3".
 var discFolder = regexp.MustCompile(`(?i)^(?:cd|disc|disk)\s*(\d+)$`)
 
+// The names ParsePath gives a file with no folder to take them from. The art
+// cache doesn't search online for them.
+const (
+	UnknownArtist = "Unknown artist"
+	UnknownAlbum  = "Unknown album"
+)
+
 // ParsePath derives metadata from where a file sits: Artist/Album/NN Title.ext.
 // A missing level becomes "Unknown artist" or "Unknown album"; deeper trees use
 // the two folders closest to the file. A disc folder (CD1, Disc 2) between the
@@ -245,7 +293,7 @@ func ParsePath(root, path string) (artist, album, title string, disc, number int
 			dirs = dirs[:len(dirs)-1]
 		}
 	}
-	artist, album = "Unknown artist", "Unknown album"
+	artist, album = UnknownArtist, UnknownAlbum
 	switch {
 	case len(dirs) >= 2:
 		artist, album = dirs[len(dirs)-2], dirs[len(dirs)-1]
@@ -319,7 +367,7 @@ func Albums(db *sql.DB) ([]Album, error) {
 		}
 		k := key{artist: t.AlbumArtist, album: t.Album}
 		if t.AlbumArtist == "" {
-			k.dir = albumDir(t.Path)
+			k.dir = AlbumDir(t.Path)
 		}
 		i, ok := index[k]
 		if !ok {
@@ -379,9 +427,9 @@ func Albums(db *sql.DB) ([]Album, error) {
 	return merged, nil
 }
 
-// albumDir is the folder an album's files sit in, not counting a disc folder
+// AlbumDir is the folder an album's files sit in, not counting a disc folder
 // (CD1, Disc 2) inside it.
-func albumDir(path string) string {
+func AlbumDir(path string) string {
 	dir := filepath.Dir(path)
 	if discFolder.MatchString(filepath.Base(dir)) {
 		dir = filepath.Dir(dir)

@@ -1,6 +1,7 @@
 package library
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"strconv"
@@ -21,7 +22,13 @@ type Tags struct {
 
 // ReadTags reads ID3 (MP3), Vorbis comment (FLAC), OpusTags (Opus) and MP4
 // (M4A) metadata.
-func ReadTags(path string) (Tags, error) {
+func ReadTags(path string) (t Tags, err error) {
+	// The tag package can panic on a truncated or damaged tag.
+	defer func() {
+		if r := recover(); r != nil {
+			t, err = Tags{}, fmt.Errorf("read tags: %v", r)
+		}
+	}()
 	f, err := os.Open(path)
 	if err != nil {
 		return Tags{}, err
@@ -31,7 +38,7 @@ func ReadTags(path string) (Tags, error) {
 	if err != nil {
 		return Tags{}, err
 	}
-	t := Tags{
+	t = Tags{
 		Title:       strings.TrimSpace(m.Title()),
 		Artist:      strings.TrimSpace(m.Artist()),
 		AlbumArtist: strings.TrimSpace(m.AlbumArtist()),
