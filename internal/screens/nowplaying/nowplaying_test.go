@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/fixture"
+	"github.com/ujjwal313/boombrick/internal/media"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
 	"github.com/ujjwal313/boombrick/internal/player"
 	"github.com/ujjwal313/boombrick/internal/theme"
@@ -173,6 +174,97 @@ func TestHintsWithLyricsFit(t *testing.T) {
 	n.SetLyrics(func() {})
 	if w := widgets.HintsWidth(u, n.hints(f.st)); w > widgets.MaxHintsWidth {
 		t.Fatalf("hints are %v wide, more than %v", w, widgets.MaxHintsWidth)
+	}
+}
+
+func TestWaitingForADownload(t *testing.T) {
+	f := &fake{st: player.State{Queued: true, Waiting: true, Count: 3,
+		Track: player.Track{VideoID: "v1", Title: "Night Drive Theory", Artist: "Lumen Coast", Album: "Night Drive Theory",
+			Duration: 231 * time.Second}}}
+	n := New(f)
+	n.SetDownloads(func(id string) (media.DownloadState, float32) {
+		if id != "v1" {
+			t.Errorf("asked about %q", id)
+		}
+		return media.Downloading, 0.42
+	}, nil)
+	u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	u.Accent = theme.Derive(265, 0.12)
+	u.Status = fixture.Status()
+	u.Now = t0
+	n.Draw(u)
+	uitest.Golden(t, "nowplaying-waiting", off.Image())
+}
+
+func TestWaitingTexts(t *testing.T) {
+	n := New(&fake{})
+	s := player.State{Queued: true, Waiting: true, Track: player.Track{VideoID: "v1", Duration: 231 * time.Second}}
+	if f, left, right := n.progress(s); f != 0 || left != "Waiting to download" || right != "3:51" {
+		t.Fatalf("without downloads: %v, %q, %q", f, left, right)
+	}
+	st, note := media.Queued, ""
+	n.SetDownloads(func(string) (media.DownloadState, float32) { return st, 0.42 }, func() string { return note })
+	if f, left, _ := n.progress(s); f != 0 || left != "Waiting to download" {
+		t.Fatalf("queued: %v, %q", f, left)
+	}
+	// Queued, it says why the queue waits.
+	for _, note = range []string{"Downloads paused", "Waiting for Wi-Fi", "Card full", "Getting the downloader"} {
+		if _, left, _ := n.progress(s); left != note {
+			t.Fatalf("queued with %q: %q", note, left)
+		}
+	}
+	st = media.Failed
+	if f, left, _ := n.progress(s); f != 0 || left != "Couldn’t download" {
+		t.Fatalf("a failed download: %v, %q", f, left)
+	}
+	st = media.Downloading
+	if f, left, _ := n.progress(s); f != 0.42 || left != "Downloading 42 %" {
+		t.Fatalf("a download under way: %v, %q", f, left)
+	}
+	st = media.Saved // landed, and not given to the player yet
+	if f, left, _ := n.progress(s); f != 1 || left != "Downloading 100 %" {
+		t.Fatalf("a download just saved: %v, %q", f, left)
+	}
+	s.Track.Duration = 0
+	if _, _, right := n.progress(s); right != "" {
+		t.Fatalf("an unknown length shows %q", right)
+	}
+	if a := testing.AllocsPerRun(20, func() { downloadingText(0.42) }); a != 0 {
+		t.Fatalf("the progress text made %v allocations", a)
+	}
+}
+
+// The screen is redrawn for the download queue only while it shows a
+// download: playback waits on one, or the track is still to download.
+func TestShowsDownloadsOnlyForADownload(t *testing.T) {
+	f := playing()
+	n := New(f)
+	if n.ShowsDownloads() {
+		t.Fatal("a track on the card shows a download")
+	}
+	f.st.Track = player.Track{VideoID: "v1", Title: "Night Drive Theory"}
+	if !n.ShowsDownloads() {
+		t.Fatal("a track still to download doesn't")
+	}
+	f.st.Track.Path, f.st.Waiting = "/m/v1.opus", true
+	if !n.ShowsDownloads() {
+		t.Fatal("waiting on a download doesn't")
+	}
+}
+
+func TestBadgeSaysWhereTheTrackIsFrom(t *testing.T) {
+	cases := []struct {
+		t    player.Track
+		want media.Source
+	}{
+		{player.Track{VideoID: "v1"}, media.YouTube},
+		{player.Track{VideoID: "v1", Path: "/mnt/SDCARD/Music/Boombrick/Lumen Coast/x.opus"}, media.Downloaded},
+		{player.Track{Path: "/mnt/SDCARD/Music/Odalys/Copper Season/01 Rust.flac"}, media.Local},
+	}
+	for _, c := range cases {
+		if got := source(c.t); got != c.want {
+			t.Errorf("source(%+v) = %v, want %v", c.t, got, c.want)
+		}
 	}
 }
 

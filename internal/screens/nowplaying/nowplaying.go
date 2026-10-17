@@ -2,8 +2,10 @@
 package nowplaying
 
 import (
+	"cmp"
 	"fmt"
 	"image/color"
+	"strconv"
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/media"
@@ -77,10 +79,12 @@ var (
 
 // NowPlaying shows the current track and its transport controls.
 type NowPlaying struct {
-	p      Player
-	focus  int
-	values [controlCount + 1]anim.Value // focus strength per control
-	lyrics func()                       // opens the Lyrics screen; nil: no pill
+	p         Player
+	focus     int
+	values    [controlCount + 1]anim.Value                        // focus strength per control
+	lyrics    func()                                              // opens the Lyrics screen; nil: no pill
+	downloads func(videoID string) (media.DownloadState, float32) // how far a song waited on has got; nil: none
+	note      func() string                                       // why the queue waits, or ""; nil: none
 }
 
 // New creates the screen with focus on play/pause.
@@ -92,6 +96,78 @@ func New(p Player) *NowPlaying {
 
 // SetLyrics gives the screen its Lyrics pill and Y button, which call open.
 func (n *NowPlaying) SetLyrics(open func()) { n.lyrics = open }
+
+// SetDownloads lets the screen show how far a song it waits on has got, and
+// with note, which may be nil, why one queued isn't downloading.
+func (n *NowPlaying) SetDownloads(state func(videoID string) (media.DownloadState, float32), note func() string) {
+	n.downloads, n.note = state, note
+}
+
+// ShowsDownloads reports whether the screen shows a download: playback waits
+// on one, or the track is still to download.
+func (n *NowPlaying) ShowsDownloads() bool {
+	s := n.p.State()
+	return s.Waiting || s.Track.Pending()
+}
+
+// source is where the track comes from, for its badge.
+func source(t player.Track) media.Source {
+	switch {
+	case t.Pending():
+		return media.YouTube
+	case t.VideoID != "":
+		return media.Downloaded
+	}
+	return screens.SourceOf(t.Path)
+}
+
+// downloading are "Downloading 0 %" to "Downloading 100 %", made on first use
+// so that a waited-on download's progress doesn't build a string each frame.
+var downloading [101]string
+
+func downloadingText(p float32) string {
+	if downloading[0] == "" {
+		for i := range downloading {
+			downloading[i] = "Downloading " + strconv.Itoa(i) + " %"
+		}
+	}
+	return downloading[min(max(int(p*100+0.5), 0), 100)]
+}
+
+// progress is the bar's fill and the words under it: the elapsed and total
+// times, or while the track downloads, how far it has got and its length.
+func (n *NowPlaying) progress(s player.State) (float32, string, string) {
+	if !s.Waiting {
+		var f float32
+		if s.Duration > 0 {
+			f = min(max(float32(s.Elapsed)/float32(s.Duration), 0), 1)
+		}
+		return f, clock(s.Elapsed), clock(s.Duration)
+	}
+	st, p := media.Queued, float32(0)
+	if n.downloads != nil {
+		st, p = n.downloads(s.Track.VideoID)
+	}
+	f, left := float32(0), "Waiting to download"
+	switch st {
+	case media.Queued:
+		if n.note != nil {
+			left = cmp.Or(n.note(), left) // paused, offline, the card full or the downloader coming
+		}
+	case media.Downloading:
+		f = min(max(p, 0), 1)
+		left = downloadingText(f)
+	case media.Saved: // landed, and about to play
+		f, left = 1, downloadingText(1)
+	case media.Failed:
+		left = "Couldn’t download"
+	}
+	var length string // unknown: none
+	if s.Track.Duration > 0 {
+		length = clock(s.Track.Duration)
+	}
+	return f, left, length
+}
 
 // moveTo moves focus to f.
 func (n *NowPlaying) moveTo(f int, now time.Time) {
@@ -212,7 +288,7 @@ func (n *NowPlaying) Draw(u *ui.Context) {
 	}
 	y := top + (bottom-top-h)/2
 
-	bw := widgets.Badge(u, media.Local, x, y, false)
+	bw := widgets.Badge(u, source(s.Track), x, y, false)
 	u.Text(formatLine(s), formatStyle, x+bw+12, u.CenterY(formatStyle, y, 32), theme.Ink3)
 	y += 32 + groupGap
 	u.Text(u.Fit(s.Track.Title, titleStyle, w), titleStyle, x, y, theme.Paper)
@@ -221,7 +297,8 @@ func (n *NowPlaying) Draw(u *ui.Context) {
 	y += artistH
 	u.Text(u.Fit(s.Track.Album, albumStyle, w), albumStyle, x, y, theme.Ink2)
 	y += albumH + groupGap
-	drawProgress(u, s, x, y, w)
+	f, left, right := n.progress(s)
+	drawProgress(u, f, left, right, x, y, w)
 	y += knob + 8 + timeH + groupGap
 	n.drawControls(u, s, x, y, w)
 	if n.lyrics != nil {
@@ -238,13 +315,9 @@ func formatLine(s player.State) string {
 	return fmt.Sprintf("%s · %g kHz", s.Format, float64(s.Rate)/1000)
 }
 
-// drawProgress draws the 6 px track, its accent fill, the 18 px knob, and the
-// elapsed and total times below.
-func drawProgress(u *ui.Context, s player.State, x, y, w float32) {
-	var f float32
-	if s.Duration > 0 {
-		f = min(max(float32(s.Elapsed)/float32(s.Duration), 0), 1)
-	}
+// drawProgress draws the 6 px track, its accent fill to f, the 18 px knob,
+// and left and right below it.
+func drawProgress(u *ui.Context, f float32, left, right string, x, y, w float32) {
 	bar := gfx.Rect{X: x, Y: y + (knob-6)/2, W: w, H: 6}
 	shape := raster.Shape{W: int(w), H: 6, Radius: 3, Kind: raster.Fill}
 	u.Shape(shape, bar, theme.PaperA(0.18))
@@ -256,9 +329,8 @@ func drawProgress(u *ui.Context, s player.State, x, y, w float32) {
 	u.Shape(raster.Shape{W: knob, H: knob, Radius: knob / 2, Kind: raster.Fill},
 		gfx.Rect{X: x + w*f - knob/2, Y: y, W: knob, H: knob}, theme.Paper)
 	ty := y + knob + 8
-	u.Text(clock(s.Elapsed), timeStyle, x, ty, theme.Ink2)
-	total := clock(s.Duration)
-	u.Text(total, timeStyle, x+w-u.TextWidth(total, timeStyle), ty, theme.Ink2)
+	u.Text(left, timeStyle, x, ty, theme.Ink2)
+	u.Text(right, timeStyle, x+w-u.TextWidth(right, timeStyle), ty, theme.Ink2)
 }
 
 func clock(d time.Duration) string {
