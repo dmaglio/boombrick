@@ -81,6 +81,17 @@ func ScanWithProgress(ctx context.Context, db *sql.DB, root string, f Formats, w
 	return scan(ctx, db, root, f, batchSize, wrote)
 }
 
+// Add indexes the file at path, under root, as the next scan would, for a
+// file Boombrick has just written there.
+func Add(db *sql.DB, root, path string, f Formats) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	c := change{path, info.Size(), info.ModTime().Unix(), describe(root, path, f)}
+	return writeChanges(db, []change{c}, nil, time.Now().Unix())
+}
+
 func scan(ctx context.Context, db *sql.DB, root string, f Formats, batch int, wrote func(Stats)) (Stats, error) {
 	// An unreadable root (card not mounted, folder missing) says nothing about
 	// what is indexed, so leave the table alone.

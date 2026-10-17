@@ -61,6 +61,26 @@ func ReadTags(path string) (t Tags, err error) {
 	return t, nil
 }
 
+// ReadTag reads the one tag named key, ignoring case, from the file at path,
+// as Boombrick's BOOMBRICK_YOUTUBE_ID. It is "" when the file has none.
+func ReadTag(path, key string) (v string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			v, err = "", fmt.Errorf("read tags: %v", r)
+		}
+	}()
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	m, err := tag.ReadFrom(f)
+	if err != nil {
+		return "", err
+	}
+	return rawText(m.Raw(), key), nil
+}
+
 // replayGains finds the track and album gains and peaks in raw tags:
 // REPLAYGAIN_{TRACK,ALBUM}_{GAIN,PEAK}, or Opus's R128_{TRACK,ALBUM}_GAIN.
 func replayGains(raw map[string]interface{}) (gain, peak float64, ok bool, albumGain, albumPeak float64, albumOK bool) {

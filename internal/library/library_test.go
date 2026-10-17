@@ -479,3 +479,27 @@ func TestAlbumDirSkipsDiscFolders(t *testing.T) {
 		}
 	}
 }
+
+func TestAddIndexesOneFile(t *testing.T) {
+	db, root := openDB(t), t.TempDir()
+	path := touch(t, root, "Boombrick/Lumen Coast/Night Drive Theory/01 Night Drive Theory.flac", "not really flac")
+	if err := Add(db, root, path, formats); err != nil {
+		t.Fatal(err)
+	}
+	albums, err := Albums(db)
+	if err != nil || len(albums) != 1 {
+		t.Fatalf("albums %+v, %v", albums, err)
+	}
+	if a := albums[0]; a.Artist != "Lumen Coast" || a.Title != "Night Drive Theory" || len(a.Tracks) != 1 ||
+		a.Tracks[0].Number != 1 || a.Tracks[0].Duration != 90*time.Second {
+		t.Fatalf("album %+v", a)
+	}
+	// A scan after it finds it as it left it.
+	st, err := Scan(context.Background(), db, root, formats)
+	if err != nil || st.Added != 0 || st.Updated != 0 || st.Total != 1 {
+		t.Fatalf("scan %+v, %v", st, err)
+	}
+	if err := Add(db, root, filepath.Join(root, "missing.flac"), formats); err == nil {
+		t.Fatal("a missing file was added")
+	}
+}

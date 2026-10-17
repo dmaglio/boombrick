@@ -378,7 +378,7 @@ func (c *Cache) decoding(f func()) bool {
 // from has changed, or else a fresh look in the track's tags and folder.
 func (c *Cache) resolve(cv media.Cover) {
 	key := keyOf(cv)
-	old, have, err := c.load(cv.Key())
+	old, have, err := c.load(key.db())
 	if err != nil {
 		c.opts.Log.Warn("read art record", "album", cv.Album, "err", err)
 	}
@@ -390,7 +390,7 @@ func (c *Cache) resolve(cv media.Cover) {
 		c.settle(key, old)
 		return
 	}
-	r := record{key: cv.Key(), track: track, lookedUp: old.lookedUp}
+	r := record{key: key.db(), track: track, lookedUp: old.lookedUp}
 	if have && strings.HasPrefix(old.source, onlineSource) && !c.exists(old.file) {
 		r.lookedUp = 0 // the art found online has gone; it can be found again
 	}
