@@ -52,9 +52,9 @@ ffmpeg -loglevel error -y -f lavfi -i anullsrc=r=44100:cl=mono -f lavfi -i anull
 tone 44100 -ac 2 -c:a aac -b:a 128k "$out/tone-44100.m4a"
 tone 22050 -ac 1 -c:a aac -b:a 64k "$out/mono-22050.m4a"
 # Noise fills the high band that SBR rebuilds, so a seek that decodes it
-# wrongly shows where a pure tone hides it.
-ffmpeg -loglevel error -y -f lavfi -i "anoisesrc=color=pink:sample_rate=22050:amplitude=0.3:duration=1" \
-  -ac 1 -c:a aac -b:a 64k "$out/noise-22050.m4a"
+# wrongly shows where a pure tone hides it. Noise substitution is off, as for
+# odd-44100.m4a below.
+noise 22050 1 -ac 1 -c:a aac -aac_pns 0 -b:a 64k "$out/noise-22050.m4a"
 # ffmpeg's config says "no SBR"; flag SBR at 44.1 kHz instead, so faad2
 # decodes these 22.05 kHz streams at double rate as it does HE-AAC.
 python3 - "$out/mono-22050.m4a" "$out/noise-22050.m4a" <<'PY'
@@ -118,5 +118,15 @@ tone 44100 -ac 2 -c:a flac -metadata lyrics="$lrc" "$words/lyrics.flac"
 tone 48000 -ac 2 -c:a libopus -b:a 96k -metadata lyrics="$lrc" "$words/lyrics.opus"
 tone 44100 -ac 2 -c:a aac -b:a 128k -metadata lyrics="$lrc" "$words/lyrics.m4a"
 ls -l "$words"
+
+# Opus in WebM, as YouTube serves it, for the remux tests: with ffmpeg's own
+# remux of it to Ogg and ffmpeg's decoding of it to compare against.
+mux="$(dirname "$out")/../../remux/testdata"
+mkdir -p "$mux"
+ffmpeg -loglevel error -y -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=3" -ac 2 -c:a libopus -b:a 128k \
+	"$mux/tone.webm"
+ffmpeg -loglevel error -y -i "$mux/tone.webm" -c:a copy "$mux/tone-ffmpeg.opus"
+ffmpeg -loglevel error -y -i "$mux/tone.webm" -f f32le "$mux/tone.f32"
+ls -l "$mux"
 
 ls -l "$out"
