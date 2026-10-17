@@ -1,8 +1,10 @@
 package netx
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -92,5 +94,31 @@ func TestGetStopsAtTheDeadline(t *testing.T) {
 	}
 	if time.Since(start) > time.Second {
 		t.Fatalf("Get took %v to give up", time.Since(start))
+	}
+}
+
+func TestPost(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" ||
+			r.Header.Get("User-Agent") != UserAgent() {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		w.Write(append([]byte("got "), b...))
+	}))
+	defer srv.Close()
+	ctx := context.Background()
+
+	body, err := Post(ctx, srv.Client(), srv.URL, "application/json", []byte(`{"a":1}`), 1<<10)
+	if err != nil || string(body) != `got {"a":1}` {
+		t.Fatalf("Post = %q, %v", body, err)
+	}
+	var se *StatusError
+	if _, err := Post(ctx, srv.Client(), srv.URL, "text/plain", nil, 1<<10); !errors.As(err, &se) || se.Code != 400 {
+		t.Fatalf("wrong type: %v", err)
+	}
+	if _, err := Post(ctx, srv.Client(), srv.URL, "application/json", bytes.Repeat([]byte("x"), 10), 8); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("too large: %v", err)
 	}
 }
