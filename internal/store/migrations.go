@@ -86,6 +86,27 @@ var migrations = []string{
 		instrumental INTEGER NOT NULL,
 		fetched      INTEGER NOT NULL
 	)`,
+	`ALTER TABLE queue ADD COLUMN video_id TEXT NOT NULL DEFAULT ''`,
+	`CREATE TABLE downloads (
+		video_id     TEXT PRIMARY KEY,
+		title        TEXT NOT NULL,
+		artist       TEXT NOT NULL,
+		album        TEXT NOT NULL,
+		album_id     TEXT NOT NULL,
+		album_artist TEXT NOT NULL,
+		number       INTEGER NOT NULL,
+		year         INTEGER NOT NULL,
+		duration_ms  INTEGER NOT NULL,
+		thumb        TEXT NOT NULL,
+		state        INTEGER NOT NULL,
+		failure      INTEGER NOT NULL,
+		message      TEXT NOT NULL,
+		path         TEXT NOT NULL,
+		bytes        INTEGER NOT NULL,
+		added        INTEGER NOT NULL,
+		priority     INTEGER NOT NULL,
+		finished     INTEGER NOT NULL
+	) WITHOUT ROWID`,
 }
 
 func migrate(db *sql.DB) error {

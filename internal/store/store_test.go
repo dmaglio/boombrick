@@ -125,3 +125,20 @@ func TestLyricsTable(t *testing.T) {
 		t.Fatalf("read back %q: %v", body, err)
 	}
 }
+
+func TestDownloadsTable(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "boombrick.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.DB.Exec(`INSERT INTO downloads (video_id, title, artist, album, album_id, album_artist, number, year,
+		duration_ms, thumb, state, failure, message, path, bytes, added, priority, finished)
+		VALUES ('v1', 'Night Drive Theory', 'Lumen Coast', '', '', '', 0, 0, 231000, '', 0, 0, '', '', 0, 1, 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO queue (pos, path, title, artist, album_artist, album, gain, peak, has_gain, video_id)
+		VALUES (0, '', 'Night Drive Theory', 'Lumen Coast', '', '', 0, 0, 0, 'v1')`); err != nil {
+		t.Fatal(err)
+	}
+}
