@@ -63,7 +63,8 @@ func save(db *sql.DB, s player.Snapshot, queue bool) error {
 		s.Pos, s.Frame, s.Shuffle, int(s.Repeat), strings.Join(order, ",")); err != nil {
 		return err
 	}
-	if s.AlbumRun && s.Pos >= 0 && s.Pos < len(s.Order) && s.Order[s.Pos] >= 0 && s.Order[s.Pos] < len(s.Queue) {
+	if s.AlbumRun && s.Pos >= 0 && s.Pos < len(s.Order) && s.Order[s.Pos] >= 0 && s.Order[s.Pos] < len(s.Queue) &&
+		!s.Queue[s.Order[s.Pos]].Pending() { // a song still downloading has no file to carry on from
 		cur := s.Queue[s.Order[s.Pos]]
 		artist := cur.AlbumArtist
 		if artist == "" {
@@ -84,15 +85,15 @@ func saveQueue(tx *sql.Tx, queue []player.Track) error {
 	if _, err := tx.Exec(`DELETE FROM queue`); err != nil {
 		return err
 	}
-	ins, err := tx.Prepare(`INSERT INTO queue (pos, path, title, artist, album_artist, album, gain, peak, has_gain, album_gain, album_peak, has_album_gain, duration_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	ins, err := tx.Prepare(`INSERT INTO queue (pos, path, title, artist, album_artist, album, gain, peak, has_gain, album_gain, album_peak, has_album_gain, duration_ms, video_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
 	defer ins.Close()
 	for i, t := range queue {
 		if _, err := ins.Exec(i, t.Path, t.Title, t.Artist, t.AlbumArtist, t.Album, t.Gain, t.Peak, t.HasGain,
-			t.AlbumGain, t.AlbumPeak, t.HasAlbumGain, t.Duration.Milliseconds()); err != nil {
+			t.AlbumGain, t.AlbumPeak, t.HasAlbumGain, t.Duration.Milliseconds(), t.VideoID); err != nil {
 			return err
 		}
 	}
@@ -124,7 +125,7 @@ func Load(db *sql.DB) (s player.Snapshot, ok bool, err error) {
 		s.Order = append(s.Order, v)
 	}
 	rows, err := db.Query(`SELECT path, title, artist, album_artist, album, gain, peak, has_gain,
-		album_gain, album_peak, has_album_gain, duration_ms FROM queue ORDER BY pos`)
+		album_gain, album_peak, has_album_gain, duration_ms, video_id FROM queue ORDER BY pos`)
 	if err != nil {
 		return player.Snapshot{}, false, err
 	}
@@ -133,7 +134,7 @@ func Load(db *sql.DB) (s player.Snapshot, ok bool, err error) {
 		var t player.Track
 		var ms int64
 		if err := rows.Scan(&t.Path, &t.Title, &t.Artist, &t.AlbumArtist, &t.Album, &t.Gain, &t.Peak, &t.HasGain,
-			&t.AlbumGain, &t.AlbumPeak, &t.HasAlbumGain, &ms); err != nil {
+			&t.AlbumGain, &t.AlbumPeak, &t.HasAlbumGain, &ms, &t.VideoID); err != nil {
 			return player.Snapshot{}, false, err
 		}
 		t.Duration = time.Duration(ms) * time.Millisecond

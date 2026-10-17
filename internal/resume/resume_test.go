@@ -206,3 +206,38 @@ func TestRecentOmitsAnAlbumPlayedOut(t *testing.T) {
 		t.Fatalf("Recent = %+v, %v; want none", got, err)
 	}
 }
+
+func TestPendingTracksAreKept(t *testing.T) {
+	db := openDB(t)
+	s := player.Snapshot{Queue: []player.Track{
+		{Title: "Night Drive Theory", Artist: "Lumen Coast", AlbumArtist: "Lumen Coast", Album: "Night Drive Theory", VideoID: "v1"},
+		{Path: "/m/a.flac", Title: "a"},
+	}, Order: []int{0, 1}}
+	if err := Save(db, s); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := Load(db)
+	if err != nil || !ok || !reflect.DeepEqual(got.Queue, s.Queue) {
+		t.Fatalf("loaded %+v, %v, %v", got.Queue, ok, err)
+	}
+}
+
+func TestAPendingTrackLeavesAlbumProgressAlone(t *testing.T) {
+	db := openDB(t)
+	album := func(t player.Track) player.Track {
+		t.Album, t.AlbumArtist = "Night Drive Theory", "Lumen Coast"
+		return t
+	}
+	first := player.Snapshot{Queue: []player.Track{album(player.Track{Path: "/m/a.flac"})}, Order: []int{0}, AlbumRun: true, Frame: 100, Fraction: 0.5}
+	if err := Save(db, first); err != nil {
+		t.Fatal(err)
+	}
+	second := player.Snapshot{Queue: []player.Track{album(player.Track{VideoID: "v1"})}, Order: []int{0}, AlbumRun: true, Fraction: 0.5}
+	if err := Save(db, second); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Recent(db, 10)
+	if err != nil || len(got) != 1 || got[0].Path != "/m/a.flac" || got[0].Frame != 100 {
+		t.Fatalf("progress %+v, %v", got, err)
+	}
+}

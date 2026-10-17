@@ -909,3 +909,264 @@ func TestRemoveWithShuffle(t *testing.T) {
 		seen[tr.Path] = true
 	}
 }
+
+func TestAPendingTrackWaitsForItsDownload(t *testing.T) {
+	p, f := newPlayer(t, map[string]int64{"/m/v1.opus": long, "/m/b.flac": long})
+	p.Play([]Track{{VideoID: "v1", Title: "Night Drive Theory"}, {Path: "/m/b.flac", Title: "b"}}, 0)
+	st := p.State()
+	if !st.Waiting || st.Playing || !st.Queued || st.Track.VideoID != "v1" || !st.Track.Pending() {
+		t.Fatalf("state %+v", st)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if len(f.log()) != 0 {
+		t.Fatalf("opened %q while waiting", f.log())
+	}
+	p.Resolve("v1", "/m/v1.opus")
+	eventually(t, "it plays", func() bool {
+		s := p.State()
+		return s.Playing && !s.Waiting && s.Track.Path == "/m/v1.opus"
+	})
+	eventually(t, "the next primed", func() bool { return slices.Contains(f.log(), "/m/b.flac") })
+}
+
+func TestAPendingNextIsPrimedWhenItLands(t *testing.T) {
+	p, f := newPlayer(t, map[string]int64{"/m/a.flac": long, "/m/v2.opus": long})
+	p.Play([]Track{{Path: "/m/a.flac"}, {VideoID: "v2"}}, 0)
+	time.Sleep(20 * time.Millisecond)
+	if got := f.log(); !slices.Equal(got, []string{"/m/a.flac"}) {
+		t.Fatalf("opened %q", got)
+	}
+	p.Resolve("v2", "/m/v2.opus")
+	eventually(t, "v2 primed", func() bool { return slices.Contains(f.log(), "/m/v2.opus") })
+}
+
+func TestPlaybackReachesAPendingTrack(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"/m/a.flac": short, "/m/v2.opus": long})
+	p.Play([]Track{{Path: "/m/a.flac"}, {VideoID: "v2"}}, 0)
+	eventually(t, "waiting on v2", func() bool { s := p.State(); return s.Waiting && s.Index == 1 })
+	p.Resolve("v2", "/m/v2.opus")
+	eventually(t, "v2 plays", func() bool { s := p.State(); return s.Playing && s.Track.Path == "/m/v2.opus" })
+}
+
+func TestDroppingAFailedDownload(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"/m/b.flac": long})
+	p.Play([]Track{{VideoID: "v1"}, {Path: "/m/b.flac"}, {VideoID: "v1"}}, 0)
+	if n := p.Drop("v1"); n != 2 {
+		t.Fatalf("dropped %d", n)
+	}
+	eventually(t, "b plays", func() bool {
+		s := p.State()
+		return s.Playing && s.Track.Path == "/m/b.flac" && s.Count == 1
+	})
+	if n := p.Drop("v1"); n != 0 {
+		t.Fatalf("dropped %d more", n)
+	}
+	p.Play([]Track{{VideoID: "v9"}}, 0)
+	p.Drop("v9")
+	if s := p.State(); s.Queued || s.Waiting {
+		t.Fatalf("dropping the only track: %+v", s)
+	}
+}
+
+func TestARestoredPendingTrackIsCuedWhenItLands(t *testing.T) {
+	snap := Snapshot{Queue: []Track{{VideoID: "v1", Title: "Night Drive Theory"}}, Order: []int{0}, Frame: 4800}
+	p, _ := newPlayer(t, map[string]int64{"/m/v1.opus": long})
+	p.Restore(snap)
+	if s := p.State(); !s.Waiting || s.Playing {
+		t.Fatalf("restored %+v", s)
+	}
+	p.Resolve("v1", "/m/v1.opus")
+	if s := p.State(); s.Waiting || s.Playing || s.Track.Path != "/m/v1.opus" || s.Elapsed != 100*time.Millisecond {
+		t.Fatalf("landed %+v", s)
+	}
+	// Play while it waits: it plays once it lands.
+	q, _ := newPlayer(t, map[string]int64{"/m/v1.opus": long})
+	q.Restore(snap)
+	q.Toggle()
+	q.Resolve("v1", "/m/v1.opus")
+	eventually(t, "it plays", func() bool { return q.State().Playing })
+}
+
+func TestDroppingTheCurrentPendingTrackAfterThePlayerStoppedOnIt(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"/m/a.flac": short, "/m/n.flac": long})
+	p.Play([]Track{{Path: "/m/a.flac"}}, 0)
+	eventually(t, "played out", func() bool { return !p.State().Playing })
+	p.Enqueue([]Track{{VideoID: "v1"}})
+	if n := p.Drop("v1"); n != 1 {
+		t.Fatalf("dropped %d", n)
+	}
+	if s := p.State(); !s.Queued || s.Count != 1 || s.Waiting || s.Playing {
+		t.Fatalf("state %+v", s)
+	}
+	p.Enqueue([]Track{{Path: "/m/n.flac"}})
+	p.Toggle()
+	eventually(t, "n plays", func() bool { s := p.State(); return s.Playing && s.Track.Path == "/m/n.flac" })
+}
+
+func TestDroppingPendingTracksOneAfterAnother(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"/m/a.flac": long})
+	p.Play([]Track{{Path: "/m/a.flac"}, {VideoID: "v1"}, {VideoID: "v2"}}, 0)
+	p.Next()
+	if s := p.State(); !s.Waiting || s.Track.VideoID != "v1" {
+		t.Fatalf("state %+v", s)
+	}
+	p.Drop("v1")
+	if s := p.State(); !s.Waiting || s.Track.VideoID != "v2" {
+		t.Fatalf("after v1: %+v", s)
+	}
+	p.Drop("v2")
+	if s := p.State(); !s.Queued || s.Count != 1 || s.Waiting || s.Playing || s.Track.Path != "/m/a.flac" {
+		t.Fatalf("after v2: %+v", s)
+	}
+}
+
+func TestDroppingTheLastTrackLeavesTheQueuePlayedOut(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"/m/a.flac": short, "/m/n.flac": long})
+	p.Play([]Track{{Path: "/m/a.flac", Album: "X", AlbumArtist: "A"}, {VideoID: "v1", Album: "X", AlbumArtist: "A"}}, 0)
+	eventually(t, "waiting", func() bool { return p.State().Waiting })
+	p.Drop("v1")
+	snap, ok := p.Snapshot()
+	if !ok || snap.Fraction != 1 || snap.Frame != short {
+		t.Fatalf("snapshot %+v, %v", snap, ok)
+	}
+	p.Enqueue([]Track{{Path: "/m/n.flac"}})
+	p.Toggle()
+	eventually(t, "n plays", func() bool { s := p.State(); return s.Playing && s.Track.Path == "/m/n.flac" })
+}
+
+func TestDroppingTheLastTrackWithRepeatAllWraps(t *testing.T) {
+	p, f := newPlayer(t, map[string]int64{"/m/a.flac": short})
+	p.CycleRepeat()
+	p.Play([]Track{{Path: "/m/a.flac"}, {VideoID: "v1"}}, 0)
+	eventually(t, "waiting", func() bool { return p.State().Waiting })
+	p.Drop("v1")
+	eventually(t, "a again", func() bool { return opens(f, "/m/a.flac") >= 2 })
+}
+
+func TestDroppingBeforeTheCurrentTrack(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"/m/a.flac": long, "/m/b.flac": long})
+	p.Play([]Track{{Path: "/m/a.flac"}, {VideoID: "v1"}, {Path: "/m/b.flac"}}, 2)
+	if n := p.Drop("v1"); n != 1 {
+		t.Fatalf("dropped %d", n)
+	}
+	eventually(t, "b still plays", func() bool {
+		s := p.State()
+		return s.Playing && s.Track.Path == "/m/b.flac" && s.Index == 1 && s.Count == 2
+	})
+}
+
+func TestDroppingTheLastTrackWhilePlayingEarlierOne(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"/m/a.flac": long})
+	p.Play([]Track{{Path: "/m/a.flac"}, {VideoID: "v1"}}, 0)
+	p.Drop("v1")
+	if s := p.State(); !s.Playing || s.Count != 1 || s.Track.Path != "/m/a.flac" {
+		t.Fatalf("state %+v", s)
+	}
+}
+
+func TestAPendingTrackSnapshotKeepsItsPosition(t *testing.T) {
+	snap := Snapshot{Queue: []Track{{VideoID: "v1"}}, Order: []int{0}, Frame: 4800}
+	p, _ := newPlayer(t, nil)
+	p.Restore(snap)
+	p.Toggle()
+	if got, ok := p.Snapshot(); !ok || got.Frame != 4800 {
+		t.Fatalf("snapshot %+v, %v", got, ok)
+	}
+	q, _ := newPlayer(t, nil)
+	q.PlayFrom([]Track{{VideoID: "v1"}}, 0, 9600)
+	if got, ok := q.Snapshot(); !ok || got.Frame != 9600 {
+		t.Fatalf("snapshot %+v, %v", got, ok)
+	}
+}
+
+func TestResolvingAnotherVideoKeepsTheNextPrimed(t *testing.T) {
+	p, f := newPlayer(t, map[string]int64{"/m/a.flac": long, "/m/b.flac": long, "/m/v1.opus": long})
+	p.Play([]Track{{Path: "/m/a.flac"}, {Path: "/m/b.flac"}, {VideoID: "v1"}}, 0)
+	eventually(t, "b primed", func() bool { return opens(f, "/m/b.flac") == 1 })
+	p.Resolve("v1", "/m/v1.opus")
+	p.Resolve("v1", "")
+	time.Sleep(30 * time.Millisecond)
+	if n := opens(f, "/m/b.flac"); n != 1 {
+		t.Fatalf("b opened %d times", n)
+	}
+}
+
+func TestResolvingWithNoFileChangesNothing(t *testing.T) {
+	p, _ := newPlayer(t, nil)
+	p.Play([]Track{{VideoID: "v1"}}, 0)
+	p.Resolve("v1", "")
+	if s := p.State(); !s.Waiting || !s.Track.Pending() {
+		t.Fatalf("state %+v", s)
+	}
+}
+
+func TestMovingAroundAPendingTrack(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"/m/a.flac": long, "/m/b.flac": long, "/m/v1.opus": long})
+	p.Play([]Track{{Path: "/m/a.flac"}, {VideoID: "v1"}, {Path: "/m/b.flac"}}, 0)
+	p.Next()
+	if s := p.State(); !s.Waiting || s.Index != 1 {
+		t.Fatalf("next: %+v", s)
+	}
+	p.Next()
+	if s := p.State(); s.Waiting || s.Track.Path != "/m/b.flac" {
+		t.Fatalf("next again: %+v", s)
+	}
+	p.Prev()
+	if s := p.State(); !s.Waiting || s.Playing || s.Index != 1 {
+		t.Fatalf("prev: %+v", s)
+	}
+	p.Prev()
+	eventually(t, "a plays", func() bool { s := p.State(); return s.Playing && !s.Waiting && s.Track.Path == "/m/a.flac" })
+	p.Next()
+	p.SetShuffle(true)
+	if s := p.State(); !s.Waiting || s.Track.VideoID != "v1" {
+		t.Fatalf("shuffle: %+v", s)
+	}
+	p.Resolve("v1", "/m/v1.opus")
+	eventually(t, "v1 plays", func() bool { s := p.State(); return s.Playing && s.Track.Path == "/m/v1.opus" })
+}
+
+func TestDroppingARestoredWaitingTrackKeepsTheQueueCued(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"/m/a.flac": long})
+	p.Restore(Snapshot{Queue: []Track{{VideoID: "v1"}, {Path: "/m/a.flac"}}, Order: []int{0, 1}, Frame: 4800})
+	p.Drop("v1")
+	time.Sleep(20 * time.Millisecond)
+	if s := p.State(); s.Playing || s.Waiting || s.Track.Path != "/m/a.flac" || s.Elapsed != 0 {
+		t.Fatalf("after drop: %+v", s)
+	}
+	p.Toggle()
+	eventually(t, "a plays on request", func() bool { return p.State().Playing })
+
+	// The entry that follows is itself pending: still waiting, still cued.
+	q, _ := newPlayer(t, map[string]int64{"/m/v2.opus": long})
+	q.Restore(Snapshot{Queue: []Track{{VideoID: "v1"}, {VideoID: "v2"}}, Order: []int{0, 1}, Frame: 4800})
+	q.Drop("v1")
+	if s := q.State(); !s.Waiting || s.Playing || s.Track.VideoID != "v2" {
+		t.Fatalf("pending follower: %+v", s)
+	}
+	q.Resolve("v2", "/m/v2.opus")
+	if s := q.State(); s.Playing || s.Waiting || s.Track.Path != "/m/v2.opus" || s.Elapsed != 0 {
+		t.Fatalf("landed: %+v", s)
+	}
+
+	// With repeat all, the wrap is cued too.
+	r, _ := newPlayer(t, map[string]int64{"/m/a.flac": long})
+	r.CycleRepeat()
+	r.Restore(Snapshot{Queue: []Track{{Path: "/m/a.flac"}, {VideoID: "v1"}}, Order: []int{0, 1}, Pos: 1, Repeat: RepeatAll})
+	r.Drop("v1")
+	time.Sleep(20 * time.Millisecond)
+	if s := r.State(); s.Playing || s.Waiting || s.Track.Path != "/m/a.flac" {
+		t.Fatalf("wrapped: %+v", s)
+	}
+}
+
+func TestAPlayedOutDropReportsAFrameOfTheRightTrack(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"/m/a.flac": long, "/m/b.flac": long})
+	p.Play([]Track{{Path: "/m/a.flac"}, {Path: "/m/b.flac"}, {VideoID: "v1"}}, 0)
+	p.PlayIndex(2)
+	p.Drop("v1")
+	snap, ok := p.Snapshot()
+	if !ok || snap.Pos != 1 || snap.Frame != 0 {
+		t.Fatalf("snapshot %+v, %v", snap, ok)
+	}
+}

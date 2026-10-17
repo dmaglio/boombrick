@@ -24,7 +24,13 @@ type Track struct {
 	AlbumGain, AlbumPeak              float64 // ReplayGain album gain (dB) and peak
 	HasAlbumGain                      bool
 	Duration                          time.Duration // 0 when unknown
+	// VideoID is a YouTube Music song's video ID. With no Path yet the song is
+	// still downloading: playback waits on it, and Resolve gives it its file.
+	VideoID string
 }
+
+// Pending reports whether t is a song still downloading.
+func (t Track) Pending() bool { return t.Path == "" && t.VideoID != "" }
 
 // Repeat is the repeat mode.
 type Repeat uint8
@@ -41,6 +47,7 @@ type State struct {
 	Track             Track // the current track; zero when nothing is queued
 	Index, Count      int   // position in play order, from 0, and queue length
 	Playing           bool
+	Waiting           bool // the current track is still downloading; it plays when it lands
 	Elapsed, Duration time.Duration
 	Rate              int    // the current file's sample rate, 0 if unknown
 	Format            string // from the file extension: "MP3", "FLAC"
@@ -76,6 +83,7 @@ type Player struct {
 	// curRate and curFrames describe cur until the engine reports it loaded.
 	curRate   int
 	curFrames int64
+	framesOf  string // the path curFrames is the length of
 	// next is the track primed to follow cur without a gap, at nextPos.
 	next              audio.Source
 	nextPos, nextRate int
@@ -87,6 +95,7 @@ type Player struct {
 	cued              bool   // cur was restored paused and hasn't been resumed
 	startFrame        int64  // where cur was started, cued or last sought to
 	playedOut         bool   // the queue ended and cur was dropped
+	waiting           bool   // the current track is pending: nothing is open until it lands
 	levelling, closed bool
 	wg                sync.WaitGroup // priming goroutines
 	shuffle           bool
@@ -223,12 +232,18 @@ func (p *Player) startLocked() { p.startAtLocked(0) }
 // won't open (those start from the top). It wraps at the end of the order only
 // with repeat all, and stops if nothing opens.
 func (p *Player) startAtLocked(frame int64) {
-	p.cued, p.playedOut = false, false
+	p.cued, p.playedOut, p.waiting = false, false, false
 	for range p.order {
 		t := p.queue[p.order[p.pos]]
+		if t.Pending() {
+			p.stopLocked()
+			p.waiting, p.startFrame = true, max(frame, 0)
+			return
+		}
 		src, err := p.openTrack(t, p.levelling, p.albumModeLocked())
 		if err == nil {
 			p.cur, p.curRate, p.curFrames, p.startFrame = src, src.SampleRate(), src.Frames(), max(frame, 0)
+			p.framesOf = t.Path
 			p.engine.PlayFrom(src, frame)
 			p.primeLocked()
 			return
@@ -248,6 +263,7 @@ func (p *Player) startAtLocked(frame int64) {
 
 func (p *Player) stopLocked() {
 	p.cur, p.next, p.cued = nil, nil, false
+	p.waiting = false
 	p.startFrame = 0
 	p.gen++
 	p.engine.Stop()
@@ -279,6 +295,9 @@ func (p *Player) primeLocked() {
 	}
 	idx, gen, levelling, album := p.order[pos], p.gen, p.levelling, p.albumModeLocked()
 	t := p.queue[idx]
+	if t.Pending() {
+		return // primed when it lands
+	}
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
@@ -323,6 +342,7 @@ func (p *Player) ended(end audio.End) {
 	if end.Next != nil && end.Next == p.next {
 		// The primed track took over without a gap.
 		p.cur, p.pos, p.curRate, p.curFrames, p.startFrame = p.next, p.nextPos, p.nextRate, p.nextFrames, 0
+		p.framesOf = p.queue[p.order[p.pos]].Path
 		p.primeLocked()
 		return
 	}
@@ -341,6 +361,8 @@ func (p *Player) Toggle() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	switch {
+	case p.waiting:
+		p.cued = false // it plays as soon as it lands
 	case len(p.queue) == 0:
 	case p.cur == nil:
 		p.startLocked()
@@ -518,6 +540,120 @@ func (p *Player) Move(from, to int) {
 	p.editedLocked()
 }
 
+// Resolve gives the queue's entries waiting for videoID's download their
+// file. Playback waiting on one starts it, or cues it when the queue was
+// restored and hasn't been played; one due next is primed.
+func (p *Player) Resolve(videoID, path string) {
+	if path == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	found := false
+	for i := range p.queue {
+		if t := &p.queue[i]; t.Pending() && t.VideoID == videoID {
+			t.Path, found = path, true
+		}
+	}
+	if !found {
+		return
+	}
+	p.version++
+	switch {
+	case p.waiting && p.queue[p.order[p.pos]].VideoID == videoID:
+		if p.cued {
+			p.cueLocked()
+		} else {
+			p.startAtLocked(p.startFrame)
+		}
+	case p.cur != nil:
+		p.editedLocked() // keeps the next track's prime if it is still right
+	}
+}
+
+// Drop takes the entries waiting for videoID's download out of the queue,
+// as when it failed, and reports how many there were. Playback waiting on
+// one moves on to what follows it.
+func (p *Player) Drop(videoID string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.queue) == 0 {
+		return 0
+	}
+	cur := p.queue[p.order[p.pos]]
+	waitedOn := p.waiting && cur.Pending() && cur.VideoID == videoID
+	n := 0
+	removedCur := false
+	cued := p.cued
+	// landLocked moves on to the entry at pos: it starts it, or cues it from the
+	// top when the queue was restored and hasn't been played.
+	landLocked := func() {
+		if !cued {
+			p.startLocked()
+			return
+		}
+		p.stopLocked()
+		p.cued, p.playedOut = true, false
+		if p.queue[p.order[p.pos]].Pending() {
+			p.waiting = true // cued when it lands
+			return
+		}
+		p.cueLocked()
+	}
+	for i := len(p.order) - 1; i >= 0; i-- {
+		q := p.order[i]
+		if t := p.queue[q]; !t.Pending() || t.VideoID != videoID {
+			continue
+		}
+		removedCur = removedCur || i == p.pos
+		if q < p.nextIdx {
+			p.nextIdx--
+		}
+		p.queue = slices.Delete(p.queue, q, q+1)
+		p.order = slices.Delete(p.order, i, i+1)
+		for j, v := range p.order {
+			if v > q {
+				p.order[j] = v - 1
+			}
+		}
+		if i < p.pos {
+			p.pos--
+		}
+		n++
+	}
+	if n == 0 {
+		return 0
+	}
+	switch {
+	case len(p.order) == 0:
+		p.pos, p.playedOut = 0, false
+		p.stopLocked()
+		p.version++
+	case removedCur && p.pos >= len(p.order):
+		// pos was the last entry. Wrap with repeat all if playback was waiting
+		// on it; otherwise leave the queue as one that has played out.
+		p.version++
+		if waitedOn && p.repeat == RepeatAll {
+			p.pos = 0
+			landLocked()
+			break
+		}
+		p.pos = len(p.order) - 1
+		p.stopLocked()
+		p.playedOut = true
+		if p.queue[p.order[p.pos]].Path != p.framesOf {
+			p.curFrames = 0 // the last file opened isn't this entry's
+		}
+	case waitedOn:
+		// pos is now what followed the dropped entry.
+		p.version++
+		landLocked()
+	default:
+		p.editedLocked()
+	}
+	return n
+}
+
 // editedLocked records a change to the queue. The track to follow the current
 // one is primed again unless it is the entry already primed, at the same
 // levels, in which case only its position is updated.
@@ -545,6 +681,7 @@ func (p *Player) State() State {
 	}
 	t := p.queue[p.order[p.pos]]
 	s.Queued, s.Track, s.Index = true, t, p.pos
+	s.Waiting = p.waiting
 	s.Format = strings.ToUpper(strings.TrimPrefix(filepath.Ext(t.Path), "."))
 	if p.cur == nil {
 		return s
@@ -623,10 +760,10 @@ func (p *Player) Snapshot() (Snapshot, bool) {
 			elapsed, total = float64(st.Frame), float64(st.Frames)
 		}
 	}
-	if (p.cur != nil || p.cued) && s.Frame < p.startFrame {
+	if (p.cur != nil || p.cued || p.waiting) && s.Frame < p.startFrame {
 		// Started, cued or sought, and the engine hasn't got there yet.
 		s.Frame = p.startFrame
-		if p.curFrames > 0 {
+		if p.curFrames > 0 && !p.waiting {
 			elapsed, total = float64(s.Frame), float64(p.curFrames)
 		}
 	}
@@ -707,12 +844,25 @@ func (p *Player) Restore(s Snapshot) {
 	t := p.queue[p.order[p.pos]]
 	// Kept even if the track won't open, so the next save doesn't lose the position.
 	p.cued, p.startFrame, p.playedOut = true, max(s.Frame, 0), false
+	if t.Pending() {
+		p.waiting = true // cued when it lands
+		return
+	}
+	p.cueLocked()
+}
+
+// cueLocked opens the current track paused at startFrame, as a restored
+// queue starts.
+func (p *Player) cueLocked() {
+	t := p.queue[p.order[p.pos]]
+	p.waiting = false
 	src, err := p.openTrack(t, p.levelling, p.albumModeLocked())
 	if err != nil {
 		p.log.Warn("can't resume track", "path", t.Path, "err", err)
 		return // the queue is back, stopped
 	}
 	p.cur, p.curRate, p.curFrames = src, src.SampleRate(), src.Frames()
-	p.engine.Cue(src, s.Frame)
+	p.framesOf = t.Path
+	p.engine.Cue(src, p.startFrame)
 	p.primeLocked()
 }
