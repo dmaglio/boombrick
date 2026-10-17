@@ -20,6 +20,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/art"
 	"github.com/ujjwal313/boombrick/internal/audio/alsa"
 	"github.com/ujjwal313/boombrick/internal/audio/decode"
+	"github.com/ujjwal313/boombrick/internal/download"
 	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/logx"
 	"github.com/ujjwal313/boombrick/internal/lyrics"
@@ -30,6 +31,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/settings"
 	"github.com/ujjwal313/boombrick/internal/store"
 	"github.com/ujjwal313/boombrick/internal/version"
+	"github.com/ujjwal313/boombrick/internal/ytmusic"
 )
 
 func init() {
@@ -84,6 +86,10 @@ func run(started time.Time) error {
 		return err
 	}
 
+	// The files the library reads, whether a scan finds them or a download
+	// files them.
+	formats := library.Formats{Supported: decode.Supported, Duration: decode.Duration}
+
 	// Album art and lyrics are found off the UI thread; what isn't with the
 	// music is looked up online while the device is. They close after the
 	// player, so the music stops at once on quitting, and before the database.
@@ -99,6 +105,22 @@ func run(started time.Time) error {
 	defer covers.Close()
 	words := lyrics.New(lyrics.Options{DB: db.DB, Fetch: lyrics.NewClient(web), Online: online, Log: log})
 	defer words.Close()
+	// YouTube Music is asked, its thumbnails fetched and its songs downloaded
+	// off the UI thread too. The searcher falls back to yt-dlp's search.
+	thumbs := art.NewWeb(web, online, log)
+	defer thumbs.Close()
+	ytc := ytmusic.NewClient(web)
+	qjs := quickJS()
+	dl, err := download.New(download.Options{DB: db.DB, Music: paths.Music, Data: paths.Data, QJS: qjs,
+		HTTP: web, Albums: ytc, Lyrics: lyrics.NewClient(web), Formats: formats, Online: online,
+		Quality: func() string { return prefs.String(settings.DownloadQuality) }, Log: log})
+	if err != nil {
+		return err
+	}
+	defer dl.Close()
+	log.Info("downloads", "qjs", qjs != "")
+	yt := ytmusic.NewSearcher(ytmusic.Options{Client: ytc, Online: online, Log: log, Fallback: dl.Search})
+	defer yt.Close()
 
 	p := player.New(alsa.New(), decode.Open, log)
 	defer p.Close()
@@ -132,10 +154,9 @@ func run(started time.Time) error {
 	defer func() { cancel(); <-scanDone; <-saved; <-restored }()
 
 	// Scans run one at a time on their own goroutine: at start-up, then each
-	// time the app asks. Asking while a scan runs queues one more.
-	formats := library.Formats{Supported: decode.Supported, Duration: decode.Duration}
-	// The app hears when a scan writes to the library, at most every 10 s while
-	// it runs, and when each scan ends.
+	// time the app asks. Asking while a scan runs queues one more. The app
+	// hears when a scan writes to the library, at most every 10 s while it
+	// runs, and when each scan ends.
 	scanReq, scanned := make(chan struct{}, 1), make(chan app.ScanUpdate, 1)
 	// tell hands u to the app, merged with one it hasn't taken yet. The
 	// scanner is the only sender, so there is room after the drain.
@@ -182,6 +203,8 @@ func run(started time.Time) error {
 				log.Info("scanned", "root", paths.Music, "tracks", st.Total, "added", st.Added,
 					"updated", st.Updated, "removed", st.Removed, "took", time.Since(start).Round(time.Millisecond))
 				changed = st.Added+st.Updated+st.Removed > 0
+				// Downloads whose files were deleted, as on a PC, can be had again.
+				dl.Prune()
 			}
 			tell(app.ScanUpdate{Changed: changed, Ended: true})
 		}
@@ -240,6 +263,9 @@ func run(started time.Time) error {
 		Status:     func() platform.Status { return platform.ReadStatus("/sys") },
 		Covers:     covers,
 		Lyrics:     words,
+		Thumbs:     thumbs,
+		YouTube:    yt,
+		Downloads:  dl,
 	})
 	if err != nil {
 		return err
@@ -263,4 +289,18 @@ func run(started time.Time) error {
 		os.Exit(1)
 	}()
 	return a.Run()
+}
+
+// quickJS is QuickJS, yt-dlp's JavaScript runtime, as the pak and the
+// desktop build put it: bin/qjs beside the program. "" when it isn't there.
+func quickJS() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	p := filepath.Join(filepath.Dir(exe), "bin", "qjs")
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return p
 }

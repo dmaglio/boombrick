@@ -68,6 +68,17 @@ func (s *shell) overlay() screens.Screen {
 	return s.overlays[s.open].screen
 }
 
+// showsDownloads reports whether what is shown draws the download queue: the
+// tab's top page, or the open overlay.
+func (s *shell) showsDownloads() bool {
+	return showsDownloads(s.top()) || s.open >= 0 && showsDownloads(s.overlay())
+}
+
+func showsDownloads(scr screens.Screen) bool {
+	v, ok := scr.(screens.DownloadView)
+	return ok && v.ShowsDownloads()
+}
+
 // active is the screen input goes to.
 func (s *shell) active() screens.Screen {
 	if s.open >= 0 {
@@ -124,9 +135,13 @@ func (s *shell) closeOverlay(now time.Time) {
 // handle routes a button event and reports whether the frame changed. An
 // overlay's button opens it from anywhere, or closes it when it is open; B
 // closes an open overlay, unless the overlay uses it, or pops a page; L1 and
-// R1 switch tabs when no overlay is open.
+// R1 switch tabs when no overlay is open. A tab screen may claim one of those
+// buttons for itself (screens.Claimer).
 func (s *shell) handle(e input.Event, now time.Time) bool {
 	if e.Kind == input.Press {
+		if c, ok := s.top().(screens.Claimer); ok && s.open < 0 && c.Claims(e.Button) {
+			return s.top().Handle(e, now)
+		}
 		for i, o := range s.overlays {
 			if e.Button != o.button {
 				continue

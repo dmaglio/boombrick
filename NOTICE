@@ -28,12 +28,17 @@ It includes or links the following third-party components:
   speexdsp resampler           BSD-3-Clause          https://speex.org (SpeexDSP-1.2.1)
   dhowden/tag                  BSD-2-Clause          https://github.com/dhowden/tag
   ALSA library (libasound)     LGPL-2.1              https://www.alsa-project.org
+  QuickJS-NG                   MIT                   https://github.com/quickjs-ng/quickjs (v0.17.0)
+  yt-dlp                       Unlicense             https://github.com/yt-dlp/yt-dlp
+                               Downloaded on first use; not shipped in the pak
 
 It uses these services at run time:
 
-  MusicBrainz                  album search          https://musicbrainz.org
-  Cover Art Archive            album covers          https://coverartarchive.org
-  LRCLIB                       lyrics                https://lrclib.net
+  MusicBrainz                  album search                   https://musicbrainz.org
+  Cover Art Archive            album covers                   https://coverartarchive.org
+  LRCLIB                       lyrics                         https://lrclib.net
+  YouTube Music                search, thumbnails, downloads  https://music.youtube.com
+  GitHub releases              yt-dlp and its SHA2-256SUMS    https://github.com/yt-dlp/yt-dlp/releases
 
 The font licences (OFL-*.txt) are in assets/fonts/ in the source tree and
 next to this file in the pak.

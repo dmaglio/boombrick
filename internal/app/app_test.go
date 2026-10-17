@@ -81,6 +81,26 @@ func TestTicksCountFromTheFrameStart(t *testing.T) {
 	}
 }
 
+// A toast raised after the frame began, while it was polled or drawn, hasn't
+// shown yet: the loop draws again at once rather than sleeping until the
+// toast fades out.
+func TestAToastRaisedDuringAFrameDrawsNext(t *testing.T) {
+	s := newShell(&page{name: "home"})
+	a := &App{shell: s, repeat: input.NewRepeater(), fade: newAccentFade(theme.Fallback()), ui: &ui.Context{}}
+	start := t0
+	if got := a.timeout(start, start.Add(5*time.Millisecond)); got == 0 {
+		t.Fatal("nothing to draw, yet no sleep")
+	}
+	s.showToast("Skipped a song that couldn’t download", start.Add(2*time.Millisecond))
+	if got := a.timeout(start, start.Add(5*time.Millisecond)); got != 0 {
+		t.Fatalf("sleep %v before the toast shows", got)
+	}
+	next := start.Add(16 * time.Millisecond)
+	if got := a.timeout(next, next); got != 0 {
+		t.Fatalf("sleep %v while the toast fades in", got)
+	}
+}
+
 // albumCalls records what starting an album asks of the player.
 type albumCalls struct {
 	shuffle      []bool

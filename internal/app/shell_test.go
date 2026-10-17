@@ -329,3 +329,69 @@ func TestTickFor(t *testing.T) {
 		t.Errorf("an overlay asking for 250ms ticks every %v", got)
 	}
 }
+
+// claimer takes Start while claim is set.
+type claimer struct {
+	page
+	claim bool
+}
+
+func (c *claimer) Claims(b input.Button) bool { return c.claim && b == input.Start }
+
+func TestATabScreenCanClaimAButton(t *testing.T) {
+	tab := &claimer{page: page{name: "youtube"}, claim: true}
+	np := &page{name: "now playing"}
+	s := newShell(tab)
+	s.overlays = []overlay{{button: input.Start, screen: np}}
+	s.handle(press(input.Start), t0)
+	if s.open >= 0 || !slices.Equal(tab.got, []input.Button{input.Start}) {
+		t.Fatal("Start didn't reach the screen claiming it")
+	}
+	tab.claim = false
+	s.handle(press(input.Start), t0)
+	if s.open != 0 {
+		t.Fatal("Start no longer claimed didn't open Now Playing")
+	}
+}
+
+// shower is a page that shows the download queue while on is set.
+type shower struct {
+	page
+	on bool
+}
+
+func (s *shower) ShowsDownloads() bool { return s.on }
+
+// A change to the download queue redraws only what shows it: the shown tab's
+// top page, or the open overlay.
+func TestOnlyWhatShowsDownloadsRedrawsForThem(t *testing.T) {
+	library, downloads := &page{name: "library"}, &shower{page: page{name: "downloads"}, on: true}
+	np := &shower{page: page{name: "now playing"}}
+	s := newShell(library, downloads)
+	s.overlays = []overlay{{button: input.Start, screen: np}}
+	if s.showsDownloads() {
+		t.Fatal("the Library redraws for downloads")
+	}
+	s.handle(press(input.R1), t0)
+	if !s.showsDownloads() {
+		t.Fatal("the Downloads tab doesn't")
+	}
+	s.push(&page{name: "a page"}, t0)
+	if s.showsDownloads() {
+		t.Fatal("a page over the Downloads tab redraws for downloads")
+	}
+	s.handle(press(input.B), t0)
+	s.handle(press(input.L1), t0)
+	s.handle(press(input.Start), t0)
+	if s.showsDownloads() {
+		t.Fatal("Now Playing redraws for downloads with nothing to show")
+	}
+	np.on = true
+	if !s.showsDownloads() {
+		t.Fatal("Now Playing waiting on a download doesn't")
+	}
+	s.handle(press(input.Start), t0)
+	if s.showsDownloads() {
+		t.Fatal("Now Playing closed still redraws the Library")
+	}
+}

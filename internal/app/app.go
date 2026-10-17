@@ -4,6 +4,7 @@ package app
 import (
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,10 +22,12 @@ import (
 	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/screens"
 	"github.com/ujjwal313/boombrick/internal/screens/browse"
+	downloadsscreen "github.com/ujjwal313/boombrick/internal/screens/downloads"
 	"github.com/ujjwal313/boombrick/internal/screens/home"
 	lyricsscreen "github.com/ujjwal313/boombrick/internal/screens/lyrics"
 	"github.com/ujjwal313/boombrick/internal/screens/nowplaying"
 	"github.com/ujjwal313/boombrick/internal/screens/queue"
+	"github.com/ujjwal313/boombrick/internal/screens/youtube"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
 	"github.com/ujjwal313/boombrick/internal/ui/gfx"
@@ -54,6 +57,16 @@ type Options struct {
 	// Covers supplies album art and the playing album's colour. Without it
 	// the screens show placeholders and the accent stays gold.
 	Covers Covers
+	// Thumbs fetches pictures named by URL, such as YouTube Music's. Without
+	// it they show as placeholders.
+	Thumbs Thumbs
+	// YouTube answers searches on the YouTube tab. Without it the tab is a
+	// placeholder.
+	YouTube YouTube
+	// Downloads is the download queue: the Downloads tab and the YouTube
+	// screens' actions. Without it the tab is a placeholder and the YouTube
+	// screens only browse.
+	Downloads Downloads
 	// Lyrics finds tracks' lyrics. Without it there is no Lyrics screen.
 	Lyrics Lyrics
 }
@@ -62,6 +75,13 @@ type Options struct {
 type Covers interface {
 	ui.Covers
 	Colour(c media.Cover) (hue, chroma float64, colour, ok bool)
+	Ready() <-chan struct{}
+}
+
+// YouTube is what the app needs from YouTube Music. *ytmusic.Searcher is
+// one.
+type YouTube interface {
+	youtube.Source
 	Ready() <-chan struct{}
 }
 
@@ -103,6 +123,10 @@ type App struct {
 	grounds    *grounds    // a new accent's backgrounds, rendered before its fade starts
 	arts       atomic.Bool // art finished since poll last looked
 	words      atomic.Bool // lyrics found since poll last looked
+	found      atomic.Bool // YouTube Music answered since poll last looked
+	downloaded atomic.Bool // the download queue changed since poll last looked
+	landed     atomic.Bool // and downloads landed, to show in the library
+	skipped    atomic.Bool // and a queued song was dropped, its download failed
 	quit       bool
 	drawn      bool
 	scanEnded  bool // a scan has ended, so an empty index is the library
@@ -113,9 +137,10 @@ type App struct {
 	scanChanged, scanDone, saves atomic.Bool
 
 	statuses chan platform.Status // the latest status reading, for poll
-	stop     chan struct{}        // closed by Close to end the status reader
-	reader   sync.WaitGroup
-	status   bool // a status reading has arrived
+	waits    chan player.Track    // the track playback has begun to wait on, for followDownloads
+	stop     chan struct{}        // closed by Close to end the status reader and followDownloads
+	reader   sync.WaitGroup       // which Close waits for
+	status   bool                 // a status reading has arrived
 
 	mu     sync.Mutex // guards closed against wake and Quit racing Close
 	closed bool
@@ -177,6 +202,7 @@ func New(opts Options) (*App, error) {
 		nowPlaying: nowplaying.New(opts.Player),
 		queue:      queue.New(opts.Player),
 		statuses:   make(chan platform.Status, 1),
+		waits:      make(chan player.Track, 1),
 		stop:       make(chan struct{}),
 		fade:       newAccentFade(theme.Fallback()),
 		dirty:      true,
@@ -215,30 +241,57 @@ func New(opts Options) (*App, error) {
 			}
 		}()
 	}
-	if opts.Covers != nil {
-		u.Covers = opts.Covers
+	if opts.Covers != nil || opts.Thumbs != nil {
+		c := allCovers{web: opts.Thumbs}
+		if opts.Covers != nil {
+			c.albums = opts.Covers
+			a.forward(opts.Covers.Ready(), &a.arts)
+		}
+		if opts.Thumbs != nil {
+			a.forward(opts.Thumbs.Ready(), &a.arts)
+		}
+		u.Covers = c
+	}
+	if opts.MusicDir != "" {
+		screens.SetDownloadsDir(filepath.Join(opts.MusicDir, "Boombrick"))
+	}
+	var ytTab, dlTab screens.Screen = &screens.Placeholder{Tab: 3, Title: "YouTube"}, &screens.Placeholder{Tab: 4, Title: "Downloads"}
+	var acts youtube.Downloads // stays nil without a queue
+	if opts.Downloads != nil {
+		acts = ytActions{dl: opts.Downloads, p: opts.Player, toast: a.Toast}
+		dlTab = downloadsscreen.New(a, opts.Downloads)
+		a.nowPlaying.SetDownloads(opts.Downloads.State, opts.Downloads.Note)
+		a.reader.Add(1)
 		go func() {
-			for range opts.Covers.Ready() {
-				a.arts.Store(true)
-				a.wake()
-			}
+			defer a.reader.Done()
+			a.followDownloads(opts.Downloads, opts.Player)
 		}()
+	}
+	if opts.YouTube != nil {
+		ytTab = youtube.NewSearch(a, opts.YouTube, acts)
+		a.forward(opts.YouTube.Ready(), &a.found)
 	}
 	a.shell = newShell(a.home,
 		a.library,
 		&screens.Placeholder{Tab: 2, Title: "Spotify"},
-		&screens.Placeholder{Tab: 3, Title: "YouTube"},
-		&screens.Placeholder{Tab: 4, Title: "Downloads"})
+		ytTab,
+		dlTab)
 	addOverlays(a.shell, a.nowPlaying, a.queue, func() bool { return a.last.Queued }, opts.Player, opts.Lyrics)
 	if opts.Lyrics != nil {
-		go func() {
-			for range opts.Lyrics.Ready() {
-				a.words.Store(true)
-				a.wake()
-			}
-		}()
+		a.forward(opts.Lyrics.Ready(), &a.words)
 	}
 	return a, nil
+}
+
+// forward sets flag and wakes the loop each time ready receives, for poll to
+// take.
+func (a *App) forward(ready <-chan struct{}, flag *atomic.Bool) {
+	go func() {
+		for range ready {
+			flag.Store(true)
+			a.wake()
+		}
+	}()
 }
 
 // addOverlays puts the screens that open over the tabs on s: Now Playing on
@@ -354,6 +407,9 @@ func (a *App) poll() {
 		if read, index := reloadAfter(ended, changed, saved, a.ix != nil); read {
 			a.loads.start(index, a.scanEnded)
 		}
+		if a.landed.Swap(false) {
+			a.loads.start(true, a.scanEnded) // show the downloaded songs in Home and the Library
+		}
 		if r, ok := a.loads.take(a.scanEnded); ok {
 			switch {
 			case r.err != nil:
@@ -381,6 +437,21 @@ func (a *App) poll() {
 	}
 	if a.words.Swap(false) {
 		a.dirty = true
+	}
+	if a.found.Swap(false) {
+		a.dirty = true
+	}
+	// The Downloads tab, the YouTube screens' circles and Now Playing's
+	// progress; a landing that changes the library comes through the loader,
+	// and a dropped song's toast draws itself.
+	if a.downloaded.Swap(false) && a.shell.showsDownloads() {
+		a.dirty = true
+	}
+	if a.skipped.Swap(false) {
+		a.Toast("Skipped a song that couldn’t download")
+	}
+	if st.Waiting && a.opts.Downloads != nil && (!l.Waiting || st.Track.VideoID != l.Track.VideoID) {
+		a.askFirst(st.Track)
 	}
 	if st.Queued && (st.Track.Path != l.Track.Path || !l.Queued) {
 		a.prefetch(st)
@@ -515,10 +586,12 @@ func (a *App) wait(now time.Time) {
 // timeout is how long the loop may sleep, at now, after the frame begun at
 // start: until the clock's next minute, or sooner the next key repeat, toast
 // or, while music plays, the open screen's next tick. The tick counts from the
-// frame's start, so the time the frame took to draw doesn't lengthen it.
+// frame's start, so the time the frame took to draw doesn't lengthen it. A
+// toast raised after the frame began, while it was polled or drawn, hasn't
+// shown yet, so the next frame comes at once.
 func (a *App) timeout(start, now time.Time) time.Duration {
 	timeout := start.Truncate(time.Minute).Add(time.Minute).Sub(now)
-	if a.animating(start) {
+	if a.animating(start) || a.shell.toastAt.After(start) {
 		timeout = 0
 	}
 	if a.last.Playing {
