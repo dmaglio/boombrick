@@ -18,13 +18,12 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
-// The album page: 200 px art in a column on the left with the album's details
-// and Play and Shuffle pills at its foot, the tracks on the right.
+// The album page's layout (screens/layout.go).
 const (
-	albumArt = 200
-	albumTop = contentTop + pad
-	listX    = side + albumArt + side
-	pillGap  = 12
+	albumArt = screens.PageArt
+	albumTop = screens.PageTop
+	listX    = screens.PageListX
+	pillGap  = screens.PillGap
 )
 
 const (
@@ -178,13 +177,13 @@ func (pg *AlbumPage) Draw(u *ui.Context) {
 	widgets.Pill(u, "shuffle", "", x, py, shuffle)
 
 	playing := pg.p.State().Track.Path
-	u.PushClip(glowArea)
+	u.PushClip(screens.GlowArea)
 	pg.list.Draw(now, listX, contentTop, func(i int, x, y, k float32) {
 		r := pg.rows[i]
 		r.Playing = pg.tracks[i].Path == playing
 		box := gfx.Rect{X: x, Y: y, W: pg.list.CellW, H: widgets.RowHeight}
 		widgets.RowGlow(u, box, widgets.RowRadius, k)
-		u.PushClip(below(contentTop))
+		u.PushClip(screens.Below(contentTop))
 		widgets.ListRow(u, r, box, k)
 		u.PopClip()
 	})

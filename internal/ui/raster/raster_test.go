@@ -1,6 +1,7 @@
 package raster
 
 import (
+	"bytes"
 	"image"
 	"image/color"
 	"testing"
@@ -141,5 +142,25 @@ func TestShadowFillsInside(t *testing.T) {
 	}
 	if near, far := alpha(m, o+50, o-2), alpha(m, o+50, o-20); !(near > far) {
 		t.Errorf("shadow should fade outside: %d, %d", near, far)
+	}
+}
+
+func TestSectorSweepsClockwiseFromTheTop(t *testing.T) {
+	m := Shape{W: 40, H: 40, Radius: 20, Kind: Sector, Sweep: 0.25}.Mask()
+	if a := alpha(m, 30, 10); a != 255 {
+		t.Errorf("top right = %d", a)
+	}
+	for _, p := range [][2]int{{10, 10}, {30, 30}, {10, 30}} {
+		if a := alpha(m, p[0], p[1]); a != 0 {
+			t.Errorf("%v = %d", p, a)
+		}
+	}
+	full := Shape{W: 40, H: 40, Radius: 20, Kind: Sector, Sweep: 1}.Mask()
+	disc := Shape{W: 40, H: 40, Radius: 20, Kind: Fill}.Mask()
+	if !bytes.Equal(full.Pix, disc.Pix) {
+		t.Error("a full sweep isn't the disc")
+	}
+	if a := alpha(Shape{W: 40, H: 40, Radius: 20, Kind: Sector}.Mask(), 30, 30); a != 0 {
+		t.Errorf("no sweep covers %d", a)
 	}
 }

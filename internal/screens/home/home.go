@@ -48,6 +48,7 @@ type Home struct {
 	reading  bool                   // the first scan is running with nothing indexed yet
 	musicDir string                 // shown on the empty state
 	rescan   func()
+	state    widgets.Wrapped // the empty or reading state's description, wrapped
 }
 
 // New creates the screen with focus on the first item. With no rows it shows
@@ -141,8 +142,9 @@ func ContinueRow(progress []resume.Progress, ix *library.Index, play func(a *lib
 			continue
 		}
 		frame := pr.Frame
-		it := fixture.Item{Title: a.Title, Subtitle: a.Artist, Art: screens.AlbumArt(a), Source: media.Local,
-			Progress: pr.Fraction, Play: func() { play(a, track, frame) }}
+		// The badge is the continued track's: an album may mix downloads with files of its own.
+		it := fixture.Item{Title: a.Title, Subtitle: a.Artist, Art: screens.AlbumArt(a),
+			Source: screens.SourceOf(a.Tracks[track].Path), Progress: pr.Fraction, Play: func() { play(a, track, frame) }}
 		if queue != nil {
 			it.Queue = func() { queue(a) }
 		}
@@ -168,7 +170,7 @@ func AlbumRow(albums []*library.Album, play, queue func(*library.Album)) (fixtur
 	items := make([]fixture.Item, min(len(albums), maxRecent))
 	for i := range items {
 		a := albums[i]
-		items[i] = fixture.Item{Title: a.Title, Subtitle: a.Artist, Art: screens.AlbumArt(a), Source: media.Local,
+		items[i] = fixture.Item{Title: a.Title, Subtitle: a.Artist, Art: screens.AlbumArt(a), Source: source(a),
 			Play: func() { play(a) }}
 		if queue != nil {
 			items[i].Queue = func() { queue(a) }
@@ -179,6 +181,15 @@ func AlbumRow(albums []*library.Album, play, queue func(*library.Album)) (fixtur
 		meta = "1 album"
 	}
 	return fixture.Row{Title: "Recently added", Meta: meta, Items: items}, true
+}
+
+// source is where album a's files came from, for its badge: Downloaded for
+// an album filed under the downloads folder.
+func source(a *library.Album) media.Source {
+	if len(a.Tracks) == 0 {
+		return media.Local
+	}
+	return screens.SourceOf(a.Tracks[0].Path)
 }
 
 func (h *Home) value(row, col int) *anim.Value {
@@ -364,10 +375,10 @@ func (h *Home) drawEmpty(u *ui.Context) {
 	switch {
 	case h.set:
 		widgets.DrawBackground(u, widgets.StateGround)
-		widgets.EmptyState(u, "Your library is empty",
+		widgets.EmptyState(u, &h.state, "Your library is empty",
 			"Copy music to the Music folder on the SD card, or find something on YouTube Music.", h.musicDir)
 	case h.reading:
-		screens.DrawReading(u, h.musicDir)
+		screens.DrawReading(u, &h.state, h.musicDir)
 	default:
 		widgets.DrawBackground(u, widgets.TabGround)
 	}

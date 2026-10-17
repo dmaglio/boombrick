@@ -6,6 +6,7 @@ import (
 
 	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/lyrics"
+	"github.com/ujjwal313/boombrick/internal/media"
 	"github.com/ujjwal313/boombrick/internal/player"
 )
 
@@ -55,5 +56,28 @@ func TestPlayingLyricsTrack(t *testing.T) {
 	st.Track.Duration = 222 * time.Second
 	if got := PlayingLyricsTrack(st); got.Duration != 222*time.Second {
 		t.Fatalf("with one: %v, want the library's", got.Duration)
+	}
+}
+
+func TestSourceOf(t *testing.T) {
+	defer SetDownloadsDir("")
+	cases := map[string]media.Source{
+		"/mnt/SDCARD/Music/Boombrick/Lumen Coast/Night Drive Theory/01 Night Drive Theory.opus": media.Downloaded,
+		"/mnt/SDCARD/Music/boombrick/Lumen Coast/Night Drive Theory/02 Sodium Lights.opus":      media.Downloaded,
+		"/mnt/SDCARD/Music/Boombrick2/x.flac":                                                   media.Local,
+		"/mnt/SDCARD/Music/Boombrick":                                                           media.Local,
+		"/mnt/SDCARD/Music/Odalys/Copper Season/01 Rust.flac":                                   media.Local,
+	}
+	for _, dir := range []string{"/mnt/SDCARD/Music/Boombrick", "/mnt/SDCARD/Music/Boombrick/"} {
+		SetDownloadsDir(dir)
+		for path, want := range cases {
+			if got := SourceOf(path); got != want {
+				t.Errorf("downloads in %q: SourceOf(%q) = %v", dir, path, got)
+			}
+		}
+	}
+	SetDownloadsDir("")
+	if got := SourceOf("/mnt/SDCARD/Music/Boombrick/x.opus"); got != media.Local {
+		t.Errorf("with no downloads folder: %v", got)
 	}
 }

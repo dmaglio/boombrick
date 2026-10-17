@@ -20,6 +20,9 @@ const (
 	// Shadow is a filled rectangle grown by GlowSpread and blurred by
 	// GlowBlur, for drop shadows under art and dialogs.
 	Shadow
+	// Sector is a pie slice of the circle inside the rectangle: Sweep of a
+	// turn, clockwise from 12 o'clock.
+	Sector
 )
 
 // Shape is a W x H rounded rectangle with corner radius Radius. Its mask
@@ -30,6 +33,7 @@ type Shape struct {
 	Kind                  Kind
 	RingOffset, RingWidth float64
 	GlowSpread, GlowBlur  float64
+	Sweep                 float64 // Sector: how much of a turn, 0 to 1
 }
 
 // Outset is how far the mask extends beyond the rectangle on each side.
@@ -62,6 +66,8 @@ func (s Shape) Mask() *image.NRGBA {
 			case Ring:
 				mid := s.RingOffset + s.RingWidth/2
 				a = clamp01(0.5 - (math.Abs(d-mid) - s.RingWidth/2))
+			case Sector:
+				a = clamp01(0.5-d) * s.sweep(float64(x)+0.5-cx, float64(y)+0.5-cy)
 			case Glow, Shadow:
 				if sigma <= 0 {
 					a = clamp01(0.5 - (d - s.GlowSpread))
@@ -79,6 +85,24 @@ func (s Shape) Mask() *image.NRGBA {
 		}
 	}
 	return img
+}
+
+// sweep is how much of a pixel at (dx, dy) from the centre lies within the
+// slice, its edges eased over a pixel.
+func (s Shape) sweep(dx, dy float64) float64 {
+	if s.Sweep >= 1 {
+		return 1
+	}
+	th := math.Atan2(dx, -dy) // from 12 o'clock, clockwise down the screen
+	if th < 0 {
+		th += 2 * math.Pi
+	}
+	end := math.Max(s.Sweep, 0) * 2 * math.Pi
+	e := -math.Min(th-end, 2*math.Pi-th) // radians inside the slice; negative outside
+	if th <= end {
+		e = math.Min(th, end-th)
+	}
+	return clamp01(0.5 + e*math.Hypot(dx, dy))
 }
 
 // sdRoundRect is the signed distance from (px, py) to a rounded rectangle

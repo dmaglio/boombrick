@@ -245,3 +245,31 @@ func TestBackdropFadesIn(t *testing.T) {
 		t.Fatal("an album without art has a backdrop")
 	}
 }
+
+// urlCovers hands out a picture for every cover and records what was asked.
+type urlCovers struct{ asked []media.Cover }
+
+func (c *urlCovers) Cover(cv media.Cover, px int) (*image.NRGBA, bool) {
+	c.asked = append(c.asked, cv)
+	return image.NewNRGBA(image.Rect(0, 0, px, px)), false
+}
+
+func (c *urlCovers) Backdrop(media.Cover) (*image.NRGBA, bool) { return nil, true }
+
+func TestCoversNamedByURL(t *testing.T) {
+	u, _ := newContext(t, 1.25)
+	c := &urlCovers{}
+	u.Covers = c
+	u.BeginFrame(time.Unix(0, 0))
+	a := media.Cover{URL: "https://example.com/a"}
+	if tex, _ := u.Cover(a, 58, 8); tex == nil {
+		t.Fatal("no texture for a cover named by URL")
+	}
+	// Another picture of the same album is another cover.
+	b := media.Cover{Artist: "Radiohead", Album: "OK Computer", URL: "https://example.com/b"}
+	u.Cover(b, 58, 8)
+	u.Cover(a, 58, 8) // kept
+	if len(c.asked) != 2 || c.asked[0].URL != a.URL || c.asked[1].URL != b.URL {
+		t.Fatalf("asked %+v", c.asked)
+	}
+}

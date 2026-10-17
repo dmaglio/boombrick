@@ -20,9 +20,10 @@ type Row struct {
 	Art      *ArtSpec // nil for none
 	Round    bool     // round art, for artists
 	Title    string
-	Subtitle string // "" centres the title
-	Duration string // right-aligned, or ""
-	Playing  bool   // the playing track: the title in the accent, with a note
+	Subtitle string  // "" centres the title
+	Duration string  // right-aligned, or ""
+	Playing  bool    // the playing track: the title in the accent, with a note
+	Trail    float32 // room kept at the right for what the caller draws there (see TrailBox)
 }
 
 // Row layout: padding 16, gaps 18, the index in 36, art 58, the duration in 60.
@@ -42,6 +43,9 @@ var rowNumbers = text.Style{Face: text.Lora, Size: 22, Tabular: true}
 func ListRow(u *ui.Context, r Row, box gfx.Rect, k float32) {
 	RowFocus(u, box, RowRadius, k)
 	x, right := box.X+rowPad, box.X+box.W-rowPad
+	if r.Trail > 0 {
+		right -= r.Trail + rowGap
+	}
 	switch {
 	case r.Grip:
 		u.Icon("grip", 24, 2, false, x+indexW-24, box.Y+(box.H-24)/2, theme.Ink3)
@@ -80,4 +84,9 @@ func ListRow(u *ui.Context, r Row, box gfx.Rect, k float32) {
 	if r.Subtitle != "" {
 		u.Text(u.Fit(r.Subtitle, text.Meta, right-x), text.Meta, x, ty+titleH, theme.Ink3)
 	}
+}
+
+// TrailBox is the room, w wide, that a row drawn into box keeps at its right.
+func TrailBox(box gfx.Rect, w float32) gfx.Rect {
+	return gfx.Rect{X: box.X + box.W - rowPad - w, Y: box.Y, W: w, H: box.H}
 }

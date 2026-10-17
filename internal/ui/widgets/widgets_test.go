@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -152,9 +154,36 @@ func TestListSheet(t *testing.T) {
 func TestEmptyState(t *testing.T) {
 	u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
 	DrawBackground(u, StateGround)
-	EmptyState(u, "Your library is empty",
+	EmptyState(u, nil, "Your library is empty",
 		"Copy music to the Music folder on the SD card, or find something on YouTube Music.", "/mnt/SDCARD/Music")
 	uitest.Golden(t, "empty-state", off.Image())
+}
+
+// Given a cache, a state screen drawn again allocates nothing of its own: no
+// more than drawing its mark and lines does on the test canvas, which
+// allocates for each.
+func TestEmptyStateWrapsOnce(t *testing.T) {
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	const title, body, detail = "Your library is empty",
+		"Copy music to the Music folder on the SD card, or find something on YouTube Music.", "/mnt/SDCARD/Music"
+	var c Wrapped
+	EmptyState(u, &c, title, body, detail)
+	cached := testing.AllocsPerRun(20, func() { EmptyState(u, &c, title, body, detail) })
+	lines := Wrap(u, body, stateBody, stateWidth)
+	drawing := testing.AllocsPerRun(20, func() {
+		LogoMark(u, 54, 0, 0, theme.Ink4)
+		u.Text(title, stateTitle, 0, 0, theme.Paper)
+		for _, l := range lines {
+			u.Text(l, stateBody, 0, 0, theme.Ink2)
+		}
+		u.Text(detail, stateDetail, 0, 0, theme.Ink3)
+	})
+	if cached > drawing {
+		t.Fatalf("a cached state allocates %v times a frame, drawing it %v", cached, drawing)
+	}
+	if every := testing.AllocsPerRun(20, func() { EmptyState(u, nil, title, body, detail) }); every <= drawing {
+		t.Fatalf("without a cache, %v allocations: the description isn't wrapped each time", every)
+	}
 }
 
 func TestWrap(t *testing.T) {
@@ -167,6 +196,33 @@ func TestWrap(t *testing.T) {
 		if strings.Contains(l, " ") && u.TextWidth(l, text.Body) > 120 {
 			t.Fatalf("line %q is wider than 120", l)
 		}
+	}
+}
+
+func TestWrappedWrapsOnce(t *testing.T) {
+	u, _ := uitest.NewContext(t, 64, 64)
+	const s = "one two three four five six seven"
+	var c Wrapped
+	first := c.Lines(u, s, text.Body, 120)
+	if !slices.Equal(first, Wrap(u, s, text.Body, 120)) {
+		t.Fatalf("Lines = %q", first)
+	}
+	if again := c.Lines(u, s, text.Body, 120); &again[0] != &first[0] {
+		t.Fatal("the same text was wrapped again")
+	}
+	if n := testing.AllocsPerRun(100, func() { c.Lines(u, s, text.Body, 120) }); n != 0 {
+		t.Fatalf("Lines allocates %v times for the text it holds", n)
+	}
+	if got := c.Lines(u, "one two", text.Body, 120); !slices.Equal(got, []string{"one two"}) {
+		t.Fatalf("new text: %q", got)
+	}
+	if got := c.Lines(u, s, text.Body, 1000); !slices.Equal(got, []string{s}) {
+		t.Fatalf("new width: %q", got)
+	}
+	wide := c.Lines(u, s, text.Body, 1000)
+	u.Scale = 2
+	if got := c.Lines(u, s, text.Body, 1000); &got[0] == &wide[0] {
+		t.Fatal("a new scale didn't wrap again")
 	}
 }
 
@@ -370,5 +426,100 @@ func TestBackgroundCrossFades(t *testing.T) {
 		if lo, hi := min(c[0], c[1]), max(c[0], c[1]); c[2]+1 < lo || c[2] > hi+1 {
 			t.Fatalf("halfway %v isn't between %v and %v", mid, a, b)
 		}
+	}
+}
+
+// TestDownloadStates draws each download state at the sizes the YouTube
+// screens use: 42 in the typing screen's results, 44 elsewhere.
+func TestDownloadStates(t *testing.T) {
+	u, off := uitest.NewContext(t, 400, 130)
+	u.Accent = theme.Derive(265, 0.12)
+	states := []media.DownloadState{media.Available, media.Queued, media.Downloading, media.Saved, media.Failed}
+	for i, st := range states {
+		x := 10 + float32(i)*60
+		DownloadCircle(u, st, 0.62, 42, x, 10)
+		DownloadCircle(u, st, 0.25, 44, x, 60)
+	}
+	uitest.Golden(t, "download-states", off.Image())
+}
+
+// A download at 0 % draws no sector, not even a hairline to 12 o'clock, and
+// one whose progress is NaN draws as 0 % does, making no mask each frame.
+func TestDownloadCircleAtNothing(t *testing.T) {
+	draw := func(p float32) *image.NRGBA {
+		u, off := uitest.NewContext(t, 80, 80)
+		u.Accent = theme.Derive(265, 0.12)
+		DownloadCircle(u, media.Downloading, p, 44, 8, 8) // 55 device pixels from (10, 10)
+		return off.Image()
+	}
+	zero := draw(0)
+	// Straight up from the centre, between the ring and the icon.
+	for y := 14; y < 23; y++ {
+		for x := 36; x <= 38; x++ {
+			if c := zero.NRGBAAt(x, y); c != theme.Ground {
+				t.Fatalf("0 %% draws %v at (%d, %d)", c, x, y)
+			}
+		}
+	}
+	nan := float32(math.NaN())
+	if !bytes.Equal(draw(nan).Pix, zero.Pix) {
+		t.Fatal("NaN draws otherwise than 0 %")
+	}
+
+	u, _ := uitest.NewContext(t, 80, 80)
+	DownloadCircle(u, media.Downloading, 0, 44, 8, 8)
+	DownloadCircle(u, media.Downloading, nan, 44, 8, 8)
+	base := testing.AllocsPerRun(20, func() { DownloadCircle(u, media.Downloading, 0, 44, 8, 8) })
+	if n := testing.AllocsPerRun(20, func() { DownloadCircle(u, media.Downloading, nan, 44, 8, 8) }); n > base {
+		t.Fatalf("NaN allocates %v times a frame, 0 %% %v: a mask each frame", n, base)
+	}
+}
+
+func TestRowKeepsRoomForWhatTrails(t *testing.T) {
+	u, off := uitest.NewContext(t, theme.DeviceW, 120)
+	box := gfx.Rect{X: 32, Y: 8, W: 600, H: RowHeight}
+	r := Row{Title: strings.Repeat("Night Drive Theory ", 6), Subtitle: strings.Repeat("Lumen Coast ", 8), Trail: 150}
+	ListRow(u, r, box, 0)
+	img := off.Image()
+	ground := img.NRGBAAt(2, 2)
+	tb := TrailBox(box, 150)
+	for y := int(tb.Y * theme.Scale); y < int((tb.Y+tb.H)*theme.Scale); y++ {
+		for x := int((tb.X-rowGap)*theme.Scale) + 1; x < int((tb.X+tb.W)*theme.Scale); x++ {
+			if img.NRGBAAt(x, y) != ground {
+				t.Fatalf("drawn at (%d, %d), in the room kept", x, y)
+			}
+		}
+	}
+}
+
+func TestFiltersMeasureWhatTheyDraw(t *testing.T) {
+	u, _ := uitest.NewContext(t, theme.DeviceW, 100)
+	names := []string{"All", "Songs", "Albums", "Artists"}
+	for _, counts := range [][]string{nil, {"40", "20", "12", "3"}} {
+		if w, drawn := FiltersWidth(u, names, counts), Filters(u, names, counts, 1, 32, 0); w != drawn {
+			t.Errorf("counts %v: measured %v, drawn %v", counts, w, drawn)
+		}
+	}
+}
+
+// TestDialog draws the "Download failed" dialog of docs/ui.md, 12c, over a
+// tab.
+func TestDialog(t *testing.T) {
+	u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	u.Accent = theme.Derive(265, 0.12)
+	DrawBackground(u, TabGround)
+	StatusBar(u)
+	Tabs(u, 4)
+	art := SpecFor("Night Drive Theory")
+	d := Dialog{Icon: "alert", IconColor: theme.GoldSoft, Title: "Download failed", Art: &art,
+		ItemTitle: "Night Drive Theory", ItemDetail: "Lumen Coast · YouTube Music",
+		Body:  "The downloader couldn’t read this track. It is usually fixed by updating the downloader.",
+		Pills: []DialogPill{{Icon: "refresh", Label: "Update and retry"}, {Label: "Retry"}, {Label: "Remove"}}}
+	DrawDialog(u, &d, 1, []float32{1, 0, 0})
+	uitest.Golden(t, "dialog", off.Image())
+	lines := d.body.lines
+	DrawDialog(u, &d, 1, []float32{1, 0, 0})
+	if len(lines) < 2 || &d.body.lines[0] != &lines[0] {
+		t.Fatal("the body was wrapped again")
 	}
 }

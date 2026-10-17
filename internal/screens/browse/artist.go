@@ -24,7 +24,7 @@ type ArtistPage struct {
 
 // NewArtistPage opens artist ar.
 func NewArtistPage(nav screens.Nav, p Player, ar *library.Artist) *ArtistPage {
-	pg := &ArtistPage{nav: nav, p: p, artist: ar, grid: albumGrid()}
+	pg := &ArtistPage{nav: nav, p: p, artist: ar, grid: screens.AlbumGrid()}
 	pg.grid.SetCount(len(ar.Albums))
 	return pg
 }
@@ -56,11 +56,11 @@ func (pg *ArtistPage) Animating(now time.Time) bool { return pg.grid.Animating(n
 func (pg *ArtistPage) Draw(u *ui.Context) {
 	if pg.top == 0 {
 		pg.top = albumTop + u.LineHeight(text.Heading)
-		layoutGrid(u, &pg.grid, contentBot-pg.top)
+		screens.LayoutGrid(u, &pg.grid, contentBot-pg.top)
 	}
 	widgets.DrawBackground(u, widgets.TabGround)
 	ar := pg.artist
-	heading(u, ar.Name, artistLine(len(ar.Albums), ar.Songs), albumTop)
+	screens.Heading(u, ar.Name, artistLine(len(ar.Albums), ar.Songs), albumTop)
 	drawAlbums(u, &pg.grid, ar.Albums, pg.top, func(a *library.Album) string {
 		if a.Year > 0 {
 			return strconv.Itoa(a.Year)
@@ -76,11 +76,11 @@ func (pg *ArtistPage) Draw(u *ui.Context) {
 // giving each card's second line. Cards are clipped at top, so scrolled ones
 // don't show over what is above; the focused card's glow fades out over it.
 func drawAlbums(u *ui.Context, g *views.Grid, albums []*library.Album, top float32, sub func(*library.Album) string) {
-	u.PushClip(glowArea)
+	u.PushClip(screens.GlowArea)
 	g.Draw(u.Now, gridX, top, func(i int, x, y, k float32) {
 		a := albums[i]
 		widgets.CardGlow(u, x, y, gridArt, k)
-		u.PushClip(below(top))
+		u.PushClip(screens.Below(top))
 		widgets.Card(u, widgets.CardItem{Title: a.Title, Subtitle: sub(a), Art: screens.AlbumArt(a)}, x, y, gridArt, k, true)
 		u.PopClip()
 	})

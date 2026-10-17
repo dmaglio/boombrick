@@ -40,12 +40,40 @@ func Wrap(u *ui.Context, s string, st text.Style, w float32) []string {
 	return lines
 }
 
+// Wrapped keeps the lines of the last text wrapped, so a screen that shows
+// the same text frame after frame wraps it once.
+type Wrapped struct {
+	text  string
+	style text.Style
+	w     float32
+	scale float32
+	lines []string
+}
+
+// Lines returns s wrapped to w, wrapping again only when s, st, w or the
+// context's scale changes.
+func (c *Wrapped) Lines(u *ui.Context, s string, st text.Style, w float32) []string {
+	// The zero Wrapped has no scale, so the first call always wraps.
+	if s != c.text || st != c.style || w != c.w || u.Scale != c.scale {
+		c.text, c.style, c.w, c.scale = s, st, w, u.Scale
+		c.lines = Wrap(u, s, st, w)
+	}
+	return c.lines
+}
+
 // EmptyState draws a state screen's message centred between the tabs and the
 // hint bar (docs/ui.md, screens 12): the logo mark in ink4, a title, a wrapped
-// description in ink2 and a detail line in ink3.
-func EmptyState(u *ui.Context, title, body, detail string) {
+// description in ink2 and a detail line in ink3. The screen keeps the
+// description's lines in c, so that it isn't wrapped every frame; with c nil
+// it is.
+func EmptyState(u *ui.Context, c *Wrapped, title, body, detail string) {
 	const mark = 54 // em: the mark is 81 x 69
-	lines := Wrap(u, body, stateBody, stateWidth)
+	var lines []string
+	if c != nil {
+		lines = c.Lines(u, body, stateBody, stateWidth)
+	} else {
+		lines = Wrap(u, body, stateBody, stateWidth)
+	}
 	titleH, bodyH, detailH := u.LineHeight(stateTitle), u.LineHeight(stateBody), u.LineHeight(stateDetail)
 	h := 1.27*mark + 24 + titleH + 12 + float32(len(lines))*bodyH + 16 + detailH
 	top := float32(StatusHeight + TabsHeight)

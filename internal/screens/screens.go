@@ -2,8 +2,11 @@
 package screens
 
 import (
+	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/ujjwal313/boombrick/internal/media"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
@@ -28,11 +31,45 @@ type Ticker interface {
 	Tick() time.Duration
 }
 
+// Claimer is a tab screen that sometimes takes a button the app otherwise
+// keeps for itself, as the YouTube keyboard takes Start to search.
+type Claimer interface {
+	Claims(b input.Button) bool
+}
+
+// DownloadView is a screen that shows the download queue's state. A change
+// to the queue redraws the frame only while a screen shown says it shows it.
+type DownloadView interface {
+	ShowsDownloads() bool
+}
+
+// downloads is the folder Boombrick files the songs it downloads in, with a
+// separator after it, or "" for none. The app sets it once, at start.
+var downloads string
+
+// SetDownloadsDir says where downloads are filed, so that their badges say
+// Downloaded.
+func SetDownloadsDir(dir string) {
+	downloads = ""
+	if dir != "" {
+		downloads = filepath.Clean(dir) + string(filepath.Separator)
+	}
+}
+
+// SourceOf is where the file at path came from. The SD card's FAT or exFAT
+// ignores case, so the folder's name is matched without it.
+func SourceOf(path string) media.Source {
+	if downloads != "" && len(path) > len(downloads) && strings.EqualFold(path[:len(downloads)], downloads) {
+		return media.Downloaded
+	}
+	return media.Local
+}
+
 // DrawReading draws the state Home and the Library show while the first scan
-// runs and nothing is indexed yet.
-func DrawReading(u *ui.Context, musicDir string) {
+// runs and nothing is indexed yet, its description's lines kept in c.
+func DrawReading(u *ui.Context, c *widgets.Wrapped, musicDir string) {
 	widgets.DrawBackground(u, widgets.StateGround)
-	widgets.EmptyState(u, "Reading your music", "This takes a little while the first time.", musicDir)
+	widgets.EmptyState(u, c, "Reading your music", "This takes a little while the first time.", musicDir)
 }
 
 // Placeholder stands in for a tab that hasn't been built yet.

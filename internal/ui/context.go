@@ -115,6 +115,7 @@ type fitKey struct {
 type coverKey struct {
 	artist string
 	album  string
+	url    string
 	px     int
 	radius float64 // device pixels
 }
@@ -379,6 +380,7 @@ func (u *Context) Shape(s raster.Shape, box gfx.Rect, col color.NRGBA) {
 		W: u.Px(float32(s.W)), H: u.Px(float32(s.H)), Kind: s.Kind,
 		Radius: s.Radius * k, RingOffset: s.RingOffset * k, RingWidth: s.RingWidth * k,
 		GlowSpread: s.GlowSpread * k, GlowBlur: s.GlowBlur * k,
+		Sweep: s.Sweep,
 	}
 	t, ok := u.masks.Get(ds)
 	if !ok {
@@ -440,10 +442,13 @@ func (u *Context) Animating() bool { return u.pending }
 // none yet; the caller draws the placeholder then, and under a cover that is
 // still fading in.
 func (u *Context) Cover(c media.Cover, size float32, radius float64) (*gfx.Texture, float32) {
-	if c.Album == "" || u.Covers == nil {
+	if c.Album == "" && c.URL == "" || u.Covers == nil {
 		return nil, 0
 	}
-	k := coverKey{c.Artist, c.Album, u.Px(size), radius * float64(u.Scale)}
+	k := coverKey{url: c.URL, px: u.Px(size), radius: radius * float64(u.Scale)}
+	if c.URL == "" {
+		k.artist, k.album = c.Artist, c.Album
+	}
 	t, ok := u.covers.Get(k)
 	if !ok {
 		if u.uploads >= u.MaxUploads {

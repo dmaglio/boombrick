@@ -11,8 +11,6 @@ import (
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
 	"github.com/ujjwal313/boombrick/internal/ui/gfx"
-	"github.com/ujjwal313/boombrick/internal/ui/raster"
-	"github.com/ujjwal313/boombrick/internal/ui/text"
 	"github.com/ujjwal313/boombrick/internal/ui/views"
 	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
@@ -26,20 +24,7 @@ const (
 
 var filterNames = [filterCount]string{"Albums", "Artists", "Songs"}
 
-// The filter row: Heading at 28 (docs/ui.md, "Type") with a tabular count in
-// ink3; the chosen filter sits on a tinted pill.
-var (
-	filterText = text.Style{Face: text.CormorantSemiBold, Size: 28}
-	countText  = text.Style{Face: text.Lora, Size: 20, Tabular: true}
-)
-
-const (
-	filtersH   = 56
-	filterPill = 44
-	filterPad  = 16
-	filterGap  = 8 // name to count
-	listTop    = contentTop + filtersH
-)
+const listTop = contentTop + widgets.FiltersHeight
 
 const emptyText = "Copy music to the Music folder on the SD card, or find something on YouTube Music."
 
@@ -53,13 +38,14 @@ type Library struct {
 	filter   int
 	views    [filterCount]views.Grid
 	laidOut  bool
-	reading  bool // the first scan is running with nothing indexed yet
+	reading  bool            // the first scan is running with nothing indexed yet
+	state    widgets.Wrapped // the empty or reading state's description, wrapped
 }
 
 // New creates the tab. It shows nothing but its chrome until SetIndex.
 func New(nav screens.Nav, p Player, musicDir string, rescan func()) *Library {
 	l := &Library{nav: nav, p: p, musicDir: musicDir, rescan: rescan}
-	l.views[albumsFilter] = albumGrid()
+	l.views[albumsFilter] = screens.AlbumGrid()
 	for _, f := range []int{artistsFilter, songsFilter} {
 		l.views[f] = views.Grid{Cols: 1, CellW: theme.ScreenW - 2*side, CellH: widgets.RowHeight, Pad: pad,
 			ViewH: contentBot - listTop}
@@ -189,14 +175,14 @@ func (l *Library) Animating(now time.Time) bool { return l.views[l.filter].Anima
 func (l *Library) Draw(u *ui.Context) {
 	if !l.laidOut {
 		l.laidOut = true
-		layoutGrid(u, &l.views[albumsFilter], contentBot-listTop)
+		screens.LayoutGrid(u, &l.views[albumsFilter], contentBot-listTop)
 	}
 	switch {
 	case l.empty():
 		widgets.DrawBackground(u, widgets.StateGround)
-		widgets.EmptyState(u, "Your library is empty", emptyText, l.musicDir)
+		widgets.EmptyState(u, &l.state, "Your library is empty", emptyText, l.musicDir)
 	case l.ix == nil && l.reading:
-		screens.DrawReading(u, l.musicDir)
+		screens.DrawReading(u, &l.state, l.musicDir)
 	default:
 		widgets.DrawBackground(u, widgets.TabGround)
 		if l.ix != nil {
@@ -211,26 +197,8 @@ func (l *Library) Draw(u *ui.Context) {
 
 // drawFilters draws L2, the three filters with their counts, and R2.
 func (l *Library) drawFilters(u *ui.Context) {
-	counts := [filterCount]int{len(l.ix.Albums), len(l.ix.Artists), len(l.ix.Songs)}
-	y := float32(contentTop)
-	x := float32(side)
-	x += widgets.KeyGlyph(u, "L2", x, y+(filtersH-widgets.TabPill.Height)/2, widgets.TabPill, theme.PaperA(0.45)) + 18
-	for f := range filterCount {
-		name, count := filterNames[f], screens.Count(counts[f])
-		w := filterPad + u.TextWidth(name, filterText) + filterGap + u.TextWidth(count, countText) + filterPad
-		box := gfx.Rect{X: x, Y: y + (filtersH-filterPill)/2, W: w, H: filterPill}
-		col := theme.Ink2
-		if f == l.filter {
-			u.Shape(raster.Shape{W: int(w), H: filterPill, Radius: filterPill / 2, Kind: raster.Fill}, box, u.Accent.Tint)
-			col = theme.Paper
-		}
-		tx := x + filterPad
-		tx += u.Text(name, filterText, tx, u.CenterY(filterText, box.Y, filterPill), col) + filterGap
-		baseline := u.CenterY(filterText, box.Y, filterPill) + u.Ascent(filterText)
-		u.Text(count, countText, tx, u.Baseline(countText, baseline), theme.Ink3)
-		x += w + 8
-	}
-	widgets.KeyGlyph(u, "R2", x+10, y+(filtersH-widgets.TabPill.Height)/2, widgets.TabPill, theme.PaperA(0.45))
+	counts := []string{screens.Count(len(l.ix.Albums)), screens.Count(len(l.ix.Artists)), screens.Count(len(l.ix.Songs))}
+	widgets.Filters(u, filterNames[:], counts, l.filter, side, contentTop)
 }
 
 func (l *Library) drawView(u *ui.Context) {
@@ -240,7 +208,7 @@ func (l *Library) drawView(u *ui.Context) {
 		return
 	}
 	playing := l.p.State().Track.Path
-	u.PushClip(glowArea)
+	u.PushClip(screens.GlowArea)
 	g.Draw(u.Now, side, listTop, func(i int, x, y, k float32) {
 		var r widgets.Row
 		if l.filter == artistsFilter {
@@ -257,7 +225,7 @@ func (l *Library) drawView(u *ui.Context) {
 		}
 		box := gfx.Rect{X: x, Y: y, W: g.CellW, H: widgets.RowHeight}
 		widgets.RowGlow(u, box, widgets.RowRadius, k)
-		u.PushClip(below(listTop))
+		u.PushClip(screens.Below(listTop))
 		widgets.ListRow(u, r, box, k)
 		u.PopClip()
 	})
