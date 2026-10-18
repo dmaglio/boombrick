@@ -125,6 +125,28 @@ func TestWebOffline(t *testing.T) {
 	}
 }
 
+// A picture missed while offline is fetched soon after the Wi-Fi is back, not
+// only after the wait a failed one has.
+func TestWebFetchesOnceBackOnline(t *testing.T) {
+	srv, hits := pictureServer(t, http.StatusOK)
+	var online atomic.Bool
+	w := newWeb(srv.Client(), online.Load, slog.New(slog.DiscardHandler), 1)
+	w.waits[1] = 20 * time.Millisecond
+	defer w.Close()
+	url := srv.URL + "/thumb.jpg"
+	waitMissing(t, w, url)
+	online.Store(true)
+	for end := time.Now().Add(2 * time.Second); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		if img, _ := w.Cover(url, 40); img != nil {
+			if n := hits.Load(); n != 1 {
+				t.Fatalf("%d requests", n)
+			}
+			return
+		}
+	}
+	t.Fatal("not fetched once back online")
+}
+
 // The newest asked go first, and the oldest are dropped past maxAsked, as a
 // fast scroll leaves them behind.
 func TestWebQueue(t *testing.T) {

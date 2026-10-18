@@ -31,11 +31,15 @@ type Web struct {
 	ready  chan struct{}
 	closed sync.Once
 
+	// waits are how long a picture that failed waits to be asked for again,
+	// and one missed while offline; tests shorten them.
+	waits [2]time.Duration
+
 	mu     sync.Mutex
 	asked  []webKey // waiting, oldest first
 	busy   map[webKey]bool
 	done   map[webKey]*image.NRGBA
-	failed map[webKey]time.Time
+	failed map[webKey]time.Time // when each may be asked for again
 }
 
 type webKey struct {
@@ -51,6 +55,10 @@ const (
 	maxFailed  = 256
 	maxPicture = 2 << 20
 	webRetry   = 30 * time.Second
+	// offlineRetry is the wait for a picture missed while offline, so it
+	// shows soon after the Wi-Fi is back. Asking again offline only reads
+	// the status.
+	offlineRetry = 3 * time.Second
 )
 
 var errOffline = errors.New("offline")
@@ -63,7 +71,8 @@ func NewWeb(c *http.Client, online func() bool, log *slog.Logger) *Web {
 func newWeb(c *http.Client, online func() bool, log *slog.Logger, workers int) *Web {
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &Web{http: c, online: online, log: log, ctx: ctx, cancel: cancel,
-		wake: make(chan struct{}, 1), ready: make(chan struct{}, 1),
+		waits: [2]time.Duration{webRetry, offlineRetry},
+		wake:  make(chan struct{}, 1), ready: make(chan struct{}, 1),
 		busy: map[webKey]bool{}, done: map[webKey]*image.NRGBA{}, failed: map[webKey]time.Time{}}
 	for range workers {
 		w.wg.Add(1)
@@ -87,7 +96,8 @@ func (w *Web) Close() {
 func (w *Web) Ready() <-chan struct{} { return w.ready }
 
 // Cover returns url's picture px pixels square, handing it over once, or nil
-// while it is fetched. none is true when fetching it failed in the last 30 s.
+// while it is fetched. none is true when fetching it failed lately: in the
+// last 30 s, or the last 3 s while offline.
 func (w *Web) Cover(url string, px int) (img *image.NRGBA, none bool) {
 	k := webKey{url, px}
 	w.mu.Lock()
@@ -96,8 +106,8 @@ func (w *Web) Cover(url string, px int) (img *image.NRGBA, none bool) {
 		delete(w.done, k)
 		return img, false
 	}
-	if at, ok := w.failed[k]; ok {
-		if time.Since(at) < webRetry {
+	if until, ok := w.failed[k]; ok {
+		if time.Now().Before(until) {
 			return nil, true
 		}
 		delete(w.failed, k)
@@ -150,7 +160,11 @@ func (w *Web) worker() {
 			if len(w.failed) >= maxFailed {
 				clear(w.failed)
 			}
-			w.failed[k] = time.Now()
+			wait := w.waits[0]
+			if errors.Is(err, errOffline) {
+				wait = w.waits[1]
+			}
+			w.failed[k] = time.Now().Add(wait)
 		default:
 			if len(w.done) >= maxFetched {
 				for d := range w.done { // one the UI never took
