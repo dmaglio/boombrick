@@ -1,6 +1,7 @@
 package quickmenu
 
 import (
+	"image"
 	"testing"
 	"time"
 
@@ -21,24 +22,27 @@ var t0 = time.Unix(0, 0)
 type acts struct {
 	sleep                  player.Sleep
 	screenOff, settings, q int
+	playing                bool
+	background             int
 }
 
 func (a *acts) actions() Actions {
 	return Actions{
-		Sleep:        func() player.Sleep { return a.sleep },
-		SetSleep:     func(m player.SleepMode) { a.sleep = player.Sleep{Mode: m} },
-		ScreenOff:    func() { a.screenOff++ },
-		OpenSettings: func() { a.settings++ },
-		Quit:         func() { a.q++ },
+		Sleep:            func() player.Sleep { return a.sleep },
+		SetSleep:         func(m player.SleepMode) { a.sleep = player.Sleep{Mode: m} },
+		ScreenOff:        func() { a.screenOff++ },
+		OpenSettings:     func() { a.settings++ },
+		Quit:             func() { a.q++ },
+		Playing:          func() bool { return a.playing },
+		PlayInBackground: func() { a.background++ },
 	}
 }
 
 func press(b input.Button) input.Event { return input.Event{Button: b, Kind: input.Press} }
 
-func TestTheMenu(t *testing.T) {
-	a := &acts{sleep: player.Sleep{Mode: player.Sleep30, At: t0.Add(18*time.Minute + 22*time.Second)}}
-	m := New(a.actions())
-	m.Open(t0)
+// draw renders the menu open over a tab, as the app shows it.
+func draw(t *testing.T, m *Menu) *image.NRGBA {
+	t.Helper()
 	u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
 	u.Status = fixture.Status()
 	u.BeginFrame(t0.Add(anim.Dialog))
@@ -47,10 +51,54 @@ func TestTheMenu(t *testing.T) {
 	widgets.Tabs(u, 0)
 	widgets.HintBar(u, []widgets.Hint{{Key: "L1/R1", Label: "Tabs"}})
 	m.Draw(u)
-	uitest.Golden(t, "quick-menu", off.Image())
+	return off.Image()
+}
+
+func TestTheMenu(t *testing.T) {
+	a := &acts{sleep: player.Sleep{Mode: player.Sleep30, At: t0.Add(18*time.Minute + 22*time.Second)}}
+	m := New(a.actions())
+	m.Open(t0)
+	uitest.Golden(t, "quick-menu", draw(t, m))
 	if got := m.rows[rowSleep].Value; got != "30 min · 18:22 left" {
 		t.Fatalf("sleep row says %q", got)
 	}
+}
+
+// Play in background shows only while music plays, between Screen off and
+// Settings, and hands the music over, closing the menu.
+func TestPlayInBackground(t *testing.T) {
+	a := &acts{}
+	m := New(a.actions())
+	m.Open(t0)
+	for range 4 {
+		m.Handle(press(input.Down), t0)
+	}
+	if m.focus != rowQuit {
+		t.Fatalf("with no music playing, the last row is %d", m.focus)
+	}
+	a.playing = true
+	hand := a.actions()
+	hand.PlayInBackground = nil // Options.Background unset: the row stays hidden
+	nb := New(hand)
+	nb.Open(t0)
+	for range 4 {
+		nb.Handle(press(input.Down), t0)
+	}
+	if nb.focus != rowQuit {
+		t.Fatalf("with no hand-over to call, the last row is %d", nb.focus)
+	}
+	m.Open(t0)
+	m.Handle(press(input.Down), t0)
+	m.Handle(press(input.Down), t0)
+	if m.focus != rowBackground {
+		t.Fatalf("two Downs reached row %d, want Play in background", m.focus)
+	}
+	img := draw(t, m)
+	m.Handle(press(input.A), t0)
+	if a.background != 1 || m.IsOpen() {
+		t.Fatalf("A: %d hand-overs, open %v", a.background, m.IsOpen())
+	}
+	uitest.Golden(t, "quick-menu-background", img)
 }
 
 func TestMovingAndActing(t *testing.T) {

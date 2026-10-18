@@ -1,8 +1,9 @@
 // Package quickmenu is the quick menu Menu opens over any screen: the sleep
-// timer, the screen, Settings and quitting.
+// timer, the screen, playing in the background, Settings and quitting.
 package quickmenu
 
 import (
+	"slices"
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/platform/input"
@@ -23,12 +24,18 @@ type Actions struct {
 	ScreenOff    func()
 	OpenSettings func()
 	Quit         func()
+	// Playing reports whether music plays, as Play in background shows only
+	// then; PlayInBackground hands the music over. Without it the row never
+	// shows.
+	Playing          func() bool
+	PlayInBackground func()
 }
 
 // The rows, top to bottom.
 const (
 	rowSleep = iota
 	rowScreen
+	rowBackground
 	rowSettings
 	rowQuit
 	rowCount
@@ -45,37 +52,46 @@ var title = text.Style{Face: text.CormorantSemiBold, Size: 42}
 // Menu is the quick menu. It is drawn over the rest and takes all input
 // while it is open.
 type Menu struct {
-	act   Actions
-	open  bool
-	shown anim.Value
-	focus int
-	k     [rowCount]anim.Value
-	rows  [rowCount]widgets.Setting
-	sleep player.Sleep // the sleep timer as the sleep row last showed it
-	at    time.Time    // and when, for its time left
-	hints [rowCount][]widgets.Hint
+	act     Actions
+	open    bool
+	shown   anim.Value
+	focus   int
+	k       [rowCount]anim.Value
+	rows    [rowCount]widgets.Setting
+	sleep   player.Sleep // the sleep timer as the sleep row last showed it
+	at      time.Time    // and when, for its time left
+	hints   [rowCount][]widgets.Hint
+	visible []int // the rows shown, as they were when the menu opened
 }
 
 // New returns the menu, closed.
 func New(act Actions) *Menu {
 	m := &Menu{act: act}
 	m.rows = [rowCount]widgets.Setting{
-		rowSleep:    {Icon: "moon", Label: "Sleep timer"},
-		rowScreen:   {Icon: "power", Label: "Screen off"},
-		rowSettings: {Icon: "settings", Label: "Settings", Chevron: true},
-		rowQuit:     {Icon: "logout", Label: "Quit Boombrick"},
+		rowSleep:      {Icon: "moon", Label: "Sleep timer"},
+		rowScreen:     {Icon: "power", Label: "Screen off"},
+		rowBackground: {Icon: "music", Label: "Play in background"},
+		rowSettings:   {Icon: "settings", Label: "Settings", Chevron: true},
+		rowQuit:       {Icon: "logout", Label: "Quit Boombrick"},
 	}
 	m.hints = [rowCount][]widgets.Hint{
-		rowSleep:    {{Key: "◀ ▶", Label: "Change"}, {Key: "B", Label: "Close"}},
-		rowScreen:   {{Key: "A", Label: "Turn off"}, {Key: "B", Label: "Close"}},
-		rowSettings: {{Key: "A", Label: "Open"}, {Key: "B", Label: "Close"}},
-		rowQuit:     {{Key: "A", Label: "Quit"}, {Key: "B", Label: "Close"}},
+		rowSleep:      {{Key: "◀ ▶", Label: "Change"}, {Key: "B", Label: "Close"}},
+		rowScreen:     {{Key: "A", Label: "Turn off"}, {Key: "B", Label: "Close"}},
+		rowBackground: {{Key: "A", Label: "Play in background"}, {Key: "B", Label: "Close"}},
+		rowSettings:   {{Key: "A", Label: "Open"}, {Key: "B", Label: "Close"}},
+		rowQuit:       {{Key: "A", Label: "Quit"}, {Key: "B", Label: "Close"}},
 	}
 	return m
 }
 
 // Open shows the menu with its first row focused.
 func (m *Menu) Open(now time.Time) {
+	m.visible = m.visible[:0]
+	for r := range rowCount {
+		if r != rowBackground || m.act.PlayInBackground != nil && m.act.Playing != nil && m.act.Playing() {
+			m.visible = append(m.visible, r)
+		}
+	}
 	m.open, m.focus = true, rowSleep
 	for i := range m.k {
 		m.k[i].Set(0)
@@ -132,18 +148,19 @@ func (m *Menu) Handle(ev input.Event, now time.Time) bool {
 }
 
 func (m *Menu) move(step int, now time.Time) bool {
-	next := m.focus + step
-	if next < 0 || next >= rowCount {
+	i := slices.Index(m.visible, m.focus) + step
+	if i < 0 || i >= len(m.visible) {
 		return false
 	}
+	next := m.visible[i]
 	m.k[m.focus].To(0, now, anim.Focus, anim.EaseOutCubic)
 	m.focus = next
 	m.k[next].To(1, now, anim.Focus, anim.EaseOutCubic)
 	return true
 }
 
-// do acts on the focused row. The menu closes for the screen, Settings and
-// quitting; the sleep timer steps on to its next setting.
+// do acts on the focused row. The menu closes for the screen, the background,
+// Settings and quitting; the sleep timer steps on to its next setting.
 func (m *Menu) do(now time.Time) {
 	switch m.focus {
 	case rowSleep:
@@ -151,6 +168,9 @@ func (m *Menu) do(now time.Time) {
 	case rowScreen:
 		m.close(now)
 		m.act.ScreenOff()
+	case rowBackground:
+		m.close(now)
+		m.act.PlayInBackground()
 	case rowSettings:
 		m.close(now)
 		m.act.OpenSettings()
@@ -188,15 +208,15 @@ func (m *Menu) Draw(u *ui.Context) {
 		return
 	}
 	m.refresh(u.Now)
-	h := padTop + u.LineHeight(title) + 20 + rowCount*widgets.SettingHeight + padTop
+	h := padTop + u.LineHeight(title) + 20 + float32(len(m.visible)*widgets.SettingHeight) + padTop
 	p := widgets.BeginPanel(u, h, shown)
 	box := p.Box
 	y := box.Y + padTop
 	u.Text("Quick menu", title, box.X+40, y, theme.Paper)
 	y += u.LineHeight(title) + 20
-	for i := range m.rows {
+	for n, i := range m.visible {
 		row := gfx.Rect{X: box.X + padSide, Y: y, W: box.W - 2*padSide, H: widgets.SettingHeight}
-		widgets.DrawSetting(u, m.rows[i], row, float32(m.k[i].At(u.Now)), i == rowCount-1)
+		widgets.DrawSetting(u, m.rows[i], row, float32(m.k[i].At(u.Now)), n == len(m.visible)-1)
 		y += widgets.SettingHeight
 	}
 	p.End(u)

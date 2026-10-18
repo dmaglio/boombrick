@@ -150,3 +150,28 @@ func TestAlbumsFromHomePlayInOrder(t *testing.T) {
 		}
 	}
 }
+
+// Two Spotify songs both have no path; moving from one to the next must
+// still prefetch the lyrics of the new one, and a pending song that lands
+// (its key changes from none to its file) must too.
+func TestPrefetchesWhenTheStreamedSongChanges(t *testing.T) {
+	a := player.State{Queued: true, Track: player.Track{SpotifyID: "a"}}
+	b := player.State{Queued: true, Track: player.Track{SpotifyID: "b"}}
+	if !wantsPrefetch(b, a) {
+		t.Fatal("Spotify song b after a was not prefetched")
+	}
+	if wantsPrefetch(a, a) {
+		t.Fatal("the same song was prefetched again")
+	}
+	if !wantsPrefetch(a, player.State{}) {
+		t.Fatal("a song queued from nothing was not prefetched")
+	}
+	pending := player.State{Queued: true, Track: player.Track{VideoID: "v"}}
+	landed := player.State{Queued: true, Track: player.Track{VideoID: "v", Path: "/m/v.opus"}}
+	if !wantsPrefetch(landed, pending) {
+		t.Fatal("a landed download was not prefetched")
+	}
+	if wantsPrefetch(player.State{Track: b.Track}, a) {
+		t.Fatal("prefetched with nothing queued")
+	}
+}

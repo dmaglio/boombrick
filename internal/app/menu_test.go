@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -321,5 +322,112 @@ func TestNothingTicksWhileDark(t *testing.T) {
 	a.setDark(true)
 	if got := a.timeout(t0, t0); got < 10*time.Second {
 		t.Fatalf("sleep %v with the screen off and music playing, want until the clock's next minute", got)
+	}
+}
+
+// When the background player can't take the music, the app says so and
+// carries on.
+func TestPlayInBackgroundFails(t *testing.T) {
+	s, _, _ := testShell()
+	a := &App{shell: s, closed: true, opts: Options{Log: slog.New(slog.DiscardHandler),
+		Background: func() error { return errors.New("no answer") }}}
+	a.playInBackground()
+	for end := time.Now().Add(2 * time.Second); !a.handFailed.Load(); time.Sleep(time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatal("the failure never came")
+		}
+	}
+	a.backgroundNews()
+	if s.toast != "Couldn’t play in the background" {
+		t.Fatalf("toast %q", s.toast)
+	}
+}
+
+// While the music is handed over, a second pick does nothing and the buttons
+// reach no screen, though their press and release are still counted; when it
+// fails, input comes back.
+func TestInputWaitsWhileHandingOver(t *testing.T) {
+	a, tab := darkApp(nil)
+	a.closed = true
+	unblock := make(chan struct{})
+	var entered atomic.Int32
+	a.opts.Background = func() error {
+		entered.Add(1)
+		<-unblock
+		return errors.New("no answer")
+	}
+	a.playInBackground()
+	a.playInBackground()
+	for end := time.Now().Add(2 * time.Second); entered.Load() == 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatal("the hand-over never began")
+		}
+	}
+	time.Sleep(50 * time.Millisecond) // time for a second hand-over to begin, were it let
+	if n := entered.Load(); n != 1 {
+		t.Fatalf("Background entered %d times while handing over, want 1", n)
+	}
+	a.dispatch(press(input.A))
+	if !a.held[input.A] || len(tab.got) > 0 {
+		t.Fatalf("during the hand-over: A held %v, the screen heard %v", a.held[input.A], tab.got)
+	}
+	a.dispatch(release(input.A))
+	if len(a.held) != 0 {
+		t.Fatalf("a button let go during the hand-over is stuck: %v", a.held)
+	}
+	close(unblock)
+	for end := time.Now().Add(2 * time.Second); !a.handFailed.Load(); time.Sleep(time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatal("the failure never came")
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := entered.Load(); n != 1 {
+		t.Fatalf("Background entered %d times in all, want 1", n)
+	}
+	if a.handing.Load() {
+		t.Fatal("still handing over after the failure")
+	}
+	a.backgroundNews()
+	if a.shell.toast != "Couldn’t play in the background" {
+		t.Fatalf("toast %q", a.shell.toast)
+	}
+	a.dispatch(press(input.A))
+	if !slices.Equal(tab.got, []input.Button{input.A}) {
+		t.Fatalf("input didn't come back: %v", tab.got)
+	}
+}
+
+func TestVolumeChangedShowsThePill(t *testing.T) {
+	a, _ := darkApp(&lamp{})
+	a.closed = true // no SDL here to wake
+	a.VolumeChanged(0)
+	if a.shell.volumeOn {
+		t.Fatal("the pill showed before the loop looked")
+	}
+	a.volumeNews(t0)
+	if !a.shell.volumeOn || a.shell.volume != 0 || !a.dirty || a.volume.Load() != 0 {
+		t.Fatalf("level 0: on %v, level %d, dirty %v, flag %d", a.shell.volumeOn, a.shell.volume, a.dirty, a.volume.Load())
+	}
+	a.dirty = false
+	a.volumeNews(t0)
+	if a.dirty {
+		t.Fatal("a volume change was shown twice")
+	}
+	a.VolumeChanged(17)
+	a.volumeNews(t0.Add(time.Second))
+	if a.shell.volume != 17 {
+		t.Fatalf("level %d, want 17", a.shell.volume)
+	}
+}
+
+func TestVolumeChangedWithTheScreenOffShowsNothing(t *testing.T) {
+	a, _ := darkApp(&lamp{})
+	a.closed = true
+	a.dark = true
+	a.VolumeChanged(9)
+	a.volumeNews(t0)
+	if a.shell.volumeOn || a.volume.Load() != 0 {
+		t.Fatal("the pill showed with the screen off, or the news was kept")
 	}
 }

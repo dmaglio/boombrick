@@ -107,6 +107,10 @@ type Options struct {
 	// Importer imports Spotify playlists to downloads. Without it, or
 	// without Spotify or Downloads, nothing offers an import.
 	Importer Importer
+	// Background hands the music to the background player, and returns once
+	// it plays; the app then quits. Without it the quick menu has no Play in
+	// background.
+	Background func() error
 }
 
 // Releases is what the app needs from a release checker. *release.Checker
@@ -197,17 +201,20 @@ type App struct {
 	last       player.State
 	dirty      bool
 	fade       accentFade
-	grounds    *grounds    // a new accent's backgrounds, rendered before its fade starts
-	arts       atomic.Bool // art finished since poll last looked
-	words      atomic.Bool // lyrics found since poll last looked
-	found      atomic.Bool // YouTube Music answered since poll last looked
-	downloaded atomic.Bool // the download queue changed since poll last looked
-	landed     atomic.Bool // and downloads landed, to show in the library
-	skipped    atomic.Bool // and a queued song was dropped, its download failed
-	measured   atomic.Bool // the cache meter has news for the Storage page
-	released   atomic.Bool // a release was found, or an update moved on, for Settings
-	spotified  atomic.Bool // the Spotify library has news
-	imported   atomic.Bool // an import moved on
+	grounds    *grounds     // a new accent's backgrounds, rendered before its fade starts
+	arts       atomic.Bool  // art finished since poll last looked
+	words      atomic.Bool  // lyrics found since poll last looked
+	found      atomic.Bool  // YouTube Music answered since poll last looked
+	downloaded atomic.Bool  // the download queue changed since poll last looked
+	landed     atomic.Bool  // and downloads landed, to show in the library
+	skipped    atomic.Bool  // and a queued song was dropped, its download failed
+	measured   atomic.Bool  // the cache meter has news for the Storage page
+	released   atomic.Bool  // a release was found, or an update moved on, for Settings
+	spotified  atomic.Bool  // the Spotify library has news
+	imported   atomic.Bool  // an import moved on
+	handFailed atomic.Bool  // handing the music over failed, for poll to say
+	handing    atomic.Bool  // the music is being handed over: input waits
+	volume     atomic.Int32 // a volume level to show, plus one; 0 for none
 	quit       bool
 	drawn      bool
 	drawnAt    time.Time // the start of the frame drawn last
@@ -395,6 +402,10 @@ func New(opts Options) (*App, error) {
 func (a *App) quickMenu() *quickmenu.Menu {
 	act := quickmenu.Actions{Sleep: a.opts.Player.Sleep, SetSleep: a.opts.Player.SetSleep,
 		ScreenOff: func() { a.setDark(true) }, OpenSettings: func() {}, Quit: func() { a.quit = true }}
+	act.Playing = func() bool { return a.last.Playing }
+	if a.opts.Background != nil {
+		act.PlayInBackground = a.playInBackground
+	}
 	if a.opts.Prefs != nil {
 		o := settingsscreen.Options{Prefs: a.opts.Prefs, Player: a.opts.Player, Card: a.card, Toast: a.Toast,
 			Version: a.opts.Version, Device: a.opts.Device, Quit: func() { a.quit = true }}
@@ -555,6 +566,7 @@ func (a *App) Run() error {
 // poll picks up loaded data, the end of a library scan, the device status and
 // player changes that show on screen.
 func (a *App) poll() {
+	a.volumeNews(time.Now())
 	select {
 	case s := <-a.statuses:
 		if !a.status {
@@ -629,10 +641,11 @@ func (a *App) poll() {
 	if a.imported.Swap(false) {
 		a.dirty = true
 	}
+	a.backgroundNews()
 	if st.Waiting && a.opts.Downloads != nil && (!l.Waiting || st.Track.VideoID != l.Track.VideoID) {
 		a.askFirst(st.Track)
 	}
-	if st.Queued && (st.Track.Path != l.Track.Path || !l.Queued) {
+	if wantsPrefetch(st, l) {
 		a.prefetch(st)
 	}
 	a.followAccent(st, art || st.Track != l.Track || st.Queued != l.Queued, time.Now())
@@ -877,6 +890,9 @@ func (a *App) dispatch(e input.Event) {
 		a.power(e, now)
 		return
 	}
+	if a.handing.Load() {
+		return // the music is being handed over
+	}
 	if a.dark {
 		if e.Kind == input.Press {
 			a.darkButton(e.Button)
@@ -885,6 +901,32 @@ func (a *App) dispatch(e input.Event) {
 	}
 	if a.shell.handle(e, now) {
 		a.dirty = true
+	}
+}
+
+// playInBackground hands the music over on a goroutine, as the UI thread
+// mustn't wait for the background player, and quits once it plays. Input waits
+// meanwhile. When it can't, the music plays on here.
+func (a *App) playInBackground() {
+	if !a.handing.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		if err := a.opts.Background(); err != nil {
+			a.opts.Log.Warn("play in background", "err", err)
+			a.handing.Store(false)
+			a.handFailed.Store(true)
+			a.wake()
+			return
+		}
+		a.Quit()
+	}()
+}
+
+// backgroundNews says once that handing the music over failed.
+func (a *App) backgroundNews() {
+	if a.handFailed.Swap(false) {
+		a.Toast("Couldn’t play in the background")
 	}
 }
 
@@ -983,4 +1025,28 @@ func (a *App) powerOff() {
 		}
 	}
 	a.quit = true
+}
+
+// wantsPrefetch reports whether the lyrics of the track st is on are to be
+// asked for, st being what the player gave after l: the track is new, or
+// something is queued again. A streamed song has no path, so tracks are told
+// apart by their lyrics key.
+func wantsPrefetch(st, l player.State) bool {
+	return st.Queued && (screens.LyricsTrack(st.Track).Key() != screens.LyricsTrack(l.Track).Key() || !l.Queued)
+}
+
+// VolumeChanged tells the app the device volume is now level, 0 to 20, for it
+// to show. It is safe to call from any goroutine.
+func (a *App) VolumeChanged(level int) {
+	a.volume.Store(int32(level) + 1)
+	a.wake()
+}
+
+// volumeNews shows a volume change the watcher reported, unless the screen is
+// off.
+func (a *App) volumeNews(now time.Time) {
+	if v := a.volume.Swap(0); v > 0 && !a.dark {
+		a.shell.showVolume(int(v-1), now)
+		a.dirty = true
+	}
 }
