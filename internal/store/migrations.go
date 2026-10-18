@@ -133,6 +133,11 @@ var migrations = []string{
 		candidates TEXT NOT NULL,
 		PRIMARY KEY (uri, spotify_id)
 	) WITHOUT ROWID`,
+	// Background play: whether music was playing, and the sleep timer, as a
+	// hand-over between Boombrick and its background player leaves them.
+	`ALTER TABLE playback_state ADD COLUMN playing INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE playback_state ADD COLUMN sleep_mode INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE playback_state ADD COLUMN sleep_at INTEGER NOT NULL DEFAULT 0`,
 }
 
 func migrate(db *sql.DB) error {
