@@ -125,7 +125,7 @@ func (r *Recorder) summary(fs []frame, from, to usage) {
 	dm, dp, dw := spread(draw)
 	tm, tp, tw := spread(total)
 	r.log.Info("perf",
-		"rss_mb", mb(rss()), "heap_mb", mb(int64(memory[0].Value.Uint64())), "gcs", memory[1].Value.Uint64(),
+		"rss_mb", mb(rss()), "rss_anon_mb", mb(rssAnon()), "heap_mb", mb(int64(memory[0].Value.Uint64())), "gcs", memory[1].Value.Uint64(),
 		"cpu_pct", cpuPercent(from, to), "frames", len(fs),
 		"draw_median_ms", ms(dm), "draw_p95_ms", ms(dp), "draw_worst_ms", ms(dw),
 		"frame_median_ms", ms(tm), "frame_p95_ms", ms(tp), "frame_worst_ms", ms(tw))
@@ -153,6 +153,26 @@ func rss() int64 {
 	}
 	pages, _ := strconv.ParseInt(string(f[1]), 10, 64)
 	return pages * int64(os.Getpagesize())
+}
+
+// rssAnon is the process's resident memory apart from mapped files, in bytes
+// (RssAnon in /proc/self/status), or 0 when it can't be read.
+func rssAnon() int64 {
+	b, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return 0
+	}
+	for _, line := range bytes.Split(b, []byte("\n")) {
+		if rest, ok := bytes.CutPrefix(line, []byte("RssAnon:")); ok {
+			f := bytes.Fields(rest) // "<n> kB"
+			if len(f) < 1 {
+				return 0
+			}
+			kb, _ := strconv.ParseInt(string(f[0]), 10, 64)
+			return kb << 10
+		}
+	}
+	return 0
 }
 
 // cpuTime is the user and system CPU time the process has used.

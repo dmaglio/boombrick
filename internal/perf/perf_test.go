@@ -92,7 +92,7 @@ func TestRecorder(t *testing.T) {
 	if attrs["draw_median_ms"].Float64() != 4 || attrs["frame_worst_ms"].Float64() != 16 {
 		t.Fatalf("frame times %v", attrs)
 	}
-	if attrs["rss_mb"].Float64() <= 0 || attrs["heap_mb"].Float64() <= 0 {
+	if attrs["rss_mb"].Float64() <= 0 || attrs["rss_anon_mb"].Float64() <= 0 || attrs["heap_mb"].Float64() <= 0 {
 		t.Fatalf("memory %v", attrs)
 	}
 	launch := h.find("perf launch", anything)
