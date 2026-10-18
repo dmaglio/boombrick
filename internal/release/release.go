@@ -3,6 +3,7 @@
 package release
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -57,30 +58,65 @@ func Latest(ctx context.Context, c *http.Client, base, repo string) (Release, er
 
 // Newer reports whether version a is newer than b, comparing their dotted
 // numbers in turn: "0.10.0" is newer than "0.9.2", and "2026.10.11.1" than
-// "2026.10.11". Anything is newer than a build without a version ("dev" or
-// "").
+// "2026.10.11". A beta, with a suffix after "-", comes after the version
+// before it and before its own: "0.2.0-beta.1" is newer than "0.1.1", and
+// older than "0.2.0-beta.2" and "0.2.0". Anything is newer than a build
+// without a version ("dev" or "").
 func Newer(a, b string) bool {
-	as, bs := strings.Split(a, "."), strings.Split(b, ".")
-	if _, err := strconv.Atoi(bs[0]); err != nil {
-		_, aerr := strconv.Atoi(as[0])
-		return aerr == nil
+	acore, apre, _ := strings.Cut(a, "-")
+	bcore, bpre, _ := strings.Cut(b, "-")
+	switch {
+	case !numbered(bcore):
+		return numbered(acore)
+	case !numbered(acore):
+		return false
 	}
-	for i := range max(len(as), len(bs)) {
-		x, y := part(as, i), part(bs, i)
-		if x != y {
-			return x > y
-		}
+	if c := compare(acore, bcore); c != 0 {
+		return c > 0
 	}
-	return false
+	switch {
+	case apre == bpre:
+		return false
+	case apre == "":
+		return true // the release after its betas
+	case bpre == "":
+		return false
+	}
+	return compare(apre, bpre) > 0
 }
 
-// part is the i-th number of a version, 0 past its end or where it isn't one.
-func part(p []string, i int) int {
-	if i >= len(p) {
-		return 0
+// numbered reports whether a version starts with a number.
+func numbered(v string) bool {
+	first, _, _ := strings.Cut(v, ".")
+	_, err := strconv.Atoi(first)
+	return err == nil
+}
+
+// compare compares two dotted versions or suffixes part by part: numbers as
+// numbers, other parts as text, and a part one lacks as 0.
+func compare(a, b string) int {
+	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+	for i := range max(len(as), len(bs)) {
+		x, y := part(as, i), part(bs, i)
+		xn, xerr := strconv.Atoi(x)
+		yn, yerr := strconv.Atoi(y)
+		c := strings.Compare(x, y)
+		if xerr == nil && yerr == nil {
+			c = cmp.Compare(xn, yn)
+		}
+		if c != 0 {
+			return c
+		}
 	}
-	n, _ := strconv.Atoi(p[i])
-	return n
+	return 0
+}
+
+// part is the i-th part of a version, "0" past its end.
+func part(p []string, i int) string {
+	if i >= len(p) {
+		return "0"
+	}
+	return p[i]
 }
 
 // Checker keeps a repository's latest release for a screen that shows it:

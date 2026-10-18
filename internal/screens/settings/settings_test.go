@@ -424,6 +424,10 @@ func TestCardLines(t *testing.T) {
 		{"0.4.0", "0.5.0", selfupdate.Status{}, false, "Version 0.4.0", "0.5.0 is available", ""},
 		{"0.4.0", "0.5.0", selfupdate.Status{Failed: true}, true, "Version 0.4.0", "Couldn’t download the update", "Update Boombrick"},
 		{"0.4.0", "0.5.0", selfupdate.Status{Staged: "0.5.0"}, true, "Version 0.4.0", "0.5.0 installs the next time you open Boombrick", ""},
+		// A beta isn't offered other betas, so it doesn't claim to be up to
+		// date; the next full release is offered as to any version.
+		{"0.2.0-beta.1", "0.1.1", selfupdate.Status{}, true, "Version 0.2.0-beta.1 · beta", "", ""},
+		{"0.2.0-beta.1", "0.2.0", selfupdate.Status{}, true, "Version 0.2.0-beta.1 · beta", "0.2.0 is available", "Update Boombrick"},
 	}
 	for _, c := range apps {
 		var k card

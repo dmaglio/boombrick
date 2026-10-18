@@ -4,6 +4,7 @@ import (
 	"image/color"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/download"
@@ -129,6 +130,10 @@ func (c *card) setApp(version, latest string, st selfupdate.Status, canUpdate bo
 	switch {
 	case version == "dev":
 		c.line = "Development build"
+	case strings.Contains(version, "-"):
+		// A beta is offered the next full release, never another beta, so it
+		// can't tell whether it is up to date.
+		c.line = "Version " + version + " · beta"
 	case latest != "" && !release.Newer(latest, version):
 		c.line = "Version " + version + " · up to date"
 	default:

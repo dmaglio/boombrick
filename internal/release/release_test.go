@@ -59,6 +59,17 @@ func TestNewer(t *testing.T) {
 		{"0.5.0", "dev", true},
 		{"0.5.0", "", true},
 		{"dev", "dev", false},
+		{"dev", "0.5.0", false},
+		// Betas come between the version before and their own.
+		{"0.2.0-beta.1", "0.1.1", true},
+		{"0.1.1", "0.2.0-beta.1", false},
+		{"0.2.0-beta.2", "0.2.0-beta.1", true},
+		{"0.2.0-beta.10", "0.2.0-beta.9", true},
+		{"0.2.0-rc.1", "0.2.0-beta.3", true},
+		{"0.2.0", "0.2.0-beta.2", true},
+		{"0.2.0-beta.2", "0.2.0", false},
+		{"0.2.0-beta.1", "0.2.0-beta.1", false},
+		{"0.2.0-beta.1", "dev", true},
 	}
 	for _, c := range cases {
 		if got := Newer(c.a, c.b); got != c.want {
