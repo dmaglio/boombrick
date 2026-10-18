@@ -57,7 +57,7 @@ func (st Style) Tnum() Style {
 	return st
 }
 
-// Named styles from docs/ui.md, "Type".
+// Named styles.
 var (
 	Display    = Style{Face: Cormorant, Size: 56}
 	Title      = Style{Face: CormorantSemiBold, Size: 44}

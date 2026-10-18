@@ -1,7 +1,7 @@
 package media
 
 // DownloadState is how far a YouTube Music song has got towards being saved
-// on the SD card (docs/ui.md, "Download state").
+// on the SD card.
 type DownloadState uint8
 
 const (

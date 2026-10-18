@@ -7,7 +7,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/text"
 )
 
-// RowHeight is a list row's height (docs/ui.md, "List row": 76-84).
+// RowHeight is a list row's height, within the design's 76-84.
 const RowHeight = 80
 
 // RowRadius is a list row's corner radius, for its focus treatment.

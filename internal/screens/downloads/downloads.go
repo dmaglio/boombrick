@@ -1,6 +1,5 @@
 // Package downloads is the Downloads tab: the SD card's space, and the
-// download queue in sections, with a dialog for failures (docs/ui.md,
-// screens 09 and 12c).
+// download queue in sections, with a dialog for failures.
 package downloads
 
 import (
@@ -32,7 +31,7 @@ type Source interface {
 // tab is the Downloads tab's place in the tab row.
 const tab = 4
 
-// Layout (docs/ui.md, 09): the storage card under the tabs, then the queue
+// Layout: the storage card under the tabs, then the queue
 // in 66 px rows, each heading a row of its own.
 const (
 	cardTop = screens.ContentTop + 8

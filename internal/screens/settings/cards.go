@@ -39,7 +39,7 @@ type Updater interface {
 // cardPad is a card's padding above and below; 20 at the sides.
 const cardPad = 16
 
-// card is the Downloader or Boombrick card (docs/ui.md, 11): a title, a line
+// card is the Downloader or Boombrick card: a title, a line
 // about the version, a note in colour when there is news, and a pill when
 // there is something to do. Its lines are written when what they say
 // changes, not every frame.

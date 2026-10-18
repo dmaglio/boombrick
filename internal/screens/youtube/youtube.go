@@ -1,6 +1,5 @@
 // Package youtube is the YouTube tab: searching YouTube Music with the
-// on-screen keyboard, the results, and albums' and artists' pages (docs/ui.md,
-// screens 07a and 07b).
+// on-screen keyboard, the results, and albums' and artists' pages.
 package youtube
 
 import (

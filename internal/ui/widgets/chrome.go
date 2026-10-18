@@ -1,5 +1,4 @@
-// Package widgets draws the components shared by screens (docs/ui.md,
-// "Components").
+// Package widgets draws the components shared by screens.
 package widgets
 
 import (
@@ -126,7 +125,7 @@ type GlyphStyle struct {
 	Text   text.Style
 }
 
-// Glyph styles from docs/ui.md.
+// Glyph styles.
 var (
 	HintRound = GlyphStyle{Height: 34, Text: text.Style{Face: text.LoraSemiBold, Size: 19}}
 	HintPill  = GlyphStyle{Height: 34, Pad: 10, Radius: 9, Text: text.Style{Face: text.LoraSemiBold, Size: 17}}
@@ -181,7 +180,7 @@ type Hint struct {
 }
 
 // MaxHintsWidth is the room between the hint bar's padding. A screen's hints
-// must fit in it (docs/ui.md, "Button hint bar").
+// must fit in it.
 const MaxHintsWidth = theme.ScreenW - 2*28
 
 func hintStyle(key string) GlyphStyle {

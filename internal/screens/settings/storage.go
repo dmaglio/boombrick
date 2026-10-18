@@ -22,7 +22,7 @@ var valueText = text.Style{Face: text.Lora, Size: 22, Tabular: true}
 // take focus, so that the card, the four rows and the pill fit above the hints.
 const cacheRowH = 56
 
-// storagePage is the Storage page (docs/ui.md, 11b): the card, what the
+// storagePage is the Storage page: the card, what the
 // caches take, and Clear caches, with a dialog to confirm it.
 type storagePage struct {
 	space  Space

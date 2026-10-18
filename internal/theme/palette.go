@@ -6,8 +6,8 @@ import (
 	"math"
 )
 
-// Dominant returns the dominant hue and chroma of img (docs/ui.md, "Album
-// accent", step 1). The image is sampled on a 48x48 grid. Pixels with chroma
+// Dominant returns the dominant hue and chroma of img, the album accent's
+// first step. The image is sampled on a 48x48 grid. Pixels with chroma
 // above 0.04 are bucketed by hue into 10° bins, and the bin with the most
 // pixels wins, counting its two neighbours so that a hue on a bin edge isn't
 // split. ok is false when fewer than 3 % of samples carry colour, which is

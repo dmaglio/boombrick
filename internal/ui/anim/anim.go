@@ -4,7 +4,7 @@ package anim
 
 import "time"
 
-// Durations from docs/ui.md, "Motion".
+// Animation durations.
 const (
 	Focus   = 120 * time.Millisecond
 	Push    = 180 * time.Millisecond

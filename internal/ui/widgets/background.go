@@ -11,7 +11,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/raster"
 )
 
-// Background selects a screen ground from docs/ui.md, "Backgrounds".
+// Background selects a screen's ground.
 type Background uint8
 
 const (

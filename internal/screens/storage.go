@@ -12,7 +12,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/text"
 )
 
-// StorageCardHeight is the storage card's height (docs/ui.md, 09).
+// StorageCardHeight is the storage card's height.
 const StorageCardHeight = 112
 
 var (

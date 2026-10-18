@@ -9,7 +9,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/text"
 )
 
-// Card geometry from docs/ui.md, "Card".
+// Card geometry.
 const (
 	CardRadius = 12
 	CaptionGap = 12 // art to caption

@@ -13,7 +13,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/text"
 )
 
-// The keyboard is fitted to the canvas (docs/plans/04a-search.md): the
+// The keyboard is fitted to the canvas: the
 // design's 56 px keys need 522 px of height and the canvas has 414 between
 // the tabs and the hint bar, so keys are 44 with 8 between them, the field 46
 // high and the text Lora 24.
@@ -35,7 +35,7 @@ var (
 	fieldText = text.Style{Face: text.Lora, Size: 24}
 )
 
-// keyRows are the character keys (docs/ui.md, "On-screen keyboard").
+// keyRows are the character keys.
 var keyRows = [6]string{"abcdefg", "hijklmn", "opqrstu", "vwxyz01", "2345678", "9'-&.,!"}
 
 // Moving between the last row of characters and the bottom row lands on the

@@ -18,7 +18,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ytmusic"
 )
 
-// The results screen (docs/ui.md, 07b): the query pill and the filters in a
+// The results screen: the query pill and the filters in a
 // row across the top, 84 px rows under them. A song's row ends with its
 // status, right-aligned in 96, and its download circle.
 const (
@@ -226,7 +226,7 @@ func (r *Results) drawList(u *ui.Context) {
 }
 
 // albumPill is the room an album row keeps for the "X Download album" pill
-// shown while it is focused (docs/ui.md, 07b): the X glyph 10 in, then the
+// shown while it is focused: the X glyph 10 in, then the
 // words, and 18 after them.
 const (
 	albumPill  = 230

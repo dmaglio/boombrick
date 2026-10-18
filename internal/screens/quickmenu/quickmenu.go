@@ -1,6 +1,5 @@
-// Package quickmenu is the quick menu Menu opens over any screen
-// (docs/ui.md, "Navigation"): the sleep timer, the screen, Settings and
-// quitting.
+// Package quickmenu is the quick menu Menu opens over any screen: the sleep
+// timer, the screen, Settings and quitting.
 package quickmenu
 
 import (

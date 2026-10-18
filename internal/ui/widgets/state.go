@@ -62,7 +62,7 @@ func (c *Wrapped) Lines(u *ui.Context, s string, st text.Style, w float32) []str
 }
 
 // EmptyState draws a state screen's message centred between the tabs and the
-// hint bar (docs/ui.md, screens 12): the logo mark in ink4, a title, a wrapped
+// hint bar: the logo mark in ink4, a title, a wrapped
 // description in ink2 and a detail line in ink3. The screen keeps the
 // description's lines in c, so that it isn't wrapped every frame; with c nil
 // it is.

@@ -1,5 +1,4 @@
-// Package browse is the Library tab and the album and artist pages it opens
-// (docs/ui.md, screen 04).
+// Package browse is the Library tab and the album and artist pages it opens.
 package browse
 
 import (

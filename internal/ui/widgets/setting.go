@@ -18,7 +18,7 @@ type Panel struct {
 }
 
 // BeginPanel draws the scrim and an empty dialog panel h design pixels tall,
-// centred (docs/ui.md, "Dialog"): 660 wide, radius 20, raised, with a
+// centred: 660 wide, radius 20, raised, with a
 // hairline. shown, from 0 to 1, fades it in and grows it from 96 %. Draw what
 // the panel holds inside Box, then call End.
 func BeginPanel(u *ui.Context, h, shown float32) Panel {
@@ -41,8 +41,7 @@ func (p Panel) End(u *ui.Context) {
 	u.Alpha = p.alpha
 }
 
-// SettingHeight is the height of a row of Settings or the quick menu
-// (docs/ui.md, 11).
+// SettingHeight is the height of a row of Settings or the quick menu.
 const SettingHeight = 74
 
 var (

@@ -502,8 +502,7 @@ func TestFiltersMeasureWhatTheyDraw(t *testing.T) {
 	}
 }
 
-// TestDialog draws the "Download failed" dialog of docs/ui.md, 12c, over a
-// tab.
+// TestDialog draws the "Download failed" dialog over a tab.
 func TestDialog(t *testing.T) {
 	u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
 	u.Accent = theme.Derive(265, 0.12)

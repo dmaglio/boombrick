@@ -20,7 +20,7 @@ import (
 
 func TestMain(m *testing.M) { uitest.Main(m) }
 
-// Each of Home's hint sets fits the bar (docs/ui.md, "Button hint bar").
+// Each of Home's hint sets fits the bar.
 func TestHintsFit(t *testing.T) {
 	u, _ := uitest.NewContext(t, 64, 64)
 	check := func(name string, h *Home) {

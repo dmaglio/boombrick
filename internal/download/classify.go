@@ -6,7 +6,7 @@ package download
 import "strings"
 
 // Failure is why a download failed, which decides what the failure dialog
-// offers (docs/ui.md, 12c).
+// offers.
 type Failure uint8
 
 const (

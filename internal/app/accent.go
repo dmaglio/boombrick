@@ -14,7 +14,7 @@ import (
 )
 
 // accentFade eases the accent from one album's colours to the next over
-// anim.Accent (docs/ui.md, "Album accent").
+// anim.Accent.
 type accentFade struct {
 	from, to theme.Accent
 	start    time.Time // zero once settled

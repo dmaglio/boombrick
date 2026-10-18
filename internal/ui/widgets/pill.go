@@ -10,7 +10,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/text"
 )
 
-// PillHeight is a pill button's height (docs/ui.md, "Pill button": 58-62).
+// PillHeight is a pill button's height, within the design's 58-62.
 const PillHeight = 58
 
 var pillText = text.Style{Face: text.Lora, Size: 24}

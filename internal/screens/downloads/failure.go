@@ -18,7 +18,7 @@ const (
 	removeIt
 )
 
-// bodies explain each failure (docs/ui.md, 12c).
+// bodies explain each failure.
 var bodies = map[download.Failure]string{
 	download.NeedsUpdate: "The downloader couldn’t read this track. It is usually fixed by updating the downloader.",
 	download.Network:     "The connection dropped while this track was downloading. Check the Wi-Fi, then try again.",

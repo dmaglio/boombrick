@@ -10,7 +10,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/text"
 )
 
-// Dialog is what a dialog shows (docs/ui.md, "Dialog").
+// Dialog is what a dialog shows.
 type Dialog struct {
 	Icon      string
 	IconColor color.NRGBA // a plain icon's colour
@@ -89,7 +89,7 @@ func DrawDialog(u *ui.Context, d *Dialog, shown float32, focus []float32) {
 		y += u.LineHeight(dialogBody)
 	}
 	y += 28
-	// A dialog holds up to three pills, as docs/ui.md uses; they fit the panel.
+	// A dialog holds up to three pills; they fit the panel.
 	for i, p := range d.Pills {
 		k := float32(0)
 		if i < len(focus) {

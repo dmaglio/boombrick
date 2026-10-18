@@ -14,7 +14,7 @@ var downloadIcons = [...]string{media.Available: "download", media.Queued: "cloc
 	media.Saved: "check", media.Failed: "refresh"}
 
 // DownloadCircle draws a song's download state in a circle size design
-// pixels across with its top-left at (x, y) (docs/ui.md, "Download state").
+// pixels across with its top-left at (x, y).
 // While it downloads, progress, from 0 to 1, sweeps the accent round from
 // 12 o'clock, in whole percents so that the masks it needs stay few.
 func DownloadCircle(u *ui.Context, st media.DownloadState, progress float32, size int, x, y float32) {

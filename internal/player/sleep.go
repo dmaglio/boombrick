@@ -2,8 +2,7 @@ package player
 
 import "time"
 
-// SleepMode is when the sleep timer stops playback (docs/design.md, "Other
-// controls").
+// SleepMode is when the sleep timer stops playback.
 type SleepMode uint8
 
 const (

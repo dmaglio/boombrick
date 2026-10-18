@@ -2,7 +2,7 @@ package theme
 
 import "image/color"
 
-// Colour tokens from docs/ui.md.
+// Colour tokens.
 var (
 	Ground    = Hex("#171514")
 	Raised    = Hex("#22201e")
@@ -40,8 +40,7 @@ const (
 	DeviceH = 768
 )
 
-// Scale is how many device pixels one design pixel covers (docs/ui.md,
-// "Scale").
+// Scale is how many device pixels one design pixel covers.
 const Scale = 1.25
 
 // Canvas size in design pixels, the unit every layout uses.

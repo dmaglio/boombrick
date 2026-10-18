@@ -85,7 +85,7 @@ const (
 
 const (
 	batchSize  = 20
-	minFree    = 200 << 20 // docs/design.md, "Download"
+	minFree    = 200 << 20 // free space under which downloads wait
 	installFor = 10 * time.Minute
 	tellEvery  = 250 * time.Millisecond // progress wakes the UI at most this often
 	netTries   = 3                      // a song fails as Network on its third such failure in a row

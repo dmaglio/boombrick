@@ -1,6 +1,5 @@
-// Package settings is the Settings screen and its Storage page (docs/ui.md,
-// screens 11 and 11b), opened from the quick menu. It shows only the
-// settings whose feature exists.
+// Package settings is the Settings screen and its Storage page, opened from
+// the quick menu. It shows only the settings whose feature exists.
 package settings
 
 import (
@@ -95,7 +94,7 @@ type choice struct {
 	label, detail, value string
 }
 
-// qualities are Download quality's options (docs/design.md, "Settings").
+// qualities are Download quality's options.
 var qualities = []choice{
 	{"Best", "Opus · about 72 MB per hour", "best"},
 	{"Smaller", "Opus · about 32 MB per hour", "smaller"},

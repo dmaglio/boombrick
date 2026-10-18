@@ -16,7 +16,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ytmusic"
 )
 
-// The typing screen (docs/ui.md, 07a): the keyboard on the left, the top
+// The typing screen: the keyboard on the left, the top
 // results on the right under their label. Five 76 px rows, the shortest a
 // list row may be, fit under it.
 const (
@@ -183,7 +183,7 @@ func (s *Search) toKeyboard(now time.Time) {
 }
 
 // Claims takes Start while there is a query and the keyboard has focus: here
-// it searches rather than opening Now Playing (docs/ui.md, 07a). On the
+// it searches rather than opening Now Playing. On the
 // results it goes to the shell.
 func (s *Search) Claims(b input.Button) bool {
 	return b == input.Start && !s.offline && !s.onResults && strings.TrimSpace(s.query) != ""

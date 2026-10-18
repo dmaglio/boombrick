@@ -11,7 +11,7 @@ import (
 // FiltersHeight is the filter row's height.
 const FiltersHeight = 56
 
-// The filter row: Heading at 28 (docs/ui.md, "Type") with an optional
+// The filter row: Heading at 28 with an optional
 // tabular count in ink3; the chosen filter sits on a tinted pill.
 var (
 	filterText = text.Style{Face: text.CormorantSemiBold, Size: 28}

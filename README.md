@@ -41,13 +41,7 @@ Pushing a tag like `v0.5.0` builds the pak with that version and publishes it, w
 | Power | P |
 | Volume down, up | -, = |
 
-Menu opens the quick menu, which has Quit. P turns the screen off and on; holding it for a second quits, as holding Power powers the Brick off.
-
-## Documentation
-
-- [docs/design.md](docs/design.md): behaviour and architecture
-- [docs/ui.md](docs/ui.md): visual design and screen layouts
-- [docs/plans/](docs/plans/): implementation plans
+Menu opens the quick menu, which has Quit. P turns the screen off and on; holding it for a second quits, as holding Power powers the Brick off. With the screen off, Q and E (L1, R1) skip back and on, and K (A) plays or pauses.
 
 ## Licence
 

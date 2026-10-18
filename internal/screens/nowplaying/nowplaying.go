@@ -1,4 +1,4 @@
-// Package nowplaying is the Now Playing screen (docs/ui.md, screen 02).
+// Package nowplaying is the Now Playing screen.
 package nowplaying
 
 import (
@@ -44,7 +44,7 @@ const (
 // lyricsPill is the focus index of the Lyrics pill, under the controls.
 const lyricsPill = controlCount
 
-// The Lyrics pill (docs/ui.md, screen 02, "Bottom row"): 48 high with a
+// The Lyrics pill: 48 high with a
 // 1.5 px border, holding a Y glyph, the lyrics icon and "Lyrics".
 const lyricsH = 48
 
@@ -57,7 +57,7 @@ var controlOffset = [controlCount]float32{-170, -100, 0, 100, 170}
 
 var controlIcons = [controlCount]string{"shuffle", "prev", "play", "next", "repeat"}
 
-// Layout in design pixels: docs/ui.md, screen 02, fitted to the canvas.
+// Layout in design pixels, fitted to the canvas.
 const (
 	side     = 44
 	artSize  = 300
@@ -249,7 +249,7 @@ func (n *NowPlaying) activate() {
 }
 
 // Tick asks for frames 4 times a second while music plays, for the progress
-// bar (docs/ui.md, "Motion").
+// bar.
 func (n *NowPlaying) Tick() time.Duration { return 250 * time.Millisecond }
 
 // Animating reports whether focus is moving. The progress bar is redrawn on

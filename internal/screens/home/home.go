@@ -1,5 +1,4 @@
-// Package home is the Home tab: rows of recent and saved music (docs/ui.md,
-// screen 01).
+// Package home is the Home tab: rows of recent and saved music.
 package home
 
 import (
@@ -22,7 +21,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
-// Layout from docs/ui.md, screen 01, in design pixels.
+// Layout in design pixels.
 const (
 	contentTop = widgets.StatusHeight + widgets.TabsHeight
 	contentBot = theme.ScreenH - widgets.HintsHeight
@@ -122,8 +121,7 @@ func (h *Home) SetRows(rows []fixture.Row) {
 // maxRecent is how many albums the Recently added row shows.
 const maxRecent = 12
 
-// maxContinue is how many albums Continue listening shows (docs/ui.md,
-// screen 01: up to four cards).
+// maxContinue is how many albums Continue listening shows.
 const maxContinue = 4
 
 // ContinueRow is Continue listening: albums part-way through, most recent

@@ -5,8 +5,7 @@ import (
 	"math"
 )
 
-// Accent is the set of colours a screen takes from the playing track's art
-// (docs/ui.md, "Album accent").
+// Accent is the set of colours a screen takes from the playing track's art.
 type Accent struct {
 	Hue, Chroma float64
 	Glow        color.NRGBA // background gradient

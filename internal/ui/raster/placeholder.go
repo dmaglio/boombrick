@@ -8,8 +8,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/theme"
 )
 
-// Placeholder draws generated cover art for items without artwork (docs/ui.md,
-// "Placeholder art"). glyph is an optional white mask of the item's first
+// Placeholder draws generated cover art for items without artwork. glyph is an optional white mask of the item's first
 // letter, drawn at (gx, gy) in variant 2.
 func Placeholder(size int, radius, hue float64, variant int, glyph *image.NRGBA, gx, gy int) *image.NRGBA {
 	const c = 0.12

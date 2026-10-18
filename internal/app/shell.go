@@ -10,7 +10,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
-// Toast timing: shown for 2.5 s (docs/ui.md, "Toast"), fading in and out.
+// Toast timing: shown for 2.5 s, fading in and out.
 const (
 	toastFor  = 2500 * time.Millisecond
 	toastFade = 150 * time.Millisecond

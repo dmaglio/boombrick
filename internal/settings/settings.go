@@ -1,5 +1,5 @@
 // Package settings stores user preferences in the settings table and falls
-// back to the defaults documented in docs/design.md. Reads come from memory,
+// back to their defaults. Reads come from memory,
 // and writes reach the database from a goroutine of their own, so the UI
 // thread never waits for the SD card.
 package settings

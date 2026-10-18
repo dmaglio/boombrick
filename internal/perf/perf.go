@@ -1,6 +1,6 @@
 // Package perf is perf mode: the launch's stages, then every 10 s the
 // process's memory, CPU and frame times, logged for comparison with the
-// budget in docs/design.md. Off, it costs nothing.
+// performance budget. Off, it costs nothing.
 package perf
 
 import (

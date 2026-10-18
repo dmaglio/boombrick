@@ -14,7 +14,8 @@ type Repeater struct {
 	count int
 }
 
-// NewRepeater returns a repeater with the timings from docs/design.md.
+// NewRepeater returns a repeater that starts after 300 ms and repeats every
+// 60 ms, then every 30 ms after ten repeats.
 func NewRepeater() *Repeater {
 	return &Repeater{
 		Delay:        300 * time.Millisecond,

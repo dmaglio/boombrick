@@ -115,8 +115,8 @@ func settle(p settler, outcomes []download.Outcome) (landed bool, dropped int) {
 	return landed, dropped
 }
 
-// waitFor moves the download playback waits on to the front of the queue
-// (docs/design.md, "Queue"), or hands the player the file if it has already
+// waitFor moves the download playback waits on to the front of the queue,
+// or hands the player the file if it has already
 // landed. A song the queue has forgotten, as when a power cut lost its row,
 // is asked for again.
 func waitFor(dl ytDownloads, p settler, t player.Track) {

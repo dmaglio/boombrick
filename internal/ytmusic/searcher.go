@@ -39,7 +39,7 @@ type Options struct {
 	Online func() bool // nil: always online
 	Log    *slog.Logger
 	// Pause is how long typing must stop before a search is sent; 0 means
-	// 300 ms (docs/design.md, "Search").
+	// 300 ms.
 	Pause time.Duration
 	// Retry is how long an answer other than Done stands before asking for
 	// it again sends it again; 0 means 10 s.

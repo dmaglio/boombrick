@@ -250,7 +250,7 @@ func readRow(src image.Image, x0, y, n int, row []float32) {
 
 func to8(v float32) uint8 { return uint8(min(max(v+0.5, 0), 255)) }
 
-// Colour is the art's dominant hue and chroma (docs/ui.md, "Album accent"):
+// Colour is the art's dominant hue and chroma, for the album accent:
 // the art is averaged down to 48 x 48 and every pixel of that sampled. ok is
 // false for greyscale art.
 func Colour(img *image.NRGBA) (hue, chroma float64, ok bool) {
@@ -261,8 +261,8 @@ func Colour(img *image.NRGBA) (hue, chroma float64, ok bool) {
 // linear filtering, which a picture this blurred survives.
 const backdropPx = 64
 
-// Backdrop is the Lyrics screen's background made from the art (docs/ui.md,
-// "Backgrounds"): 64 x 64, blurred by about 5 % of its width, as the design's
+// Backdrop is the Lyrics screen's background made from the art: 64 x 64,
+// blurred by about 5 % of its width, as the design's
 // 70 px blur is of its 1400 px art, and 20 % more saturated.
 func Backdrop(img *image.NRGBA) *image.NRGBA {
 	b := Square(img, backdropPx)

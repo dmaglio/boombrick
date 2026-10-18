@@ -1,4 +1,4 @@
-// Package queue is the Queue screen (docs/ui.md, screen 10): what's playing,
+// Package queue is the Queue screen: what's playing,
 // what follows, and moving or removing what follows.
 package queue
 
@@ -29,7 +29,7 @@ type Player interface {
 	Move(from, to int)
 }
 
-// Layout: a full screen, padding 40 (docs/ui.md, "Shape").
+// Layout: a full screen, padding 40.
 const (
 	side    = 40
 	panelH  = 88 // 64 px art and 12 above and below

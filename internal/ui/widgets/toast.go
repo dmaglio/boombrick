@@ -11,7 +11,7 @@ import (
 var toastText = text.Style{Face: text.Lora, Size: 24}
 
 // Toast draws msg centred 16 px above the hint bar on the raised colour,
-// padding 14 22 and radius 14 (docs/ui.md, "Toast"). alpha fades it.
+// padding 14 22 and radius 14. alpha fades it.
 func Toast(u *ui.Context, msg string, alpha float32) {
 	w := u.TextWidth(msg, toastText) + 44
 	h := u.LineHeight(toastText) + 28

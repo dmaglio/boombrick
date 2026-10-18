@@ -1,6 +1,5 @@
-// Package lyrics is the Lyrics screen (docs/ui.md, screen 03): the playing
-// track's lyrics over its blurred art, the current line filling in as it is
-// sung.
+// Package lyrics is the Lyrics screen: the playing track's lyrics over its
+// blurred art, the current line filling in as it is sung.
 package lyrics
 
 import (
@@ -34,7 +33,7 @@ type Source interface {
 	Lyrics(t lrc.Track) (lrc.Lyrics, lrc.State)
 }
 
-// Layout from docs/ui.md, screen 03, in design pixels.
+// Layout in design pixels.
 const (
 	side      = 56
 	headTop   = widgets.StatusHeight + 12
@@ -239,9 +238,8 @@ func (s *Screen) Back() bool {
 }
 
 // Tick asks for 30 frames a second while a line of synced lyrics fills in or
-// the next is about to rise into place, and 4 for the progress bar otherwise
-// (docs/ui.md, "Motion"): before the first line, in a break once a line is
-// sung and through the end.
+// the next is about to rise into place, and 4 for the progress bar otherwise:
+// before the first line, in a break once a line is sung and through the end.
 func (s *Screen) Tick() time.Duration {
 	if s.state != lrc.Found || !s.ly.Synced {
 		return 250 * time.Millisecond
@@ -286,7 +284,7 @@ func (s *Screen) Draw(u *ui.Context) {
 	}
 }
 
-// drawBackdrop draws the blurred art (docs/ui.md, "Backgrounds"): 1400 px
+// drawBackdrop draws the blurred art: 1400 px
 // square at (-200, -260) on the 1024 frame, so 1120 at (-160, -208) on the
 // canvas, 75 % over the ground, under a veil of ground from 55 % at the top
 // to 82 % at the bottom. Without art the Now Playing glow stands in.
