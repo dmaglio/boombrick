@@ -3,6 +3,7 @@ package app
 
 import (
 	"fmt"
+	"image/color"
 	"log/slog"
 	"path/filepath"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/library"
 	lrc "github.com/ujjwal313/boombrick/internal/lyrics"
 	"github.com/ujjwal313/boombrick/internal/media"
+	"github.com/ujjwal313/boombrick/internal/perf"
 	"github.com/ujjwal313/boombrick/internal/platform"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
 	"github.com/ujjwal313/boombrick/internal/player"
@@ -27,6 +29,8 @@ import (
 	lyricsscreen "github.com/ujjwal313/boombrick/internal/screens/lyrics"
 	"github.com/ujjwal313/boombrick/internal/screens/nowplaying"
 	"github.com/ujjwal313/boombrick/internal/screens/queue"
+	"github.com/ujjwal313/boombrick/internal/screens/quickmenu"
+	settingsscreen "github.com/ujjwal313/boombrick/internal/screens/settings"
 	"github.com/ujjwal313/boombrick/internal/screens/youtube"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
@@ -69,7 +73,60 @@ type Options struct {
 	Downloads Downloads
 	// Lyrics finds tracks' lyrics. Without it there is no Lyrics screen.
 	Lyrics Lyrics
+	// Prefs are the user's settings. Without them there is no Settings
+	// screen, and the quick menu's Settings row does nothing.
+	Prefs settingsscreen.Prefs
+	// Space measures and clears the caches for Settings' Storage page; nil
+	// leaves the page out.
+	Space Space
+	// Backlight turns the screen's light off and on. Without it, or when it
+	// fails, a screen turned off is drawn black instead, as on a desktop.
+	Backlight Backlight
+	// PowerOff asks NextUI to shut the device down once Boombrick has quit;
+	// nil on a desktop, where holding Power only quits.
+	PowerOff func() error
+	// Version and Device are shown at the foot of Settings.
+	Version, Device string
+	// ToolReleases and Releases find yt-dlp's and Boombrick's latest
+	// releases for Settings' cards; without them the cards never say there
+	// is one.
+	ToolReleases, Releases Releases
+	// Updater stages a newer Boombrick for the next launch. Without it, as on
+	// a desktop, Settings doesn't offer Update Boombrick.
+	Updater Updater
+	// Perf records frame times in perf mode; nil when it is off.
+	Perf *perf.Recorder
 }
+
+// Releases is what the app needs from a release checker. *release.Checker
+// is one.
+type Releases interface {
+	settingsscreen.Releases
+	Ready() <-chan struct{}
+}
+
+// Updater is what the app needs from the updater. *selfupdate.Updater is
+// one.
+type Updater interface {
+	settingsscreen.Updater
+	Ready() <-chan struct{}
+}
+
+// Space is what the app needs from the cache meter. *space.Meter is one.
+type Space interface {
+	settingsscreen.Space
+	Ready() <-chan struct{}
+}
+
+// Backlight is the screen's light. *platform.Backlight is one.
+type Backlight interface {
+	Off() error
+	On() error
+}
+
+// powerHold is how long Power is held to power the device off, as NextUI's
+// own apps take it; a shorter press turns the screen off or on.
+const powerHold = time.Second
 
 // Covers is what the app needs from the art cache.
 type Covers interface {
@@ -127,9 +184,15 @@ type App struct {
 	downloaded atomic.Bool // the download queue changed since poll last looked
 	landed     atomic.Bool // and downloads landed, to show in the library
 	skipped    atomic.Bool // and a queued song was dropped, its download failed
+	measured   atomic.Bool // the cache meter has news for the Storage page
+	released   atomic.Bool // a release was found, or an update moved on, for Settings
 	quit       bool
 	drawn      bool
-	scanEnded  bool // a scan has ended, so an empty index is the library
+	drawnAt    time.Time // the start of the frame drawn last
+	dark       bool      // the screen is off: nothing is drawn and only Power is heard
+	lightOff   bool      // the backlight was turned off, to be turned on again
+	powerAt    time.Time // when Power went down, while it is held
+	scanEnded  bool      // a scan has ended, so an empty index is the library
 	wasAnim    bool
 
 	loads *loader
@@ -280,7 +343,50 @@ func New(opts Options) (*App, error) {
 	if opts.Lyrics != nil {
 		a.forward(opts.Lyrics.Ready(), &a.words)
 	}
+	a.shell.menu = a.quickMenu()
 	return a, nil
+}
+
+// quickMenu makes the quick menu, and the Settings screen it opens.
+func (a *App) quickMenu() *quickmenu.Menu {
+	act := quickmenu.Actions{Sleep: a.opts.Player.Sleep, SetSleep: a.opts.Player.SetSleep,
+		ScreenOff: func() { a.setDark(true) }, OpenSettings: func() {}, Quit: func() { a.quit = true }}
+	if a.opts.Prefs != nil {
+		o := settingsscreen.Options{Prefs: a.opts.Prefs, Player: a.opts.Player, Card: a.card, Toast: a.Toast,
+			Version: a.opts.Version, Device: a.opts.Device, Quit: func() { a.quit = true }}
+		if a.opts.Space != nil {
+			o.Space = a.opts.Space
+			a.forward(a.opts.Space.Ready(), &a.measured)
+		}
+		if a.opts.Downloads != nil {
+			o.Downloader = a.opts.Downloads
+		}
+		if a.opts.ToolReleases != nil {
+			o.ToolReleases = a.opts.ToolReleases
+			a.forward(a.opts.ToolReleases.Ready(), &a.released)
+		}
+		if a.opts.Releases != nil {
+			o.Releases = a.opts.Releases
+			a.forward(a.opts.Releases.Ready(), &a.released)
+		}
+		if a.opts.Updater != nil {
+			o.Updater = a.opts.Updater
+			a.forward(a.opts.Updater.Ready(), &a.released)
+		}
+		at := a.shell.add(overlay{button: input.None, screen: settingsscreen.New(o)})
+		act.OpenSettings = func() { a.shell.openOverlay(at, time.Now()) }
+	}
+	return quickmenu.New(act)
+}
+
+// card is the SD card's space as the download queue last read it, for
+// Settings.
+func (a *App) card() (total, free, music int64) {
+	if a.opts.Downloads == nil {
+		return 0, 0, 0
+	}
+	s := a.opts.Downloads.Status().Storage
+	return s.Total, s.Free, s.Music
 }
 
 // forward sets flag and wakes the loop each time ready receives, for poll to
@@ -318,13 +424,15 @@ func (a *App) Pop() { a.shell.pop(time.Now()); a.dirty = true }
 // Toast shows msg above the hint bar.
 func (a *App) Toast(msg string) { a.shell.showToast(msg, time.Now()); a.dirty = true }
 
-// Close stops the status reader and releases SDL.
+// Close stops the status reader, turns the screen back on if it was off,
+// and releases SDL.
 func (a *App) Close() {
 	a.mu.Lock()
 	a.closed = true
 	a.mu.Unlock()
 	close(a.stop)
 	a.reader.Wait()
+	a.lightUp()
 	a.renderer.Destroy()
 	a.window.Destroy()
 	sdl.Quit()
@@ -359,12 +467,21 @@ func (a *App) Run() error {
 			a.ui.Status.Time = fmt.Sprintf("%d:%02d", now.Hour(), now.Minute())
 			a.dirty = true
 		}
+		if a.powerHeld(now) {
+			continue // powering off
+		}
 		a.poll()
+		if a.dark {
+			a.darkFrame()
+			a.wasAnim = false
+			a.wait(now)
+			continue
+		}
 		anim := a.animating(now)
 		// Draw once more when an animation stops so its settled frame shows.
 		if a.dirty || anim || a.wasAnim {
 			a.draw(now)
-			a.dirty = false
+			a.dirty, a.drawnAt = false, now
 			if !a.drawn {
 				a.drawn = true
 				a.opts.Log.Info("first frame", "since_start", time.Since(a.opts.Started).Round(time.Millisecond))
@@ -470,6 +587,17 @@ func (a *App) poll() {
 	if p := tickFor(a.shell.overlay()); a.shell.open >= 0 && st.Elapsed/p != l.Elapsed/p {
 		a.dirty = true
 	}
+	if a.measured.Swap(false) {
+		a.dirty = true
+	}
+	if a.released.Swap(false) {
+		a.dirty = true
+	}
+	// A sleep timer's time left, in the quick menu or Settings, moves on
+	// whether or not music plays.
+	if due, ok := a.shell.due(a.drawnAt); ok && !time.Now().Before(due) {
+		a.dirty = true
+	}
 	a.last = st
 }
 
@@ -561,10 +689,20 @@ func (a *App) animating(now time.Time) bool {
 }
 
 func (a *App) draw(now time.Time) {
+	var began time.Time
+	if a.opts.Perf != nil {
+		began = time.Now()
+	}
 	a.ui.BeginFrame(now)
 	a.ui.Accent, a.ui.Fade = a.fade.at(now)
 	a.shell.draw(a.ui)
+	if a.opts.Perf == nil {
+		a.ui.Canvas.Present()
+		return
+	}
+	drawn := time.Now()
 	a.ui.Canvas.Present()
+	a.opts.Perf.Frame(drawn.Sub(began), time.Since(began))
 }
 
 func (a *App) wait(now time.Time) {
@@ -583,15 +721,33 @@ func (a *App) wait(now time.Time) {
 	}
 }
 
+// frameEvery is the time from one frame's start to the next while something
+// moves. Where vsync works, presenting a frame waits for the display and this
+// has passed already; where it doesn't, the loop still draws no faster than
+// the display shows.
+const frameEvery = 16 * time.Millisecond
+
 // timeout is how long the loop may sleep, at now, after the frame begun at
-// start: until the clock's next minute, or sooner the next key repeat, toast
-// or, while music plays, the open screen's next tick. The tick counts from the
-// frame's start, so the time the frame took to draw doesn't lengthen it. A
-// toast raised after the frame began, while it was polled or drawn, hasn't
-// shown yet, so the next frame comes at once.
+// start: until the clock's next minute, or sooner the next key repeat, toast,
+// animation frame or, while music plays, the open screen's next tick. The
+// tick counts from the frame's start, so the time the frame took to draw
+// doesn't lengthen it. A toast raised after the frame began, while it was
+// polled or drawn, hasn't shown yet, so the next frame comes at once.
 func (a *App) timeout(start, now time.Time) time.Duration {
 	timeout := start.Truncate(time.Minute).Add(time.Minute).Sub(now)
-	if a.animating(start) || a.shell.toastAt.After(start) {
+	if !a.powerAt.IsZero() {
+		timeout = min(timeout, a.powerAt.Add(powerHold).Sub(now)) // held that long, it powers off
+	}
+	if a.dark {
+		return max(timeout, 0) // nothing shows, so nothing ticks
+	}
+	if due, ok := a.shell.due(start); ok {
+		timeout = min(timeout, due.Sub(now))
+	}
+	if a.animating(start) {
+		timeout = min(timeout, start.Add(frameEvery).Sub(now))
+	}
+	if a.shell.toastAt.After(start) {
 		timeout = 0
 	}
 	if a.last.Playing {
@@ -612,8 +768,14 @@ func (a *App) event(ev sdl.Event) {
 	case *sdl.QuitEvent:
 		a.quit = true
 	case *sdl.KeyboardEvent:
+		if e.Type == sdl.KEYDOWN && e.Repeat == 0 {
+			a.shell.chord() // even a key Boombrick doesn't use, as NextUI's volume keys may be
+		}
 		evs = a.mapper.Key(int(e.Keysym.Scancode), e.Type == sdl.KEYDOWN, e.Repeat != 0)
 	case *sdl.JoyButtonEvent:
+		if e.State == sdl.PRESSED {
+			a.shell.chord()
+		}
 		evs = a.mapper.JoyButton(e.Button, e.State == sdl.PRESSED)
 	case *sdl.JoyHatEvent:
 		evs = a.mapper.JoyHat(e.Value)
@@ -639,12 +801,93 @@ func (a *App) dispatch(e input.Event) {
 		delete(a.held, e.Button)
 		a.repeat.Release(e.Button)
 	}
-	// Select + Start quits until the quick menu, with its Quit entry, exists.
-	if a.held[input.Select] && a.held[input.Start] {
-		a.quit = true
+	if e.Button == input.Power {
+		a.power(e, now)
 		return
+	}
+	if a.dark {
+		return // the screen is off: only Power is heard
 	}
 	if a.shell.handle(e, now) {
 		a.dirty = true
 	}
+}
+
+// power turns the screen off or on when Power is let go within powerHold;
+// Run powers the device off when it is held longer.
+func (a *App) power(e input.Event, now time.Time) {
+	switch e.Kind {
+	case input.Press:
+		a.powerAt = now
+	case input.Release:
+		if !a.powerAt.IsZero() && now.Sub(a.powerAt) < powerHold {
+			a.setDark(!a.dark)
+		}
+		a.powerAt = time.Time{}
+	}
+}
+
+// setDark turns the screen off or back on. Off, the backlight goes off where
+// there is one, nothing is drawn and only Power is heard; music plays on.
+func (a *App) setDark(dark bool) {
+	if dark == a.dark {
+		return
+	}
+	a.dark, a.dirty = dark, true
+	if !dark {
+		a.lightUp()
+		return
+	}
+	if a.opts.Backlight != nil {
+		if err := a.opts.Backlight.Off(); err != nil {
+			a.opts.Log.Info("backlight stays on", "err", err)
+		} else {
+			a.lightOff = true
+		}
+	}
+}
+
+// darkFrame draws what shows while the screen is off: nothing with the
+// backlight off, and where it couldn't be turned off, a black frame when
+// something changed.
+func (a *App) darkFrame() {
+	if a.dirty && !a.lightOff {
+		a.ui.Canvas.Clear(color.NRGBA{A: 255})
+		a.ui.Canvas.Present()
+	}
+	a.dirty = false
+}
+
+// lightUp turns the backlight on again if setDark turned it off.
+func (a *App) lightUp() {
+	if !a.lightOff {
+		return
+	}
+	a.lightOff = false
+	if err := a.opts.Backlight.On(); err != nil {
+		a.opts.Log.Warn("turn the backlight on", "err", err)
+	}
+}
+
+// powerHeld powers off once Power has been held for powerHold at now, and
+// reports whether it did.
+func (a *App) powerHeld(now time.Time) bool {
+	if a.powerAt.IsZero() || now.Sub(a.powerAt) < powerHold {
+		return false
+	}
+	a.powerAt = time.Time{}
+	a.powerOff()
+	return true
+}
+
+// powerOff quits, asking NextUI to shut the device down after, as holding
+// Power does in NextUI's own apps. Quitting saves the queue as ever.
+func (a *App) powerOff() {
+	a.opts.Log.Info("powering off")
+	if a.opts.PowerOff != nil {
+		if err := a.opts.PowerOff(); err != nil {
+			a.opts.Log.Error("ask NextUI to power off", "err", err)
+		}
+	}
+	a.quit = true
 }

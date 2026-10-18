@@ -16,6 +16,15 @@ const (
 	toastFade = 150 * time.Millisecond
 )
 
+// modal is a dialog over everything else, the quick menu, which takes all
+// input while it is open.
+type modal interface {
+	screens.Screen
+	Open(now time.Time)
+	IsOpen() bool
+	Visible(now time.Time) bool
+}
+
 // overlay is a full-screen screen opened over the tabs with a button.
 type overlay struct {
 	button input.Button
@@ -35,6 +44,8 @@ type shell struct {
 	open     int        // the open overlay, or -1
 	showing  int        // the overlay drawn: the open one, or one fading out
 	shown    anim.Value // the overlay's slide and fade, 0 to 1
+	menu     modal      // opened by Menu; nil for none
+	menuDown bool       // Menu is down, and opens the menu when let go unless another button comes first
 	toast    string
 	toastAt  time.Time
 }
@@ -132,15 +143,33 @@ func (s *shell) closeOverlay(now time.Time) {
 	s.shown.To(0, now, anim.Push, anim.EaseOutCubic)
 }
 
-// handle routes a button event and reports whether the frame changed. An
+// handle routes a button event and reports whether the frame changed. The
+// quick menu takes everything while it is open, and Menu opens it when let go
+// alone: NextUI sets the brightness with Menu and the volume buttons. An
 // overlay's button opens it from anywhere, or closes it when it is open; B
 // closes an open overlay, unless the overlay uses it, or pops a page; L1 and
-// R1 switch tabs when no overlay is open. A tab screen may claim one of those
-// buttons for itself (screens.Claimer).
+// R1 switch tabs when no overlay is open. The screen input goes to may claim
+// one of those buttons for itself (screens.Claimer).
 func (s *shell) handle(e input.Event, now time.Time) bool {
+	if s.menu != nil && s.menu.IsOpen() {
+		return s.menu.Handle(e, now)
+	}
+	if e.Kind == input.Release && e.Button == input.Menu && s.menuDown {
+		s.menuDown = false
+		// A dialog may have opened meanwhile; it keeps Menu.
+		if c, ok := s.active().(screens.Claimer); !ok || !c.Claims(input.Menu) {
+			s.menu.Open(now)
+			return true
+		}
+	}
 	if e.Kind == input.Press {
-		if c, ok := s.top().(screens.Claimer); ok && s.open < 0 && c.Claims(e.Button) {
-			return s.top().Handle(e, now)
+		s.menuDown = false // another button makes a chord of Menu
+		if c, ok := s.active().(screens.Claimer); ok && c.Claims(e.Button) {
+			return s.active().Handle(e, now)
+		}
+		if e.Button == input.Menu && s.menu != nil {
+			s.menuDown = true
+			return false
 		}
 		for i, o := range s.overlays {
 			if e.Button != o.button {
@@ -180,8 +209,13 @@ func (s *shell) handle(e input.Event, now time.Time) bool {
 	return s.active().Handle(e, now)
 }
 
+// chord tells the shell a button went down, before it is mapped: Menu then
+// opens nothing when let go. Unmapped buttons count, so that NextUI's own
+// chords with Menu pass by.
+func (s *shell) chord() { s.menuDown = false }
+
 // draw renders the tab's pages, the overlay sliding 40 px and fading over
-// them, then any toast.
+// them, the quick menu, then any toast.
 func (s *shell) draw(u *ui.Context) {
 	now := u.Now
 	t := float32(s.shown.At(now))
@@ -193,6 +227,9 @@ func (s *shell) draw(u *ui.Context) {
 	}
 	if s.showing >= 0 && s.open < 0 && s.shown.Done(now) {
 		s.showing = -1
+	}
+	if s.menu != nil && s.menu.Visible(now) {
+		s.menu.Draw(u)
 	}
 	if a := s.toastAlpha(now); a > 0 {
 		widgets.Toast(u, s.toast, a)
@@ -244,7 +281,29 @@ func (s *shell) animating(now time.Time) bool {
 	if d := now.Sub(s.toastAt); s.toast != "" && d >= 0 && (d < toastFade || d >= toastFor-toastFade && d < toastFor) {
 		return true
 	}
+	if s.menu != nil && s.menu.Visible(now) && s.menu.Animating(now) {
+		return true
+	}
 	return s.active().Animating(now)
+}
+
+// due is when what is shown next changes by itself after t, as a sleep
+// timer's time left does in the quick menu or on the screen shown.
+func (s *shell) due(t time.Time) (time.Time, bool) {
+	at, ok := dueOf(s.active(), t)
+	if s.menu != nil && s.menu.IsOpen() {
+		if m, mok := dueOf(s.menu, t); mok && (!ok || m.Before(at)) {
+			at, ok = m, true
+		}
+	}
+	return at, ok
+}
+
+func dueOf(scr screens.Screen, t time.Time) (time.Time, bool) {
+	if tk, ok := scr.(screens.Ticking); ok {
+		return tk.Due(t)
+	}
+	return time.Time{}, false
 }
 
 // wake is when the loop must next draw though nothing animates now: a toast

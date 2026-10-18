@@ -1,5 +1,7 @@
 package screens
 
+import "time"
+
 // AddedToQueue is the toast shown after something is added to the queue.
 const AddedToQueue = "Added to queue"
 
@@ -26,4 +28,11 @@ type Backer interface {
 // state left from the last time it was shown.
 type Opener interface {
 	Opened()
+}
+
+// Ticking is a screen that shows a time moving on by itself, as the sleep
+// timer's time left, even with no music playing. Due reports when what it
+// shows next changes after t, so a frame is drawn then.
+type Ticking interface {
+	Due(t time.Time) (time.Time, bool)
 }

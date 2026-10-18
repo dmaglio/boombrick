@@ -95,8 +95,8 @@ func TestTheTab(t *testing.T) {
 	if l := d.lines[1]; l.status != "78 % · 4.1 MB/s" || l.title != "Night Drive Theory — Lumen Coast" {
 		t.Fatalf("the downloading row: %+v", l)
 	}
-	if d.summary != "20.9 GB used · 38.6 GB free of 59.5 GB" {
-		t.Fatalf("summary %q", d.summary)
+	if d.card.Summary() != "20.9 GB used · 38.6 GB free of 59.5 GB" {
+		t.Fatalf("summary %q", d.card.Summary())
 	}
 }
 
@@ -170,15 +170,6 @@ func TestTheFailureDialog(t *testing.T) {
 func TestAnEmptyQueue(t *testing.T) {
 	src := &fakeSource{status: download.Status{Version: 1, Storage: sample().Storage}}
 	uitest.Golden(t, "downloads-empty", render(t, New(&fakeNav{}, src), t0))
-}
-
-func TestSizes(t *testing.T) {
-	cases := map[int64]string{512: "1 KB", 9_856_000: "9.4 MB", 595 * gib / 10: "59.5 GB"}
-	for n, want := range cases {
-		if got := size(n); got != want {
-			t.Errorf("size(%d) = %q, want %q", n, got, want)
-		}
-	}
 }
 
 // bump changes the status and its version, as the service does.

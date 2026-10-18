@@ -4,8 +4,6 @@
 package downloads
 
 import (
-	"fmt"
-	"image/color"
 	"strconv"
 	"time"
 
@@ -38,8 +36,7 @@ const tab = 4
 // in 66 px rows, each heading a row of its own.
 const (
 	cardTop = screens.ContentTop + 8
-	cardH   = 112
-	listTop = cardTop + cardH
+	listTop = cardTop + screens.StorageCardHeight
 	rowH    = 66
 	artSize = 50
 	barH    = 5
@@ -47,7 +44,6 @@ const (
 )
 
 var (
-	cardTitle  = text.Style{Face: text.Lora, Size: 26}
 	headText   = text.Style{Face: text.Lora, Size: 20}
 	titleText  = text.Style{Face: text.Lora, Size: 24}
 	statusText = text.Style{Face: text.Lora, Size: 20}
@@ -73,8 +69,7 @@ type Downloads struct {
 	status  download.Status
 	lines   []line
 	list    views.Grid
-	summary string    // the card's "used · free of" line
-	legend  [3]string // music, other, free
+	card    screens.StorageCard
 	dlg     *failure
 	retryW  float32 // the Retry pill's width, measured on the first draw
 	hintFor hintKey
@@ -110,7 +105,7 @@ func (d *Downloads) refresh() {
 	old := d.list.Focus()
 	d.version, d.status = st.Version, st
 	d.lines = sections(st)
-	d.summary, d.legend = storage(st.Storage)
+	d.card.Set(st.Storage.Total, st.Storage.Free, st.Storage.Music)
 	f := -1
 	for i := range d.lines {
 		if focused != "" && !d.lines[i].skip() && d.lines[i].entry.Song.VideoID == focused {
@@ -161,7 +156,7 @@ func sections(st download.Status) []line {
 		case media.Downloading:
 			l.status, l.progress = strconv.Itoa(int(e.Progress*100+0.5))+" %", e.Progress
 			if e.Speed > 0 {
-				l.status += " · " + size(int64(e.Speed)) + "/s"
+				l.status += " · " + screens.Size(int64(e.Speed)) + "/s"
 			}
 			active = append(active, l)
 		case media.Queued:
@@ -171,7 +166,7 @@ func sections(st download.Status) []line {
 			l.status = failureText[e.Failure]
 			failed = append(failed, l)
 		case media.Saved:
-			l.status = size(e.Bytes)
+			l.status = screens.Size(e.Bytes)
 			done = append(done, l)
 		}
 	}
@@ -214,24 +209,6 @@ func art(s ytmusic.Song) widgets.ArtSpec {
 		a.Cover = media.Cover{URL: s.Thumb}
 	}
 	return a
-}
-
-// storage makes the card's lines.
-func storage(s download.Storage) (string, [3]string) {
-	used := s.Total - s.Free
-	return size(used) + " used · " + size(s.Free) + " free of " + size(s.Total),
-		[3]string{"Music " + size(s.Music), "Other " + size(max(used-s.Music, 0)), "Free " + size(s.Free)}
-}
-
-// size is a byte count as the tab writes it: "9.4 MB", "59.5 GB".
-func size(n int64) string {
-	switch {
-	case n >= 1<<30:
-		return fmt.Sprintf("%.1f GB", float64(n)/(1<<30))
-	case n >= 1<<20:
-		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
-	}
-	return strconv.FormatInt((n+1023)/1024, 10) + " KB"
 }
 
 // focused is the download focus is on, if focus is on one.
@@ -302,10 +279,10 @@ func (d *Downloads) move(b input.Button, now time.Time) bool {
 	return false
 }
 
-// Claims takes Start and Select while the dialog is open, so nothing opens
-// over it.
+// Claims takes Start, Select and Menu while the dialog is open, so nothing
+// opens over it.
 func (d *Downloads) Claims(b input.Button) bool {
-	return d.dlg != nil && (b == input.Start || b == input.Select)
+	return d.dlg != nil && (b == input.Start || b == input.Select || b == input.Menu)
 }
 
 // Animating reports whether focus, the list or the dialog is moving.
@@ -341,34 +318,7 @@ func (d *Downloads) Draw(u *ui.Context) {
 }
 
 func (d *Downloads) drawCard(u *ui.Context) {
-	box := gfx.Rect{X: screens.Side, Y: cardTop, W: theme.ScreenW - 2*screens.Side, H: cardH}
-	u.Shape(raster.Shape{W: int(box.W), H: cardH, Radius: 14, Kind: raster.Ring, RingOffset: -1, RingWidth: 1}, box,
-		theme.PaperA(0.14))
-	x, y := box.X+20, box.Y+14
-	u.Icon("sd", 26, 2, false, x, y+4, theme.Paper)
-	u.Text("SD card", cardTitle, x+36, u.CenterY(cardTitle, y, 34), theme.Paper)
-	st := d.status.Storage
-	if st.Total <= 0 {
-		return
-	}
-	u.Text(d.summary, text.Meta, box.X+box.W-20-u.TextWidth(d.summary, text.Meta), u.CenterY(text.Meta, y, 34), theme.Ink2)
-	bar := gfx.Rect{X: x, Y: y + 34 + 8, W: box.W - 40, H: 10}
-	shape := raster.Shape{W: int(bar.W), H: 10, Radius: 5, Kind: raster.Fill}
-	u.Shape(shape, bar, theme.PaperA(0.12))
-	music := bar.W * float32(st.Music) / float32(st.Total)
-	other := bar.W * float32(max(st.Total-st.Free-st.Music, 0)) / float32(st.Total)
-	u.PushClip(gfx.Rect{X: bar.X, Y: bar.Y, W: music, H: 10})
-	u.Shape(shape, bar, u.Accent.Color)
-	u.PopClip()
-	u.PushClip(gfx.Rect{X: bar.X + music, Y: bar.Y, W: other, H: 10})
-	u.Shape(shape, bar, theme.Ink3)
-	u.PopClip()
-	ly := bar.Y + 10 + 8
-	lx := x
-	for i, col := range [3]color.NRGBA{u.Accent.Color, theme.Ink3, theme.PaperA(0.12)} {
-		u.Shape(raster.Shape{W: 12, H: 12, Radius: 3, Kind: raster.Fill}, gfx.Rect{X: lx, Y: ly + 7, W: 12, H: 12}, col)
-		lx += 20 + u.Text(d.legend[i], statusText, lx+20, ly, theme.Ink2) + 24
-	}
+	d.card.Draw(u, gfx.Rect{X: screens.Side, Y: cardTop, W: theme.ScreenW - 2*screens.Side, H: screens.StorageCardHeight})
 }
 
 func (d *Downloads) drawEmpty(u *ui.Context) {

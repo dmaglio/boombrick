@@ -25,10 +25,14 @@ import (
 	"github.com/ujjwal313/boombrick/internal/logx"
 	"github.com/ujjwal313/boombrick/internal/lyrics"
 	"github.com/ujjwal313/boombrick/internal/netx"
+	"github.com/ujjwal313/boombrick/internal/perf"
 	"github.com/ujjwal313/boombrick/internal/platform"
 	"github.com/ujjwal313/boombrick/internal/player"
+	"github.com/ujjwal313/boombrick/internal/release"
 	"github.com/ujjwal313/boombrick/internal/resume"
+	"github.com/ujjwal313/boombrick/internal/selfupdate"
 	"github.com/ujjwal313/boombrick/internal/settings"
+	"github.com/ujjwal313/boombrick/internal/space"
 	"github.com/ujjwal313/boombrick/internal/store"
 	"github.com/ujjwal313/boombrick/internal/version"
 	"github.com/ujjwal313/boombrick/internal/ytmusic"
@@ -38,6 +42,9 @@ func init() {
 	// SDL must be driven from the main OS thread.
 	runtime.LockOSThread()
 }
+
+// releaseEvery is how often Settings asks GitHub for the latest releases.
+const releaseEvery = 6 * time.Hour
 
 func main() {
 	started := time.Now()
@@ -75,16 +82,28 @@ func run(started time.Time) error {
 	}
 	log := slog.New(slog.NewTextHandler(logOut, nil))
 	log.Info("starting", "version", version.Version, "data", paths.Data)
+	// The program's folder holds QuickJS and, on the Brick, the pak that
+	// updates are staged in.
+	dir := programDir()
+	// Perf mode logs the launch's stages, then memory, CPU and frame times
+	// every 10 s.
+	var rec *perf.Recorder
+	if perf.Enabled(dir) {
+		rec = perf.Start(log, started, 10*time.Second)
+		defer rec.Close()
+	}
 
 	db, err := store.Open(filepath.Join(paths.Data, "boombrick.db"))
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	prefs, err := settings.Load(db.DB)
+	prefs, err := settings.Load(db.DB, log)
 	if err != nil {
 		return err
 	}
+	defer prefs.Close() // writes what is waiting before the database closes
+	rec.Mark("database")
 
 	// The files the library reads, whether a scan finds them or a download
 	// files them.
@@ -110,7 +129,7 @@ func run(started time.Time) error {
 	thumbs := art.NewWeb(web, online, log)
 	defer thumbs.Close()
 	ytc := ytmusic.NewClient(web)
-	qjs := quickJS()
+	qjs := quickJS(dir)
 	dl, err := download.New(download.Options{DB: db.DB, Music: paths.Music, Data: paths.Data, QJS: qjs,
 		HTTP: web, Albums: ytc, Lyrics: lyrics.NewClient(web), Formats: formats, Online: online,
 		Quality: func() string { return prefs.String(settings.DownloadQuality) }, Log: log})
@@ -121,6 +140,33 @@ func run(started time.Time) error {
 	log.Info("downloads", "qjs", qjs != "")
 	yt := ytmusic.NewSearcher(ytmusic.Options{Client: ytc, Online: online, Log: log, Fallback: dl.Search})
 	defer yt.Close()
+	// Settings' Storage page measures and clears the caches off the UI
+	// thread; the meter closes before the caches it reaches into.
+	meter := space.New(space.Options{Art: covers, Lyrics: words,
+		Parts:      space.Funcs{SizeOf: dl.Leftovers, Empty: dl.ClearLeftovers},
+		Downloader: filepath.Join(paths.Data, "bin"), Log: log})
+	defer meter.Close()
+	// On the Brick, Power turns the backlight off and holding it shuts down.
+	var light app.Backlight
+	var powerOff func() error
+	if paths.OnDevice {
+		light = platform.NewBacklight()
+		powerOff = func() error { return platform.PowerOff("/tmp") }
+	}
+	// Settings says when yt-dlp or Boombrick has a newer release, asking
+	// GitHub at most every 6 hours while it is open. On the Brick, Update
+	// Boombrick stages a release in the pak's folder, for launch.sh to move
+	// in on the next launch.
+	toolReleases := release.NewChecker(web, "yt-dlp/yt-dlp", online, releaseEvery, log)
+	defer toolReleases.Close()
+	releases := release.NewChecker(web, "ujjwal313/boombrick", online, releaseEvery, log)
+	defer releases.Close()
+	var updater app.Updater
+	if paths.OnDevice && dir != "" {
+		up := selfupdate.New(web, dir, log)
+		defer up.Close()
+		updater = up
+	}
 
 	p := player.New(alsa.New(), decode.Open, log)
 	defer p.Close()
@@ -250,27 +296,38 @@ func run(started time.Time) error {
 	}()
 
 	a, err := app.New(app.Options{
-		Fullscreen: paths.OnDevice,
-		Log:        log,
-		Started:    started,
-		Player:     p,
-		MusicDir:   paths.Music,
-		Load:       func() (*library.Index, error) { return library.Load(db.DB) },
-		Progress:   func() ([]resume.Progress, error) { return resume.Recent(db.DB, 8) },
-		Rescan:     rescan,
-		Scanned:    scanned,
-		Saved:      savedTrack,
-		Status:     func() platform.Status { return platform.ReadStatus("/sys") },
-		Covers:     covers,
-		Lyrics:     words,
-		Thumbs:     thumbs,
-		YouTube:    yt,
-		Downloads:  dl,
+		Fullscreen:   paths.OnDevice,
+		Log:          log,
+		Started:      started,
+		Player:       p,
+		MusicDir:     paths.Music,
+		Load:         func() (*library.Index, error) { return library.Load(db.DB) },
+		Progress:     func() ([]resume.Progress, error) { return resume.Recent(db.DB, 8) },
+		Rescan:       rescan,
+		Scanned:      scanned,
+		Saved:        savedTrack,
+		Status:       func() platform.Status { return platform.ReadStatus("/sys") },
+		Covers:       covers,
+		Lyrics:       words,
+		Thumbs:       thumbs,
+		YouTube:      yt,
+		Downloads:    dl,
+		Prefs:        prefs,
+		Space:        meter,
+		Backlight:    light,
+		PowerOff:     powerOff,
+		Version:      version.Version,
+		Device:       "TrimUI Brick",
+		ToolReleases: toolReleases,
+		Releases:     releases,
+		Updater:      updater,
+		Perf:         rec,
 	})
 	if err != nil {
 		return err
 	}
 	defer a.Close()
+	rec.Mark("window")
 
 	// A signal from the launcher ends the run like a quit, so the queue is saved.
 	sig := make(chan os.Signal, 1)
@@ -291,14 +348,24 @@ func run(started time.Time) error {
 	return a.Run()
 }
 
-// quickJS is QuickJS, yt-dlp's JavaScript runtime, as the pak and the
-// desktop build put it: bin/qjs beside the program. "" when it isn't there.
-func quickJS() string {
+// programDir is the program's folder: the pak on the Brick, dist/desktop on a
+// desktop. "" when it can't be found.
+func programDir() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return ""
 	}
-	p := filepath.Join(filepath.Dir(exe), "bin", "qjs")
+	return filepath.Dir(exe)
+}
+
+// quickJS is QuickJS, yt-dlp's JavaScript runtime, as the pak and the
+// desktop build put it: bin/qjs in the program's folder, dir. "" when it
+// isn't there.
+func quickJS(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	p := filepath.Join(dir, "bin", "qjs")
 	if _, err := os.Stat(p); err != nil {
 		return ""
 	}

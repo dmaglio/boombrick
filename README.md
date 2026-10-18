@@ -2,7 +2,7 @@
 
 A music player for the TrimUI Brick running NextUI. It plays your own files, streams Spotify, downloads music from YouTube Music for offline listening, and shows synced lyrics in colours taken from the album art.
 
-Early development: the UI foundation and the Home screen (with sample content) run on desktop and on the Brick. Playback comes next.
+Early development. Playing your own files, synced lyrics, YouTube Music search and downloads, and Settings work on desktop and on the Brick; Spotify and playlist import are still to come.
 
 ## Building
 
@@ -20,7 +20,13 @@ Device build (needs Docker):
 make pak                    # dist/Boombrick.pak.zip
 ```
 
-Unzip it at the root of the SD card and start Boombrick from Tools.
+Unzip it at the root of the SD card and start Boombrick from Tools. Releases carry the same zip.
+
+An empty file named `perf` in the pak's folder (`BOOMBRICK_PERF=1` on a desktop) turns on perf mode, which logs launch times and, every 10 s, memory, CPU and frame times to `Boombrick.txt`.
+
+## Releases
+
+Pushing a tag like `v0.5.0` builds the pak with that version and publishes it, with its `SHA256SUMS`, as a GitHub release. Settings on the Brick offers the latest release as an update; it is installed the next time Boombrick starts.
 
 ## Desktop controls
 
@@ -35,7 +41,7 @@ Unzip it at the root of the SD card and start Boombrick from Tools.
 | Power | P |
 | Volume down, up | -, = |
 
-Hold Select and Start together to quit.
+Menu opens the quick menu, which has Quit. P turns the screen off and on; holding it for a second quits, as holding Power powers the Brick off.
 
 ## Documentation
 

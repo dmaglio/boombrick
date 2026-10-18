@@ -8,6 +8,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/media"
 	"github.com/ujjwal313/boombrick/internal/player"
 	"github.com/ujjwal313/boombrick/internal/screens/downloads"
+	settingsscreen "github.com/ujjwal313/boombrick/internal/screens/settings"
 	"github.com/ujjwal313/boombrick/internal/ytmusic"
 )
 
@@ -16,6 +17,7 @@ import (
 type Downloads interface {
 	downloads.Source
 	ytDownloads
+	settingsscreen.Downloader // the Downloader card
 	Outcomes() []download.Outcome
 	Ready() <-chan struct{}
 	Busy() bool

@@ -96,8 +96,24 @@ func TestAToastRaisedDuringAFrameDrawsNext(t *testing.T) {
 		t.Fatalf("sleep %v before the toast shows", got)
 	}
 	next := start.Add(16 * time.Millisecond)
-	if got := a.timeout(next, next); got != 0 {
-		t.Fatalf("sleep %v while the toast fades in", got)
+	if got := a.timeout(next, next.Add(4*time.Millisecond)); got != 12*time.Millisecond {
+		t.Fatalf("sleep %v while the toast fades in, want the rest of the frame", got)
+	}
+}
+
+// While something moves, frames come every 16 ms from each frame's start,
+// though presenting doesn't wait for the display; a frame that took longer
+// is followed at once.
+func TestAnimationFramesArePaced(t *testing.T) {
+	s := newShell(&page{name: "home"})
+	a := &App{shell: s, repeat: input.NewRepeater(), fade: newAccentFade(theme.Fallback()), ui: &ui.Context{}}
+	s.showToast("Saved", t0) // fades in
+	start := t0.Add(time.Millisecond)
+	if got := a.timeout(start, start.Add(4*time.Millisecond)); got != 12*time.Millisecond {
+		t.Fatalf("after a 4 ms frame: sleep %v, want 12ms", got)
+	}
+	if got := a.timeout(start, start.Add(20*time.Millisecond)); got != 0 {
+		t.Fatalf("after a 20 ms frame: sleep %v", got)
 	}
 }
 

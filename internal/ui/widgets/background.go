@@ -33,7 +33,8 @@ const (
 // accent.
 func DrawBackground(u *ui.Context, kind Background) {
 	if kind == FlatGround {
-		u.Canvas.Clear(theme.Ground)
+		// Filled rather than cleared, so that it fades with the screen.
+		u.Fill(gfx.Rect{W: theme.ScreenW, H: theme.ScreenH}, theme.Ground)
 		return
 	}
 	if f := u.Fade; f.On && kind != StateGround {

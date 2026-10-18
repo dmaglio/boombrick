@@ -2,7 +2,6 @@ package widgets
 
 import (
 	"image/color"
-	"math"
 
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
@@ -52,11 +51,6 @@ func DrawDialog(u *ui.Context, d *Dialog, shown float32, focus []float32) {
 	if shown <= 0 {
 		return
 	}
-	alpha := u.Alpha
-	u.Alpha = alpha * shown
-	defer func() { u.Alpha = alpha }()
-	u.Fill(gfx.Rect{W: theme.ScreenW, H: theme.ScreenH}, theme.Scrim)
-
 	lines := d.body.Lines(u, d.Body, dialogBody, dialogW-2*dialogPad)
 	iconH := float32(36)
 	if d.Circle {
@@ -67,14 +61,9 @@ func DrawDialog(u *ui.Context, d *Dialog, shown float32, focus []float32) {
 	if d.Art != nil {
 		h += dialogArt + 20
 	}
-	h = float32(math.Ceil(float64(h))) // the shape is whole pixels; keep the box the same size
-	box := gfx.Rect{X: (theme.ScreenW - dialogW) / 2, Y: (theme.ScreenH - h) / 2, W: dialogW, H: h}
-	u.PushScale(box.X+box.W/2, box.Y+box.H/2, 0.96+0.04*shown)
-	defer u.Pop()
-	panel := raster.Shape{W: dialogW, H: int(h), Radius: 20, Kind: raster.Fill}
-	u.Shape(panel, box, theme.Raised)
-	panel.Kind, panel.RingOffset, panel.RingWidth = raster.Ring, -1, 1
-	u.Shape(panel, box, theme.PaperA(0.14))
+	p := BeginPanel(u, h, shown)
+	defer p.End(u)
+	box := p.Box
 
 	x, y := box.X+dialogPad, box.Y+dialogTop
 	if d.Circle {
