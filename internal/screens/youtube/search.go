@@ -59,8 +59,11 @@ func NewSearch(nav screens.Nav, src Source, dl Downloads) *Search {
 
 // Handle types, deletes and searches on the keyboard, and opens results.
 func (s *Search) Handle(ev input.Event, now time.Time) bool {
-	if ev.Kind == input.Release || s.offline {
+	if ev.Kind == input.Release {
 		return false
+	}
+	if s.offline {
+		return ev.Kind == input.Press && ev.Button == input.A && screens.OpenDownloads(s.nav)
 	}
 	if s.onResults {
 		return s.handleResults(ev, now)
@@ -202,10 +205,10 @@ func (s *Search) Draw(u *ui.Context) {
 	s.offline = !u.Status.Online
 	if s.offline {
 		widgets.DrawBackground(u, widgets.StateGround)
-		widgets.EmptyState(u, &s.offMsg, "You’re offline", "YouTube Music needs Wi-Fi or a hotspot — your downloads still play.", "")
+		widgets.OfflineState(u, &s.offMsg, "YouTube Music needs Wi-Fi or a hotspot — your downloads still play.")
 		widgets.StatusBar(u)
 		widgets.Tabs(u, tab)
-		widgets.HintBar(u, []widgets.Hint{{Key: "L1/R1", Label: "Tabs"}})
+		widgets.HintBar(u, offlineHints)
 		return
 	}
 	s.pollAlbums()
@@ -305,6 +308,7 @@ var (
 		{Key: "Y", Label: "To results"}, {Key: "Start", Label: "Search"}}
 	typingAloneHints = []widgets.Hint{{Key: "A", Label: "Type"}, {Key: "B", Label: "Delete"}, {Key: "X", Label: "Space"},
 		{Key: "Start", Label: "Search"}}
+	offlineHints = []widgets.Hint{{Key: "A", Label: "Open Downloads"}, tabsHint}
 )
 
 func (s *Search) hints() []widgets.Hint {

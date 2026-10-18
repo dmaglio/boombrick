@@ -99,11 +99,13 @@ func (r *recorder) Play(s []ytmusic.Song, start int) {
 type fakeNav struct {
 	pushed []screens.Screen
 	toasts []string
+	tabs   []int
 }
 
 func (n *fakeNav) Push(s screens.Screen) { n.pushed = append(n.pushed, s) }
 func (n *fakeNav) Pop()                  { n.pushed = n.pushed[:len(n.pushed)-1] }
 func (n *fakeNav) Toast(msg string)      { n.toasts = append(n.toasts, msg) }
+func (n *fakeNav) ShowTab(t int)         { n.tabs = append(n.tabs, t) }
 
 // render draws s twice, as the app would: the first frame asks for its
 // pictures and the second shows them, faded in. set adjusts the context.

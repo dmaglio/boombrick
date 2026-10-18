@@ -24,6 +24,24 @@ type Backer interface {
 	Back() bool
 }
 
+// DownloadsTab is the Downloads tab's place in the tab row.
+const DownloadsTab = 4
+
+// Tabber is a Nav that can show another tab, as the app's does.
+type Tabber interface {
+	ShowTab(t int)
+}
+
+// OpenDownloads shows the Downloads tab, as the offline screens' Open
+// Downloads does; it reports false when nav can't.
+func OpenDownloads(nav Nav) bool {
+	t, ok := nav.(Tabber)
+	if ok {
+		t.ShowTab(DownloadsTab)
+	}
+	return ok
+}
+
 // Opener is a screen that wants to know each time its overlay opens, to drop
 // state left from the last time it was shown.
 type Opener interface {

@@ -46,9 +46,10 @@ func StatusBar(u *ui.Context) {
 			u.Icon("wifi", 24, 2, false, x, (h-24)/2, theme.Paper)
 		}})
 	} else {
-		items = append(items, item{30 + u.TextWidth("Offline", text.Chrome), func(x float32) {
+		// The icon alone: a Brick kept off Wi-Fi would show a word all the
+		// time, and the screens that need the network say so themselves.
+		items = append(items, item{22, func(x float32) {
 			u.Icon("wifioff", 22, 2, false, x, (h-22)/2, theme.GoldSoft)
-			u.Text("Offline", text.Chrome, x+30, ty, theme.GoldSoft)
 		}})
 	}
 	if s.Bluetooth != "" {

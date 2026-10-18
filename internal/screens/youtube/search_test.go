@@ -172,11 +172,13 @@ func TestTopResultHintsFit(t *testing.T) {
 	}
 }
 
+// Offline, the tab says so, and A opens Downloads instead of typing.
 func TestOffline(t *testing.T) {
-	s := NewSearch(&fakeNav{}, &fakeSource{}, nil)
+	nav := &fakeNav{}
+	s := NewSearch(nav, &fakeSource{}, nil)
 	uitest.Golden(t, "yt-offline", render(t, s, t0, func(u *ui.Context) { u.Status.Online = false }))
-	if s.Handle(press(input.A), t0) || s.query != "" {
-		t.Fatal("typed while offline")
+	if !s.Handle(press(input.A), t0) || s.query != "" || len(nav.tabs) != 1 || nav.tabs[0] != screens.DownloadsTab {
+		t.Fatalf("A while offline: query %q, tabs shown %v", s.query, nav.tabs)
 	}
 }
 

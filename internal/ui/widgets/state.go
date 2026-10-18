@@ -5,6 +5,8 @@ import (
 
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
+	"github.com/ujjwal313/boombrick/internal/ui/gfx"
+	"github.com/ujjwal313/boombrick/internal/ui/raster"
 	"github.com/ujjwal313/boombrick/internal/ui/text"
 )
 
@@ -60,6 +62,44 @@ func (c *Wrapped) Lines(u *ui.Context, s string, st text.Style, w float32) []str
 	}
 	return c.lines
 }
+
+// offlineWidth is how wide the offline state's line runs before wrapping.
+const offlineWidth = 700
+
+// OfflineState draws the offline state centred between the tabs and the hint
+// bar: the Wi-Fi-off icon in a gold circle, "You’re offline", body wrapped in
+// ink2, and an Open Downloads pill, focused. As the state ground is, it is
+// drawn in the fallback gold, whatever the album playing. The screen keeps
+// body's lines in c.
+func OfflineState(u *ui.Context, c *Wrapped, body string) {
+	const circle, icon = 96, 46
+	accent := u.Accent
+	u.Accent = theme.Fallback()
+	defer func() { u.Accent = accent }()
+	lines := c.Lines(u, body, stateBody, offlineWidth)
+	titleH, bodyH := u.LineHeight(stateTitle), u.LineHeight(stateBody)
+	h := circle + 24 + titleH + 12 + float32(len(lines))*bodyH + 28 + PillHeight
+	top := float32(StatusHeight + TabsHeight)
+	y := top + (theme.ScreenH-HintsHeight-top-h)/2
+	x := float32(theme.ScreenW-circle) / 2
+	u.Shape(raster.Shape{W: circle, H: circle, Radius: circle / 2, Kind: raster.Fill}, gfx.Rect{X: x, Y: y, W: circle, H: circle}, theme.Gold)
+	u.Icon("wifioff", icon, 2.5, false, x+(circle-icon)/2, y+(circle-icon)/2, theme.Ground)
+	y += circle + 24
+	title := "You’re offline"
+	u.Text(title, stateTitle, (theme.ScreenW-u.TextWidth(title, stateTitle))/2, y, theme.Paper)
+	y += titleH + 12
+	for _, l := range lines {
+		u.Text(l, stateBody, (theme.ScreenW-u.TextWidth(l, stateBody))/2, y, theme.Ink2)
+		y += bodyH
+	}
+	y += 28
+	px := (theme.ScreenW - PillWidth(u, "download", openDownloads)) / 2
+	PillGlow(u, "download", openDownloads, px, y, 1)
+	Pill(u, "download", openDownloads, px, y, 1)
+}
+
+// openDownloads is the offline state's one action.
+const openDownloads = "Open Downloads"
 
 // EmptyState draws a state screen's message centred between the tabs and the
 // hint bar: the logo mark in ink4, a title, a wrapped
