@@ -12,6 +12,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/platform/input"
 	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/screens"
+	"github.com/ujjwal313/boombrick/internal/spotify"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
 	"github.com/ujjwal313/boombrick/internal/ui/anim"
@@ -181,6 +182,41 @@ func AlbumRow(albums []*library.Album, play, queue func(*library.Album)) (fixtur
 	return fixture.Row{Title: "Recently added", Meta: meta, Items: items}, true
 }
 
+// SpotifyRow is Spotify playlists: Liked Songs, then the user's playlists,
+// as kept from the last time the Spotify tab asked. A card opens its page
+// with open, and imports it with imp, which may be nil. It reports false when
+// no playlists are kept, as when signed out.
+func SpotifyRow(pls []spotify.Playlist, open, imp func(spotify.Playlist)) (fixture.Row, bool) {
+	if len(pls) == 0 {
+		return fixture.Row{}, false
+	}
+	item := func(p spotify.Playlist, it fixture.Item) fixture.Item {
+		it.Source, it.Play = media.Spotify, func() { open(p) }
+		if imp != nil {
+			it.Import = func() { imp(p) }
+		}
+		return it
+	}
+	liked := spotify.Playlist{URI: spotify.LikedURI, Name: "Liked Songs"}
+	items := []fixture.Item{item(liked, fixture.Item{Title: "Liked Songs", Subtitle: "Your songs", Art: screens.LikedArt})}
+	for _, p := range pls {
+		art := widgets.SpecFor(p.Name)
+		if p.Cover != "" {
+			art.Cover = media.Cover{URL: p.Cover}
+		}
+		sub := screens.Count(p.Count) + " songs"
+		if p.Count == 1 {
+			sub = "1 song"
+		}
+		items = append(items, item(p, fixture.Item{Title: p.Name, Subtitle: sub, Art: art}))
+	}
+	meta := fmt.Sprintf("%d playlists", len(pls))
+	if len(pls) == 1 {
+		meta = "1 playlist"
+	}
+	return fixture.Row{Title: "Spotify playlists", Meta: meta, Cards: true, Spotify: true, Items: items}, true
+}
+
 // source is where album a's files came from, for its badge: Downloaded for
 // an album filed under the downloads folder.
 func source(a *library.Album) media.Source {
@@ -264,11 +300,14 @@ func (h *Home) Handle(ev input.Event, now time.Time) bool {
 		}
 		return false
 	}
-	if ev.Button == input.A || ev.Button == input.Y {
+	if ev.Button == input.A || ev.Button == input.Y || ev.Button == input.X {
 		it := h.rows[h.row].Items[h.col]
 		act := it.Play
-		if ev.Button == input.Y {
+		switch ev.Button {
+		case input.Y:
 			act = it.Queue
+		case input.X:
+			act = it.Import
 		}
 		if act != nil && ev.Kind == input.Press {
 			act()
@@ -401,6 +440,12 @@ func (h *Home) hints() []widgets.Hint {
 	}
 	if it := h.rows[h.row].Items[h.col]; it.Play != nil {
 		hints := []widgets.Hint{{Key: "A", Label: "Play"}}
+		if h.rows[h.row].Spotify {
+			hints[0].Label = "Open" // a playlist's page
+		}
+		if it.Import != nil {
+			hints = append(hints, widgets.Hint{Key: "X", Label: "Import"})
+		}
 		if it.Queue != nil {
 			hints = append(hints, widgets.Hint{Key: "Y", Label: "Add to queue"})
 		}

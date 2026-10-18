@@ -113,6 +113,8 @@ func (n *NowPlaying) ShowsDownloads() bool {
 // source is where the track comes from, for its badge.
 func source(t player.Track) media.Source {
 	switch {
+	case t.Streamed():
+		return media.Spotify
 	case t.Pending():
 		return media.YouTube
 	case t.VideoID != "":
@@ -136,13 +138,25 @@ func downloadingText(p float32) string {
 
 // progress is the bar's fill and the words under it: the elapsed and total
 // times, or while the track downloads, how far it has got and its length.
+// A stream says when it is opening, or picking up after a break.
 func (n *NowPlaying) progress(s player.State) (float32, string, string) {
+	if s.Loading {
+		var length string // unknown: none
+		if s.Track.Duration > 0 {
+			length = clock(s.Track.Duration)
+		}
+		return 0, "Loading", length
+	}
 	if !s.Waiting {
 		var f float32
 		if s.Duration > 0 {
 			f = min(max(float32(s.Elapsed)/float32(s.Duration), 0), 1)
 		}
-		return f, clock(s.Elapsed), clock(s.Duration)
+		left := clock(s.Elapsed)
+		if s.Stalled {
+			left = "Connection lost"
+		}
+		return f, left, clock(s.Duration)
 	}
 	st, p := media.Queued, float32(0)
 	if n.downloads != nil {
@@ -309,8 +323,14 @@ func (n *NowPlaying) Draw(u *ui.Context) {
 }
 
 func formatLine(s player.State) string {
+	if s.Kbps > 0 {
+		return strconv.Itoa(s.Kbps) + " kbps"
+	}
 	if s.Rate == 0 {
 		return s.Format
+	}
+	if s.Format == "" { // a Spotify song playing from its file
+		return fmt.Sprintf("%g kHz", float64(s.Rate)/1000)
 	}
 	return fmt.Sprintf("%s · %g kHz", s.Format, float64(s.Rate)/1000)
 }

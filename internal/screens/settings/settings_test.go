@@ -13,6 +13,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/selfupdate"
 	keys "github.com/ujjwal313/boombrick/internal/settings"
 	"github.com/ujjwal313/boombrick/internal/space"
+	"github.com/ujjwal313/boombrick/internal/spotify"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui/anim"
 	"github.com/ujjwal313/boombrick/internal/ui/uitest"
@@ -435,5 +436,75 @@ func TestCardLines(t *testing.T) {
 		if k.line != c.line || k.note != c.note || k.pill != c.pill {
 			t.Errorf("%s against %s, %+v: %q, %q, %q", c.version, c.latest, c.st, k.line, k.note, k.pill)
 		}
+	}
+}
+
+type fakeAccount struct {
+	st      spotify.Status
+	logouts int
+}
+
+func (a *fakeAccount) Status() (spotify.Status, error) { return a.st, nil }
+func (a *fakeAccount) Logout()                         { a.logouts++ }
+
+// With importing, Prefer downloaded copies follows Download quality, and A
+// switches it.
+func TestPreferDownloadedCopies(t *testing.T) {
+	e := &env{prefs: prefs{}, p: &fakePlayer{}, space: &fakeSpace{}}
+	e.s = New(Options{Prefs: e.prefs, Player: e.p, Space: e.space, Version: "0.4.0", Device: "TrimUI Brick",
+		Toast: func(string) {}, Copies: true})
+	e.s.Handle(press(input.Down), t0)
+	if e.s.focus != rowPrefer {
+		t.Fatalf("Down from Download quality went to %d", e.s.focus)
+	}
+	render(t, e, t0)
+	if e.s.rows[rowPrefer].Value != "On" {
+		t.Fatalf("the row says %q", e.s.rows[rowPrefer].Value)
+	}
+	e.s.Handle(press(input.A), t0)
+	if e.prefs.Bool(keys.PreferDownloaded) {
+		t.Fatal("A didn't switch it off")
+	}
+	uitest.Golden(t, "settings-prefer", render(t, e, t0.Add(anim.Focus)))
+}
+
+// With Spotify, Streaming quality comes first and the account has a card of
+// its own, with Sign out.
+func TestSpotifySettings(t *testing.T) {
+	acct := &fakeAccount{st: spotify.Status{State: spotify.Ready, User: "bmfjclzv7pstc3zzlq0nteyni", Name: "Ujjwal", Premium: true}}
+	e := &env{prefs: prefs{}, p: &fakePlayer{}, space: &fakeSpace{}}
+	e.s = New(Options{Prefs: e.prefs, Player: e.p, Space: e.space, Version: "0.4.0", Device: "TrimUI Brick",
+		Card:    func() (int64, int64, int64) { return 595 * gib / 10, 386 * gib / 10, 142 * gib / 10 },
+		Toast:   func(m string) { e.toasts = append(e.toasts, m) },
+		Spotify: acct})
+	if e.s.focus != rowStream {
+		t.Fatalf("focus starts on %d", e.s.focus)
+	}
+	e.s.Handle(press(input.A), t0)
+	uitest.Golden(t, "settings-streaming", render(t, e, t0.Add(anim.Focus)))
+	e.s.Handle(press(input.Right), t0)
+	if got := e.prefs.String(keys.StreamingKbps); got != "320" {
+		t.Fatalf("Right chose %q", got)
+	}
+	e.s.Handle(press(input.A), t0)
+	render(t, e, t0)
+	if e.s.rows[rowStream].Value != "320 kbps" || e.s.account.line != "Ujjwal · Premium · signed in" {
+		t.Fatalf("row %q, card %q", e.s.rows[rowStream].Value, e.s.account.line)
+	}
+	for e.s.focus != pillAccount {
+		if !e.s.Handle(press(input.Down), t0) {
+			t.Fatalf("stopped on %d before Sign out", e.s.focus)
+		}
+	}
+	render(t, e, t0)
+	uitest.Golden(t, "settings-account", render(t, e, t0.Add(2*anim.Focus)))
+	e.s.Handle(press(input.A), t0)
+	if acct.logouts != 1 || len(e.toasts) != 1 || e.toasts[0] != "Signed out of Spotify" {
+		t.Fatalf("%d sign-outs, toasts %v", acct.logouts, e.toasts)
+	}
+	acct.st = spotify.Status{State: spotify.SignedOut}
+	render(t, e, t0)
+	if e.s.account.pill != "" || e.s.focus == pillAccount {
+		t.Fatalf("signed out: pill %q, focus %d", e.s.account.pill, e.s.focus)
 	}
 }

@@ -45,6 +45,7 @@ type shell struct {
 	showing  int        // the overlay drawn: the open one, or one fading out
 	shown    anim.Value // the overlay's slide and fade, 0 to 1
 	menu     modal      // opened by Menu; nil for none
+	alert    modal      // a dialog opened by news, over everything, the menu too; nil for none
 	menuDown bool       // Menu is down, and opens the menu when let go unless another button comes first
 	toast    string
 	toastAt  time.Time
@@ -80,9 +81,14 @@ func (s *shell) overlay() screens.Screen {
 }
 
 // showsDownloads reports whether what is shown draws the download queue: the
-// tab's top page, or the open overlay.
+// open overlay, or with none open the tab's top page. An overlay covers the
+// tab, which isn't drawn under it; while it slides in or out, frames are drawn
+// for that anyway.
 func (s *shell) showsDownloads() bool {
-	return showsDownloads(s.top()) || s.open >= 0 && showsDownloads(s.overlay())
+	if s.open >= 0 {
+		return showsDownloads(s.overlay())
+	}
+	return showsDownloads(s.top())
 }
 
 func showsDownloads(scr screens.Screen) bool {
@@ -114,6 +120,15 @@ func (s *shell) pop(now time.Time) {
 	st[len(st)-1] = nil
 	s.stacks[s.tab] = st[:len(st)-1]
 	s.trans.To(0, now, anim.Push, anim.EaseOutCubic)
+}
+
+// showTab shows tab t, closing any overlay over it.
+func (s *shell) showTab(t int, now time.Time) {
+	if s.open >= 0 {
+		s.closeOverlay(now)
+	}
+	s.tab, s.leaving = t, nil
+	s.trans.Set(1)
 }
 
 // showToast replaces any toast; one already fully shown stays at full alpha.
@@ -151,6 +166,9 @@ func (s *shell) closeOverlay(now time.Time) {
 // R1 switch tabs when no overlay is open. The screen input goes to may claim
 // one of those buttons for itself (screens.Claimer).
 func (s *shell) handle(e input.Event, now time.Time) bool {
+	if s.alert != nil && s.alert.IsOpen() {
+		return s.alert.Handle(e, now)
+	}
 	if s.menu != nil && s.menu.IsOpen() {
 		return s.menu.Handle(e, now)
 	}
@@ -231,6 +249,9 @@ func (s *shell) draw(u *ui.Context) {
 	if s.menu != nil && s.menu.Visible(now) {
 		s.menu.Draw(u)
 	}
+	if s.alert != nil && s.alert.Visible(now) {
+		s.alert.Draw(u)
+	}
 	if a := s.toastAlpha(now); a > 0 {
 		widgets.Toast(u, s.toast, a)
 	}
@@ -282,6 +303,9 @@ func (s *shell) animating(now time.Time) bool {
 		return true
 	}
 	if s.menu != nil && s.menu.Visible(now) && s.menu.Animating(now) {
+		return true
+	}
+	if s.alert != nil && s.alert.Visible(now) && s.alert.Animating(now) {
 		return true
 	}
 	return s.active().Animating(now)

@@ -503,3 +503,29 @@ func TestAddIndexesOneFile(t *testing.T) {
 		t.Fatal("a missing file was added")
 	}
 }
+
+// The library knows the files an import downloaded by their Spotify IDs.
+func TestFilesBySpotifyID(t *testing.T) {
+	db := openDB(t)
+	changes := []change{
+		{"/m/Boombrick/Ed Sheeran/Sapphire/01 Sapphire.opus", 1, 1, Track{Title: "Sapphire", SpotifyID: "4Q0qVhFQa7j6jRKzo3HDmP"}},
+		{"/m/Odalys/Copper Season/01 Rust.flac", 1, 1, Track{Title: "Rust"}},
+	}
+	if err := writeChanges(db, changes, nil, 1); err != nil {
+		t.Fatal(err)
+	}
+	path, ok, err := FileOf(db, "4Q0qVhFQa7j6jRKzo3HDmP")
+	if err != nil || !ok || path != changes[0].path {
+		t.Fatalf("FileOf = %q, %v, %v", path, ok, err)
+	}
+	if _, ok, err := FileOf(db, "2IRZnDFmlqMuOrYOLnZZyc"); ok || err != nil {
+		t.Fatalf("a song never downloaded: %v, %v", ok, err)
+	}
+	if _, ok, _ := FileOf(db, ""); ok {
+		t.Fatal("no ID found a file")
+	}
+	ids, err := SpotifyIDs(db)
+	if err != nil || len(ids) != 1 || !ids["4Q0qVhFQa7j6jRKzo3HDmP"] {
+		t.Fatalf("SpotifyIDs = %v, %v", ids, err)
+	}
+}

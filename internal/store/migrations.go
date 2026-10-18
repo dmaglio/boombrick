@@ -107,6 +107,32 @@ var migrations = []string{
 		priority     INTEGER NOT NULL,
 		finished     INTEGER NOT NULL
 	) WITHOUT ROWID`,
+	`ALTER TABLE queue ADD COLUMN spotify_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE queue ADD COLUMN cover TEXT NOT NULL DEFAULT '';
+	CREATE TABLE spotify_cache (
+		key     TEXT PRIMARY KEY,
+		body    TEXT NOT NULL,
+		fetched INTEGER NOT NULL
+	) WITHOUT ROWID`,
+	`ALTER TABLE downloads ADD COLUMN spotify_id TEXT NOT NULL DEFAULT '';
+	ALTER TABLE downloads ADD COLUMN isrc TEXT NOT NULL DEFAULT '';
+	ALTER TABLE tracks ADD COLUMN spotify_id TEXT NOT NULL DEFAULT '';
+	CREATE INDEX tracks_spotify ON tracks (spotify_id) WHERE spotify_id != '';
+	CREATE TABLE import_jobs (
+		uri     TEXT PRIMARY KEY,
+		name    TEXT NOT NULL,
+		created INTEGER NOT NULL
+	) WITHOUT ROWID;
+	CREATE TABLE import_items (
+		uri        TEXT NOT NULL,
+		spotify_id TEXT NOT NULL,
+		pos        INTEGER NOT NULL,
+		track      TEXT NOT NULL,
+		state      INTEGER NOT NULL,
+		chosen     INTEGER NOT NULL,
+		candidates TEXT NOT NULL,
+		PRIMARY KEY (uri, spotify_id)
+	) WITHOUT ROWID`,
 }
 
 func migrate(db *sql.DB) error {

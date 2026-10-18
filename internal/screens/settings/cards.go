@@ -10,6 +10,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/download"
 	"github.com/ujjwal313/boombrick/internal/release"
 	"github.com/ujjwal313/boombrick/internal/selfupdate"
+	"github.com/ujjwal313/boombrick/internal/spotify"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
 	"github.com/ujjwal313/boombrick/internal/ui/gfx"
@@ -59,6 +60,30 @@ func (c *card) height(u *ui.Context) float32 {
 		h += 14 + widgets.PillHeight
 	}
 	return float32(math.Ceil(float64(h + cardPad)))
+}
+
+// setSpotify writes the Spotify account's card: who is signed in, with a
+// pill to sign out.
+func (c *card) setSpotify(st spotify.Status) {
+	c.title, c.note, c.icon, c.pill = "Spotify", "", "", ""
+	switch st.State {
+	case spotify.SignedOut, spotify.SigningIn:
+		c.line = "Not signed in · sign in from the Spotify tab"
+		return
+	case "":
+		c.line = "Checking…"
+		return
+	default:
+		name := st.Name
+		if name == "" {
+			name = st.User
+		}
+		c.line = name + " · signed in"
+		if st.Premium {
+			c.line = name + " · Premium · signed in"
+		}
+	}
+	c.icon, c.pill = "logout", "Sign out"
 }
 
 // draw draws the card in box, as tall as height, its pill focused at k.

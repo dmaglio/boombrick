@@ -5,6 +5,7 @@ import (
 
 	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/media"
+	"github.com/ujjwal313/boombrick/internal/player"
 	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
@@ -40,6 +41,18 @@ func TestSongsAndQueuedTracksShareTheirAlbumsArt(t *testing.T) {
 	}
 	if p := TrackArt(TrackOf(&a.Tracks[1])).Cover.Path; p != "/m/cs/2.flac" {
 		t.Errorf("a queued track looks for its art in %q", p)
+	}
+}
+
+func TestStreamedTracksArtIsTheirCover(t *testing.T) {
+	tr := player.Track{SpotifyID: "3UmaczJpikHgJFyBTAJVoz", Album: "The Marshall Mathers LP", AlbumArtist: "Eminem",
+		Cover: "https://i.scdn.co/image/ab67616d0000b273dbb3dd82da45b7d7f31b1b42"}
+	if c := TrackArt(tr).Cover; c != (media.Cover{URL: tr.Cover}) {
+		t.Fatalf("cover %+v", c)
+	}
+	tr.Cover = ""
+	if c := TrackArt(tr).Cover; c.URL != "" || c.Album != "The Marshall Mathers LP" {
+		t.Fatalf("without a link: %+v", c)
 	}
 }
 

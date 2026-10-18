@@ -75,6 +75,28 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+// The index finds the files imports downloaded by their Spotify IDs.
+func TestIndexBySpotifyID(t *testing.T) {
+	db := openDB(t)
+	changes := []change{
+		{"/m/Boombrick/Ed Sheeran/Sapphire/01 Sapphire.opus", 1, 1, Track{Title: "Sapphire", SpotifyID: "4Q0qVhFQa7j6jRKzo3HDmP"}},
+		{"/m/Odalys/Copper Season/01 Rust.flac", 1, 1, Track{Title: "Rust"}},
+	}
+	if err := writeChanges(db, changes, nil, 1); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := Load(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr := ix.Spotify("4Q0qVhFQa7j6jRKzo3HDmP"); tr == nil || tr.Title != "Sapphire" {
+		t.Fatalf("Spotify = %+v", tr)
+	}
+	if ix.Spotify("") != nil || ix.SpotifyCount() != 1 {
+		t.Fatalf("%d songs by Spotify ID", ix.SpotifyCount())
+	}
+}
+
 func equal(got []string, want ...string) bool {
 	if len(got) != len(want) {
 		return false

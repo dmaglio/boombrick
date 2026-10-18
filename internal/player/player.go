@@ -3,6 +3,7 @@
 package player
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -27,10 +28,25 @@ type Track struct {
 	// VideoID is a YouTube Music song's video ID. With no Path yet the song is
 	// still downloading: playback waits on it, and Resolve gives it its file.
 	VideoID string
+	// SpotifyID is a Spotify track's ID. With no Path the track is streamed
+	// (see SetStreaming), and Cover links to its album's picture.
+	SpotifyID string
+	Cover     string
 }
 
 // Pending reports whether t is a song still downloading.
 func (t Track) Pending() bool { return t.Path == "" && t.VideoID != "" }
+
+// Streamed reports whether t is a Spotify track played as a stream.
+func (t Track) Streamed() bool { return t.Path == "" && t.SpotifyID != "" }
+
+// key names t's audio: its file, or its stream.
+func (t Track) key() string {
+	if t.Streamed() {
+		return "spotify:" + t.SpotifyID
+	}
+	return t.Path
+}
 
 // Repeat is the repeat mode.
 type Repeat uint8
@@ -48,6 +64,9 @@ type State struct {
 	Index, Count      int   // position in play order, from 0, and queue length
 	Playing           bool
 	Waiting           bool // the current track is still downloading; it plays when it lands
+	Loading           bool // the current track is a stream being opened
+	Stalled           bool // the current stream broke, and is being picked up again
+	Kbps              int  // the current stream's quality, 0 for a file
 	Elapsed, Duration time.Duration
 	Rate              int    // the current file's sample rate, 0 if unknown
 	Format            string // from the file extension: "MP3", "FLAC"
@@ -111,6 +130,16 @@ type Player struct {
 	endFade    bool
 	after      func(time.Duration, func()) stopper // time.AfterFunc; tests stand in for it
 	now        func() time.Time
+	// Streaming: how streams open and who hears of their troubles (see
+	// SetStreaming), when the listener last skipped, and the opens under way.
+	stream      StreamOpener
+	notify      func(Notice)
+	skipped     time.Time
+	loading     bool // the current track is a stream being opened
+	retried     bool // the current stream was refused and waited for once
+	failures    int  // streams in a row that wouldn't open
+	cancelOpen  context.CancelFunc
+	cancelPrime context.CancelFunc
 }
 
 // New creates a player that plays through out and opens files with open.
@@ -128,6 +157,7 @@ func (p *Player) Close() error {
 	if p.sleepTimer != nil {
 		p.sleepTimer.Stop()
 	}
+	p.cancelOpensLocked()
 	p.mu.Unlock()
 	p.wg.Wait()
 	return p.engine.Close()
@@ -255,10 +285,15 @@ func (p *Player) startAtLocked(frame int64) {
 			p.waiting, p.startFrame = true, max(frame, 0)
 			return
 		}
+		if t.Streamed() && p.stream != nil {
+			p.stopLocked()
+			p.openLocked(frame)
+			return
+		}
 		src, err := p.openTrack(t, p.levelling, p.albumModeLocked())
 		if err == nil {
 			p.cur, p.curRate, p.curFrames, p.startFrame = src, src.SampleRate(), src.Frames(), max(frame, 0)
-			p.framesOf = t.Path
+			p.framesOf = t.key()
 			p.engine.PlayFrom(src, frame)
 			p.primeLocked()
 			return
@@ -278,9 +313,10 @@ func (p *Player) startAtLocked(frame int64) {
 
 func (p *Player) stopLocked() {
 	p.cur, p.next, p.cued = nil, nil, false
-	p.waiting = false
+	p.waiting, p.loading, p.retried = false, false, false
 	p.startFrame = 0
 	p.gen++
+	p.cancelOpensLocked()
 	p.engine.Stop()
 }
 
@@ -303,6 +339,10 @@ func (p *Player) followingLocked(pos int) (int, bool) {
 func (p *Player) primeLocked() {
 	p.gen++
 	p.next = nil
+	if p.cancelPrime != nil {
+		p.cancelPrime()
+		p.cancelPrime = nil
+	}
 	p.engine.Queue(nil)
 	if p.cur != nil && p.sleepsAfterLocked() {
 		p.engine.FadeEnd(p.cur, sleepFade) // the sleep timer stops playback at its end
@@ -321,6 +361,12 @@ func (p *Player) primeLocked() {
 	t := p.queue[idx]
 	if t.Pending() {
 		return // primed when it lands
+	}
+	if t.Streamed() {
+		if p.stream != nil {
+			p.primeStreamLocked(gen, pos, idx, t, levelling, album)
+		}
+		return
 	}
 	p.wg.Add(1)
 	go func() {
@@ -372,7 +418,7 @@ func (p *Player) ended(end audio.End) {
 	if end.Next != nil && end.Next == p.next {
 		// The primed track took over without a gap.
 		p.cur, p.pos, p.curRate, p.curFrames, p.startFrame = p.next, p.nextPos, p.nextRate, p.nextFrames, 0
-		p.framesOf = p.queue[p.order[p.pos]].Path
+		p.framesOf = p.queue[p.order[p.pos]].key()
 		p.primeLocked()
 		return
 	}
@@ -397,7 +443,11 @@ func (p *Player) Toggle() {
 	switch {
 	case p.waiting:
 		p.cued = false // it plays as soon as it lands
+	case p.loading:
+		p.cued = !p.cued // it plays, or is cued, when it opens
 	case len(p.queue) == 0:
+	case p.cur == nil && p.cued:
+		p.startAtLocked(p.startFrame) // a stream restored, or stopped on
 	case p.cur == nil:
 		p.startLocked()
 	case p.playingLocked():
@@ -413,7 +463,7 @@ func (p *Player) Next() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.keepPlayingLocked()
-	p.empties = 0
+	p.empties, p.skipped = 0, p.now()
 	switch {
 	case len(p.queue) == 0:
 		return
@@ -433,7 +483,7 @@ func (p *Player) Prev() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.keepPlayingLocked()
-	p.empties = 0
+	p.empties, p.skipped = 0, p.now()
 	if len(p.queue) == 0 {
 		return
 	}
@@ -460,6 +510,9 @@ func (p *Player) Seek(d time.Duration) {
 	}
 	p.startFrame = f
 	p.engine.SeekFrame(f)
+	if pos, ok := p.followingLocked(p.pos); ok && p.next == nil && p.queue[p.order[pos]].Streamed() {
+		p.primeLocked() // the stream to follow opens sooner, or later
+	}
 }
 
 // SetShuffle turns shuffle on or off without interrupting the current track.
@@ -532,7 +585,7 @@ func (p *Player) PlayIndex(i int) {
 		return
 	}
 	p.keepPlayingLocked()
-	p.pos, p.empties = i, 0
+	p.pos, p.empties, p.skipped = i, 0, p.now()
 	p.startLocked()
 }
 
@@ -679,7 +732,7 @@ func (p *Player) Drop(videoID string) int {
 		p.pos = len(p.order) - 1
 		p.stopLocked()
 		p.playedOut = true
-		if p.queue[p.order[p.pos]].Path != p.framesOf {
+		if p.queue[p.order[p.pos]].key() != p.framesOf {
 			p.curFrames = 0 // the last file opened isn't this entry's
 		}
 	case waitedOn:
@@ -719,10 +772,19 @@ func (p *Player) State() State {
 	}
 	t := p.queue[p.order[p.pos]]
 	s.Queued, s.Track, s.Index = true, t, p.pos
-	s.Waiting = p.waiting
+	s.Waiting, s.Loading = p.waiting, p.loading
 	s.Format = strings.ToUpper(strings.TrimPrefix(filepath.Ext(t.Path), "."))
+	if p.loading {
+		s.Playing = !p.cued
+	}
 	if p.cur == nil {
 		return s
+	}
+	if k, ok := p.cur.(interface{ Kbps() int }); ok {
+		s.Kbps = k.Kbps()
+	}
+	if b, ok := p.cur.(interface{ Stalled() bool }); ok {
+		s.Stalled = b.Stalled()
 	}
 	st := p.engine.Status()
 	if st.Source != p.cur {
@@ -886,6 +948,9 @@ func (p *Player) Restore(s Snapshot) {
 		p.waiting = true // cued when it lands
 		return
 	}
+	if t.Streamed() {
+		return // opened when played: no key is asked for before then
+	}
 	p.cueLocked()
 }
 
@@ -894,13 +959,16 @@ func (p *Player) Restore(s Snapshot) {
 func (p *Player) cueLocked() {
 	t := p.queue[p.order[p.pos]]
 	p.waiting = false
+	if t.Streamed() {
+		return // opened when played
+	}
 	src, err := p.openTrack(t, p.levelling, p.albumModeLocked())
 	if err != nil {
 		p.log.Warn("can't resume track", "path", t.Path, "err", err)
 		return // the queue is back, stopped
 	}
 	p.cur, p.curRate, p.curFrames = src, src.SampleRate(), src.Frames()
-	p.framesOf = t.Path
+	p.framesOf = t.key()
 	p.engine.Cue(src, p.startFrame)
 	p.primeLocked()
 }

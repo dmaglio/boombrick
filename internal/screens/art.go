@@ -34,9 +34,16 @@ func SongArt(t *library.Track) widgets.ArtSpec {
 	return s
 }
 
-// TrackArt is the art of a queued track's album.
+// LikedArt is Spotify's Liked Songs: a heart on rose.
+var LikedArt = widgets.ArtSpec{Hue: 330, Variant: 2, Glyph: "♥"}
+
+// TrackArt is the art of a queued track's album: a streamed track's from its
+// cover link.
 func TrackArt(t player.Track) widgets.ArtSpec {
 	s := widgets.SpecFor(t.Album)
 	s.Cover = media.Cover{Artist: t.AlbumArtist, Album: t.Album, Path: t.Path}
+	if t.Streamed() && t.Cover != "" {
+		s.Cover = media.Cover{URL: t.Cover}
+	}
 	return s
 }

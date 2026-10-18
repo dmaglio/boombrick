@@ -129,4 +129,13 @@ ffmpeg -loglevel error -y -i "$mux/tone.webm" -c:a copy "$mux/tone-ffmpeg.opus"
 ffmpeg -loglevel error -y -i "$mux/tone.webm" -f f32le "$mux/tone.f32"
 ls -l "$mux"
 
+# Ogg Vorbis at 44.1 kHz, as Spotify serves it, for the Spotify helper's
+# decoder, which the test puts a page of Spotify's own in front of: with
+# ffmpeg's decoding of it to compare against. Noise shows a misplaced seek.
+spot="$(dirname "$out")/../../spotify/helper/testdata"
+mkdir -p "$spot"
+noise 44100 30 -ac 2 -c:a libvorbis -b:a 160k "$spot/noise-160k.ogg"
+ffmpeg -loglevel error -y -i "$spot/noise-160k.ogg" -f f32le "$spot/noise-160k.f32"
+ls -l "$spot"
+
 ls -l "$out"

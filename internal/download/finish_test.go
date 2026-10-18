@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -353,5 +354,28 @@ func TestCoverSizes(t *testing.T) {
 	p := f.cover(context.Background(), srv.URL+"/b")
 	if p == nil || p.Width != coverPx || p.Height != coverPx || bytes.Equal(p.Data, body) {
 		t.Fatalf("a large square is not sized down: %+v", p)
+	}
+}
+
+// A song an import matched carries its Spotify ID and ISRC into the file.
+func TestFinishTagsImportedSongs(t *testing.T) {
+	db, music, parts := openDB(t), t.TempDir(), t.TempDir()
+	src := filepath.Join(parts, "v1.webm")
+	os.WriteFile(src, []byte("webm"), 0o644)
+	var tags remux.Tags
+	f := &finisher{db: db, music: music, http: http.DefaultClient, lyrics: fakeLyrics{},
+		formats: library.Formats{Supported: func(string) bool { return true }, Duration: func(string) (time.Duration, error) { return 0, nil }},
+		remux: func(src, dst string, t remux.Tags) error {
+			tags = t
+			return os.WriteFile(dst, []byte("opus"), 0o644)
+		}, log: slog.New(slog.DiscardHandler)}
+	song := ytmusic.Song{VideoID: "v1", Title: "Sapphire", Artist: "Ed Sheeran", Album: "Sapphire",
+		SpotifyID: "4Q0qVhFQa7j6jRKzo3HDmP", ISRC: "GBAHS2500262"}
+	if _, _, _, err := f.finish(context.Background(), song, src); err != nil {
+		t.Fatal(err)
+	}
+	want := [][2]string{{"BOOMBRICK_YOUTUBE_ID", "v1"}, {"BOOMBRICK_SPOTIFY_ID", "4Q0qVhFQa7j6jRKzo3HDmP"}, {"ISRC", "GBAHS2500262"}}
+	if !slices.Equal(tags.Extra, want) {
+		t.Fatalf("tags %v", tags.Extra)
 	}
 }

@@ -18,9 +18,11 @@ import (
 
 	"github.com/ujjwal313/boombrick/internal/app"
 	"github.com/ujjwal313/boombrick/internal/art"
+	"github.com/ujjwal313/boombrick/internal/audio"
 	"github.com/ujjwal313/boombrick/internal/audio/alsa"
 	"github.com/ujjwal313/boombrick/internal/audio/decode"
 	"github.com/ujjwal313/boombrick/internal/download"
+	"github.com/ujjwal313/boombrick/internal/importer"
 	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/logx"
 	"github.com/ujjwal313/boombrick/internal/lyrics"
@@ -33,6 +35,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/selfupdate"
 	"github.com/ujjwal313/boombrick/internal/settings"
 	"github.com/ujjwal313/boombrick/internal/space"
+	"github.com/ujjwal313/boombrick/internal/spotify"
 	"github.com/ujjwal313/boombrick/internal/store"
 	"github.com/ujjwal313/boombrick/internal/version"
 	"github.com/ujjwal313/boombrick/internal/ytmusic"
@@ -141,6 +144,15 @@ func run(started time.Time) error {
 	log.Info("downloads", "qjs", qjs != "")
 	yt := ytmusic.NewSearcher(ytmusic.Options{Client: ytc, Online: online, Log: log, Fallback: dl.Search})
 	defer yt.Close()
+	// Spotify playlists are imported by matching their songs on YouTube
+	// Music, a search a second, and downloading the matches. The importer
+	// closes before the queue it fills.
+	im, err := importer.New(importer.Options{DB: db.DB, Search: ytc.Search, Get: dl.Get, State: dl.State,
+		Remove: dl.Remove, Online: online, Log: log})
+	if err != nil {
+		return err
+	}
+	defer im.Close()
 	// Settings' Storage page measures and clears the caches off the UI
 	// thread; the meter closes before the caches it reaches into.
 	meter := space.New(space.Options{Art: covers, Lyrics: words,
@@ -173,9 +185,40 @@ func run(started time.Time) error {
 		updater = up
 	}
 
+	// Spotify runs in its helper, started the first time a Spotify song is
+	// played; it stops after the player.
+	sp := spotify.NewHelper(filepath.Join(dir, "bin", "boombrick-spotify"), filepath.Join(paths.Data, "spotify"), log, logOut)
+	defer sp.Close()
+	// The library the Spotify screens ask, kept in the database; it stops
+	// before the helper.
+	spLib := spotify.NewLibrary(sp, db.DB, log)
+	defer spLib.Close()
+
 	p := player.New(alsa.New(), decode.Open, log)
 	defer p.Close()
 	p.SetLevelling(prefs.Bool(settings.VolumeLevelling))
+	notices := make(chan player.Notice, 8)
+	p.SetStreaming(func(ctx context.Context, t player.Track, frame int64, level bool) (audio.Source, error) {
+		// A song an import downloaded plays from its file: no key, no Wi-Fi.
+		if prefs.Bool(settings.PreferDownloaded) {
+			if path, ok, err := library.FileOf(db.DB, t.SpotifyID); err == nil && ok {
+				return decode.Open(path)
+			}
+		}
+		if !online() {
+			return nil, spotify.ErrOffline
+		}
+		s, err := sp.Open(ctx, t.SpotifyID, frame, prefs.Int(settings.StreamingKbps), level)
+		if err != nil {
+			return nil, err // not s: a nil *Stream isn't a nil Source
+		}
+		return s, nil
+	}, func(n player.Notice) {
+		select {
+		case notices <- n:
+		default: // a burst of them: the toast shows the latest anyway
+		}
+	})
 
 	// Reading the saved queue and opening its track mustn't hold up the first
 	// frame.
@@ -331,6 +374,9 @@ func run(started time.Time) error {
 		Releases:     releases,
 		Updater:      updater,
 		Perf:         rec,
+		Notices:      notices,
+		Spotify:      spLib,
+		Importer:     im,
 	})
 	if err != nil {
 		return err

@@ -10,6 +10,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/screens"
 	keys "github.com/ujjwal313/boombrick/internal/settings"
 	"github.com/ujjwal313/boombrick/internal/space"
+	"github.com/ujjwal313/boombrick/internal/spotify"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
 	"github.com/ujjwal313/boombrick/internal/ui/anim"
@@ -42,6 +43,13 @@ type Space interface {
 	Cleared() (int64, bool)
 }
 
+// Account is the Spotify account as Settings shows it. *spotify.Library is
+// one.
+type Account interface {
+	Status() (spotify.Status, error)
+	Logout()
+}
+
 // Options configure the screen.
 type Options struct {
 	Prefs   Prefs
@@ -57,18 +65,23 @@ type Options struct {
 	Releases     Releases   // Boombrick's; nil: nor does the Boombrick card
 	Updater      Updater    // nil: no Update Boombrick pill, as on a desktop
 	Quit         func()     // the Update ready dialog's Quit now
+	Spotify      Account    // nil: no Streaming quality, nor the Accounts card
+	Copies       bool       // importing exists: Prefer downloaded copies is shown
 }
 
 // What focus moves between, top to bottom: the rows, then the cards' pills.
 const (
-	rowQuality = iota
+	rowStream = iota
+	rowQuality
+	rowPrefer
 	rowStorage
 	rowSleep
 	rowLevelling
 	rowCount
-	pillTool  = rowCount     // the Downloader card's pill
-	pillApp   = rowCount + 1 // the Boombrick card's
-	itemCount = rowCount + 2
+	pillTool    = rowCount     // the Downloader card's pill
+	pillApp     = rowCount + 1 // the Boombrick card's
+	pillAccount = rowCount + 2 // the Spotify account's
+	itemCount   = rowCount + 3
 )
 
 // Layout: a full screen, padding 40, in design pixels.
@@ -100,6 +113,13 @@ var qualities = []choice{
 	{"Smaller", "Opus · about 32 MB per hour", "smaller"},
 }
 
+// streams are Streaming quality's options.
+var streams = []choice{
+	{"96 kbps", "about 43 MB per hour", "96"},
+	{"160 kbps", "about 72 MB per hour", "160"},
+	{"320 kbps", "about 144 MB per hour", "320"},
+}
+
 // Screen is Settings.
 type Screen struct {
 	opts    Options
@@ -120,6 +140,8 @@ type Screen struct {
 	app     card
 	appFor  appState // and the Boombrick card
 	staging bool     // an update was being staged when the card was written
+	account card
+	acctFor spotify.Status // what the Spotify card was written for
 	hints   map[hintKey][]widgets.Hint
 }
 
@@ -132,7 +154,9 @@ type hintKey struct {
 func New(opts Options) *Screen {
 	s := &Screen{opts: opts, open: -1, hints: map[hintKey][]widgets.Hint{}}
 	s.rows = [rowCount]widgets.Setting{
+		rowStream:    {Icon: "stream", Label: "Streaming quality"},
 		rowQuality:   {Icon: "download", Label: "Download quality"},
+		rowPrefer:    {Icon: "circlecheck", Label: "Prefer downloaded copies"},
 		rowStorage:   {Icon: "sd", Label: "Storage", Chevron: true},
 		rowSleep:     {Icon: "moon", Label: "Sleep timer"},
 		rowLevelling: {Icon: "sliders", Label: "Volume levelling"},
@@ -155,14 +179,17 @@ func (s *Screen) Opened() {
 	}
 }
 
-// reset puts the screen on the main page, focus on the first row, nothing
-// expanded.
+// reset puts the screen on the main page, focus on the first row shown,
+// nothing expanded.
 func (s *Screen) reset() {
 	s.storage, s.open, s.focus = nil, -1, 0
+	for !s.shown(s.focus) {
+		s.focus++
+	}
 	for i := range s.k {
 		s.k[i].Set(0)
 	}
-	s.k[0].Set(1)
+	s.k[s.focus].Set(1)
 	s.scroll.Set(0)
 }
 
@@ -170,12 +197,18 @@ func (s *Screen) reset() {
 // measure, and a card's pill only when the card offers one.
 func (s *Screen) shown(item int) bool {
 	switch item {
+	case rowStream:
+		return s.opts.Spotify != nil
+	case rowPrefer:
+		return s.opts.Copies
 	case rowStorage:
 		return s.opts.Space != nil
 	case pillTool:
 		return s.opts.Downloader != nil
 	case pillApp:
 		return s.app.pill != ""
+	case pillAccount:
+		return s.account.pill != ""
 	}
 	return true
 }
@@ -240,7 +273,7 @@ func (s *Screen) move(step int, now time.Time) bool {
 // opens Storage, switches levelling, or presses a card's pill.
 func (s *Screen) act(now time.Time) bool {
 	switch s.focus {
-	case rowQuality, rowSleep:
+	case rowStream, rowQuality, rowSleep:
 		if s.open == s.focus {
 			s.open = -1
 		} else {
@@ -252,6 +285,8 @@ func (s *Screen) act(now time.Time) bool {
 		on := !s.opts.Prefs.Bool(keys.VolumeLevelling)
 		s.opts.Prefs.SetBool(keys.VolumeLevelling, on)
 		s.opts.Player.SetLevelling(on)
+	case rowPrefer:
+		s.opts.Prefs.SetBool(keys.PreferDownloaded, !s.opts.Prefs.Bool(keys.PreferDownloaded))
 	case pillTool:
 		if s.toolFor.d.Updating {
 			return false
@@ -263,6 +298,9 @@ func (s *Screen) act(now time.Time) bool {
 			return false
 		}
 		s.opts.Updater.Stage(r)
+	case pillAccount:
+		s.opts.Spotify.Logout()
+		s.opts.Toast("Signed out of Spotify")
 	}
 	return true
 }
@@ -270,6 +308,12 @@ func (s *Screen) act(now time.Time) bool {
 // choose moves the expanded setting's choice by step, applying it at once.
 func (s *Screen) choose(step int) bool {
 	switch s.open {
+	case rowStream:
+		i := s.streamIndex() + step
+		if i < 0 || i >= len(streams) {
+			return false
+		}
+		s.opts.Prefs.Set(keys.StreamingKbps, streams[i].value)
 	case rowQuality:
 		i := s.qualityIndex() + step
 		if i < 0 || i >= len(qualities) {
@@ -293,6 +337,16 @@ func (s *Screen) qualityIndex() int {
 		return 1
 	}
 	return 0
+}
+
+func (s *Screen) streamIndex() int {
+	kbps := s.opts.Prefs.String(keys.StreamingKbps)
+	for i, c := range streams {
+		if c.value == kbps {
+			return i
+		}
+	}
+	return 1
 }
 
 func (s *Screen) sleepIndex() int {
@@ -406,6 +460,18 @@ func (s *Screen) Draw(u *ui.Context) {
 		}
 		y += box.H
 	}
+	// The Spotify account, under a heading of its own.
+	if s.account.title != "" {
+		y += 28
+		u.Text("Accounts", text.Heading, side, y, theme.Paper)
+		y += u.LineHeight(text.Heading) + 4
+		box := gfx.Rect{X: side, Y: y, W: theme.ScreenW - 2*side, H: s.account.height(u)}
+		s.account.draw(u, box, float32(s.k[pillAccount].At(u.Now)))
+		if s.focus == pillAccount {
+			focusTop, focusBot = box.Y, box.Y+box.H
+		}
+		y += box.H
+	}
 	y += 28
 	u.Text(s.footer, footText, side, y, theme.Ink3)
 	if s.last() {
@@ -435,6 +501,14 @@ func (s *Screen) last() bool {
 	return true
 }
 
+// onOff is a switch's value.
+func onOff(on bool) string {
+	if on {
+		return "On"
+	}
+	return "Off"
+}
+
 // header draws a full screen's title, as the Queue's.
 func header(u *ui.Context, title string) {
 	u.Text(title, text.Title, side, headTop, theme.Paper)
@@ -460,6 +534,7 @@ func (s *Screen) follow(top, bot float32, view gfx.Rect, now time.Time) {
 
 // refresh writes the rows' values again when what they show has changed.
 func (s *Screen) refresh(now time.Time) {
+	s.rows[rowStream].Value = streams[s.streamIndex()].label
 	q := qualities[s.qualityIndex()].label
 	s.rows[rowQuality].Value = q
 	if s.opts.Card != nil {
@@ -484,10 +559,8 @@ func (s *Screen) refresh(now time.Time) {
 		s.rows[rowSleep].Value = screens.SleepValue(sl, now)
 		s.rows[rowSleep].Active = sl.Mode != player.SleepOff
 	}
-	s.rows[rowLevelling].Value = "Off"
-	if s.opts.Prefs.Bool(keys.VolumeLevelling) {
-		s.rows[rowLevelling].Value = "On"
-	}
+	s.rows[rowLevelling].Value = onOff(s.opts.Prefs.Bool(keys.VolumeLevelling))
+	s.rows[rowPrefer].Value = onOff(s.opts.Prefs.Bool(keys.PreferDownloaded))
 	s.refreshCards(now)
 }
 
@@ -516,6 +589,12 @@ func (s *Screen) refreshCards(now time.Time) {
 			Pills: []widgets.DialogPill{{Label: "Quit now"}, {Label: "Later"}}}, now)
 	}
 	s.staging = st.st.Staging
+	if s.opts.Spotify != nil {
+		if a, _ := s.opts.Spotify.Status(); a != s.acctFor || s.account.title == "" {
+			s.acctFor = a
+			s.account.setSpotify(a)
+		}
+	}
 	if !s.shown(s.focus) {
 		s.move(-1, now) // the pill went with the update it offered
 	}
@@ -536,7 +615,10 @@ func latest(r Releases) string {
 // options are the choices row offers, the chosen one, the line about them and
 // how many to a line.
 func (s *Screen) options(row int) (choices []choice, chosen int, about string, cols int) {
-	if row == rowQuality {
+	switch row {
+	case rowStream:
+		return streams, s.streamIndex(), "Spotify, over Wi-Fi or hotspot", 3
+	case rowQuality:
 		return qualities, s.qualityIndex(), "YouTube Music downloads", 2
 	}
 	return s.sleeps, s.sleepIndex(), "Fades out, then pauses", 4
@@ -601,10 +683,12 @@ func (s *Screen) hint() []widgets.Hint {
 		h = []widgets.Hint{{Key: "◀ ▶", Label: "Choose"}, {Key: "A", Label: "Done"}}
 	case k.item == rowStorage:
 		h = []widgets.Hint{{Key: "A", Label: "Open"}, {Key: "B", Label: "Back"}}
-	case k.item == rowLevelling:
+	case k.item == rowLevelling, k.item == rowPrefer:
 		h = []widgets.Hint{{Key: "A", Label: "Switch"}, {Key: "B", Label: "Back"}}
 	case k.item == pillTool, k.item == pillApp:
 		h = []widgets.Hint{{Key: "A", Label: "Update"}, {Key: "B", Label: "Back"}}
+	case k.item == pillAccount:
+		h = []widgets.Hint{{Key: "A", Label: "Sign out"}, {Key: "B", Label: "Back"}}
 	default:
 		h = []widgets.Hint{{Key: "A", Label: "Change"}, {Key: "B", Label: "Back"}}
 	}

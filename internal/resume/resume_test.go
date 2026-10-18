@@ -222,6 +222,27 @@ func TestPendingTracksAreKept(t *testing.T) {
 	}
 }
 
+// A streamed track is kept by its Spotify ID; with no file to carry on
+// from, it leaves its album's progress alone.
+func TestStreamedTracksAreKept(t *testing.T) {
+	db := openDB(t)
+	s := player.Snapshot{Queue: []player.Track{
+		{Title: "Stan", Artist: "Eminem", AlbumArtist: "Eminem", Album: "The Marshall Mathers LP", SpotifyID: "3UmaczJpikHgJFyBTAJVoz", Duration: 404 * time.Second,
+			Cover: "https://i.scdn.co/image/ab67616d0000b273dbb3dd82da45b7d7f31b1b42"},
+		{Title: "Kim", Artist: "Eminem", AlbumArtist: "Eminem", Album: "The Marshall Mathers LP", SpotifyID: "4mBTgXbiaP0mLanQhIKAxQ"},
+	}, Order: []int{0, 1}, Frame: 4410, AlbumRun: true, Fraction: 0.25}
+	if err := Save(db, s); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := Load(db)
+	if err != nil || !ok || !reflect.DeepEqual(got.Queue, s.Queue) || got.Frame != 4410 {
+		t.Fatalf("loaded %+v, %v, %v", got, ok, err)
+	}
+	if p, err := Recent(db, 10); err != nil || len(p) != 0 {
+		t.Fatalf("progress %+v, %v; want none", p, err)
+	}
+}
+
 func TestAPendingTrackLeavesAlbumProgressAlone(t *testing.T) {
 	db := openDB(t)
 	album := func(t player.Track) player.Track {

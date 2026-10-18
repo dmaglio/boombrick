@@ -24,6 +24,7 @@ type Index struct {
 	Artists []*Artist // by name
 	Songs   []*Track  // by title
 	byKey   map[[2]string]*Album
+	spotify map[string]*Track // the files imports downloaded, by Spotify ID
 }
 
 // Load reads the library and sorts it for browsing.
@@ -38,7 +39,7 @@ func Load(db *sql.DB) (*Index, error) {
 // NewIndex sorts albums, most recently added first as Albums returns them, for
 // browsing. The index points into albums.
 func NewIndex(albums []Album) *Index {
-	ix := &Index{byKey: make(map[[2]string]*Album, len(albums))}
+	ix := &Index{byKey: make(map[[2]string]*Album, len(albums)), spotify: map[string]*Track{}}
 	artists := map[string]*Artist{}
 	for i := range albums {
 		a := &albums[i]
@@ -54,6 +55,9 @@ func NewIndex(albums []Album) *Index {
 		ar.Songs += len(a.Tracks)
 		for j := range a.Tracks {
 			ix.Songs = append(ix.Songs, &a.Tracks[j])
+			if id := a.Tracks[j].SpotifyID; id != "" {
+				ix.spotify[id] = &a.Tracks[j]
+			}
 		}
 	}
 	ix.Albums = slices.Clone(ix.Recent)
@@ -74,6 +78,13 @@ func NewIndex(albums []Album) *Index {
 
 // Album finds an album by its artist and title, or returns nil.
 func (ix *Index) Album(artist, title string) *Album { return ix.byKey[[2]string{artist, title}] }
+
+// Spotify finds the file an import downloaded of Spotify song id, or
+// returns nil.
+func (ix *Index) Spotify(id string) *Track { return ix.spotify[id] }
+
+// SpotifyCount is how many Spotify songs imports have downloaded.
+func (ix *Index) SpotifyCount() int { return len(ix.spotify) }
 
 // Compare orders names as people read them: ignoring case, and comparing runs
 // of digits by value, so "Track 2" sorts before "Track 10".

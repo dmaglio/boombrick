@@ -24,6 +24,7 @@ type Item struct {
 	Progress        float64 // 0-1, Continue listening only
 	Play            func()  // starts the item's music; nil for sample content
 	Queue           func()  // adds the item's music to the queue; nil for sample content
+	Import          func()  // X: imports a Spotify playlist; nil for none
 }
 
 // Row is a titled row on Home.

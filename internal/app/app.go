@@ -31,7 +31,9 @@ import (
 	"github.com/ujjwal313/boombrick/internal/screens/queue"
 	"github.com/ujjwal313/boombrick/internal/screens/quickmenu"
 	settingsscreen "github.com/ujjwal313/boombrick/internal/screens/settings"
+	spotifyscreen "github.com/ujjwal313/boombrick/internal/screens/spotify"
 	"github.com/ujjwal313/boombrick/internal/screens/youtube"
+	"github.com/ujjwal313/boombrick/internal/spotify"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
 	"github.com/ujjwal313/boombrick/internal/ui/gfx"
@@ -96,6 +98,15 @@ type Options struct {
 	Updater Updater
 	// Perf records frame times in perf mode; nil when it is off.
 	Perf *perf.Recorder
+	// Notices brings the player's news about streaming, each shown as a
+	// toast, or for an expired session as a dialog.
+	Notices <-chan player.Notice
+	// Spotify is the Spotify library. Without it the tab is a placeholder,
+	// Home has no Spotify row and Settings no Spotify account.
+	Spotify Spotify
+	// Importer imports Spotify playlists to downloads. Without it, or
+	// without Spotify or Downloads, nothing offers an import.
+	Importer Importer
 }
 
 // Releases is what the app needs from a release checker. *release.Checker
@@ -195,6 +206,8 @@ type App struct {
 	skipped    atomic.Bool // and a queued song was dropped, its download failed
 	measured   atomic.Bool // the cache meter has news for the Storage page
 	released   atomic.Bool // a release was found, or an update moved on, for Settings
+	spotified  atomic.Bool // the Spotify library has news
+	imported   atomic.Bool // an import moved on
 	quit       bool
 	drawn      bool
 	drawnAt    time.Time // the start of the frame drawn last
@@ -203,6 +216,14 @@ type App struct {
 	powerAt    time.Time // when Power went down, while it is held
 	scanEnded  bool      // a scan has ended, so an empty index is the library
 	wasAnim    bool
+	// Spotify: the session-expired dialog, whether it has opened since the
+	// last sign-in, the playlists Home's row was made from, and the albums in
+	// progress Home was last given.
+	env         *spotifyscreen.Env // the Spotify screens', nil without Spotify
+	expired     *spotifyscreen.Expired
+	expiredOnce bool
+	playlists   []spotify.Playlist
+	progress    []resume.Progress
 
 	loads *loader
 	// set by the forwarding goroutines, taken by poll
@@ -346,11 +367,22 @@ func New(opts Options) (*App, error) {
 		ytTab = youtube.NewSearch(a, opts.YouTube, acts)
 		a.forward(opts.YouTube.Ready(), &a.found)
 	}
+	var spTab screens.Screen = &screens.Placeholder{Tab: spotifyTab, Title: "Spotify"}
+	if opts.Spotify != nil {
+		a.env = a.spotifyEnv()
+		spTab = spotifyscreen.NewTab(a.env)
+		a.expired = spotifyscreen.NewExpired(a.signIn)
+		a.forward(opts.Spotify.Ready(), &a.spotified)
+		opts.Spotify.Saved() // reads the playlists kept, for Home, without starting the helper
+	}
 	a.shell = newShell(a.home,
 		a.library,
-		&screens.Placeholder{Tab: 2, Title: "Spotify"},
+		spTab,
 		ytTab,
 		dlTab)
+	if a.expired != nil {
+		a.shell.alert = a.expired
+	}
 	addOverlays(a.shell, a.nowPlaying, a.queue, func() bool { return a.last.Queued }, opts.Player, opts.Lyrics)
 	if opts.Lyrics != nil {
 		a.forward(opts.Lyrics.Ready(), &a.words)
@@ -384,6 +416,10 @@ func (a *App) quickMenu() *quickmenu.Menu {
 		if a.opts.Updater != nil {
 			o.Updater = a.opts.Updater
 			a.forward(a.opts.Updater.Ready(), &a.released)
+		}
+		if a.opts.Spotify != nil {
+			o.Spotify = a.opts.Spotify
+			o.Copies = a.env.Import != nil
 		}
 		at := a.shell.add(overlay{button: input.None, screen: settingsscreen.New(o)})
 		act.OpenSettings = func() { a.shell.openOverlay(at, time.Now()) }
@@ -435,6 +471,9 @@ func (a *App) Pop() { a.shell.pop(time.Now()); a.dirty = true }
 
 // Toast shows msg above the hint bar.
 func (a *App) Toast(msg string) { a.shell.showToast(msg, time.Now()); a.dirty = true }
+
+// ShowTab shows tab t, closing any overlay over it.
+func (a *App) ShowTab(t int) { a.shell.showTab(t, time.Now()); a.dirty = true }
 
 // Close stops the status reader, turns the screen back on if it was off,
 // and releases SDL.
@@ -579,6 +618,17 @@ func (a *App) poll() {
 	if a.skipped.Swap(false) {
 		a.Toast("Skipped a song that couldn’t download")
 	}
+	select {
+	case n := <-a.opts.Notices:
+		a.notice(n, time.Now())
+	default:
+	}
+	if a.spotified.Swap(false) {
+		a.spotifyNews()
+	}
+	if a.imported.Swap(false) {
+		a.dirty = true
+	}
 	if st.Waiting && a.opts.Downloads != nil && (!l.Waiting || st.Track.VideoID != l.Track.VideoID) {
 		a.askFirst(st.Track)
 	}
@@ -653,12 +703,22 @@ func (a *App) colours() colours {
 
 // showHome fills Home's rows from the index and the albums in progress.
 func (a *App) showHome(progress []resume.Progress) {
+	a.progress = progress
 	if a.ix == nil {
 		return
 	}
 	var rows []fixture.Row
 	if row, ok := home.ContinueRow(progress, a.ix, a.resumeAlbum, a.queueAlbum); ok {
 		rows = append(rows, row)
+	}
+	if a.opts.Spotify != nil {
+		var imp func(spotify.Playlist)
+		if a.env.Import != nil {
+			imp = a.importPlaylist
+		}
+		if row, ok := home.SpotifyRow(a.playlists, a.openPlaylist, imp); ok {
+			rows = append(rows, row)
+		}
 	}
 	if row, ok := home.AlbumRow(a.ix.Recent, a.playAlbum, a.queueAlbum); ok {
 		rows = append(rows, row)

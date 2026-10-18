@@ -234,6 +234,30 @@ func TestWaitingTexts(t *testing.T) {
 	}
 }
 
+func TestStreamTexts(t *testing.T) {
+	n := New(&fake{})
+	s := player.State{Queued: true, Loading: true, Playing: true,
+		Track: player.Track{SpotifyID: "3UmaczJpikHgJFyBTAJVoz", Title: "Stan", Duration: 404 * time.Second}}
+	if f, left, right := n.progress(s); f != 0 || left != "Loading" || right != "6:44" {
+		t.Fatalf("opening: %v, %q, %q", f, left, right)
+	}
+	s.Loading, s.Stalled = false, true
+	s.Elapsed, s.Duration, s.Rate, s.Kbps = 101*time.Second, 404*time.Second, 44100, 160
+	if f, left, right := n.progress(s); f != 0.25 || left != "Connection lost" || right != "6:44" {
+		t.Fatalf("picking up: %v, %q, %q", f, left, right)
+	}
+	if got := formatLine(s); got != "160 kbps" {
+		t.Fatalf("format line %q", got)
+	}
+	s.Kbps, s.Rate = 0, 48000 // played from the file an import downloaded
+	if got := formatLine(s); got != "48 kHz" {
+		t.Fatalf("from its file: format line %q", got)
+	}
+	if got := source(s.Track); got != media.Spotify {
+		t.Fatalf("badge %v", got)
+	}
+}
+
 // The screen is redrawn for the download queue only while it shows a
 // download: playback waits on one, or the track is still to download.
 func TestShowsDownloadsOnlyForADownload(t *testing.T) {

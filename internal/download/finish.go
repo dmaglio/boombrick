@@ -69,6 +69,12 @@ func (f *finisher) finish(ctx context.Context, s ytmusic.Song, src string) (path
 	t := remux.Tags{Title: s.Title, Artist: s.Artist, Album: s.Album, AlbumArtist: s.AlbumArtist, Track: s.Number,
 		Year: s.Year, Lyrics: f.words(ctx, s), Picture: f.cover(ctx, s.Thumb),
 		Extra: [][2]string{{youTubeIDTag, s.VideoID}}}
+	if s.SpotifyID != "" {
+		t.Extra = append(t.Extra, [2]string{library.SpotifyIDTag, s.SpotifyID})
+	}
+	if s.ISRC != "" {
+		t.Extra = append(t.Extra, [2]string{"ISRC", s.ISRC})
+	}
 	if err := ctx.Err(); err != nil {
 		f.tidy(dst)
 		return "", 0, false, err

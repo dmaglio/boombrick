@@ -13,24 +13,18 @@ import (
 
 // Keys of every persisted setting.
 const (
-	StreamingKbps        = "spotify.streaming_kbps"
-	SpotifyConnect       = "spotify.connect"
-	SpotifyClientID      = "spotify.client_id"
-	DownloadQuality      = "downloads.quality"
-	PreferDownloaded     = "playback.prefer_downloaded"
-	VolumeLevelling      = "playback.volume_levelling"
-	RemoveDeletedImports = "import.remove_deleted"
+	StreamingKbps    = "spotify.streaming_kbps"
+	DownloadQuality  = "downloads.quality"
+	PreferDownloaded = "playback.prefer_downloaded"
+	VolumeLevelling  = "playback.volume_levelling"
 )
 
 // Defaults holds the value used for a key that has never been set.
 var Defaults = map[string]string{
-	StreamingKbps:        "160",
-	SpotifyConnect:       "true",
-	SpotifyClientID:      "",
-	DownloadQuality:      "best",
-	PreferDownloaded:     "true",
-	VolumeLevelling:      "true",
-	RemoveDeletedImports: "false",
+	StreamingKbps:    "160",
+	DownloadQuality:  "best",
+	PreferDownloaded: "true",
+	VolumeLevelling:  "true",
 }
 
 // Settings keeps the table in memory and writes changes behind the caller.

@@ -26,6 +26,7 @@ type Track struct {
 	AlbumGain, AlbumPeak              float64 // ReplayGain album gain (dB) and peak
 	HasAlbumGain                      bool
 	Duration                          time.Duration // 0 when unknown
+	SpotifyID                         string        // the Spotify song an import downloaded this as
 }
 
 // Album is the tracks of one album, in disc and track order. Artist is the
@@ -55,13 +56,13 @@ type Formats struct {
 // first scan of a big card then shows albums while it runs.
 const batchSize = 500
 
-const upsertTrack = `INSERT INTO tracks (path, size, mtime, artist, album_artist, album, title, disc, number, year, gain, peak, album_gain, album_peak, duration_ms, added)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+const upsertTrack = `INSERT INTO tracks (path, size, mtime, artist, album_artist, album, title, disc, number, year, gain, peak, album_gain, album_peak, duration_ms, added, spotify_id)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT (path) DO UPDATE SET size = excluded.size, mtime = excluded.mtime, artist = excluded.artist,
 		album_artist = excluded.album_artist, album = excluded.album, title = excluded.title, disc = excluded.disc,
 		number = excluded.number, year = excluded.year, gain = excluded.gain, peak = excluded.peak,
 		album_gain = excluded.album_gain, album_peak = excluded.album_peak,
-		duration_ms = excluded.duration_ms`
+		duration_ms = excluded.duration_ms, spotify_id = excluded.spotify_id`
 
 // Scan walks root and brings the tracks table in line with it: new and changed
 // files are indexed, rows for missing files removed. Only files f supports
@@ -215,7 +216,7 @@ func writeChanges(db *sql.DB, changes []change, gone []string, now int64) error 
 		t := c.t
 		if _, err := upsert.Exec(c.path, c.size, c.mtime, t.Artist, t.AlbumArtist, t.Album, t.Title, t.Disc, t.Number,
 			t.Year, nullable(t.Gain, t.HasGain), nullable(t.Peak, t.HasGain), nullable(t.AlbumGain, t.HasAlbumGain),
-			nullable(t.AlbumPeak, t.HasAlbumGain), t.Duration.Milliseconds(), now); err != nil {
+			nullable(t.AlbumPeak, t.HasAlbumGain), t.Duration.Milliseconds(), now, t.SpotifyID); err != nil {
 			return err
 		}
 	}
@@ -255,7 +256,39 @@ func describe(root, path string, f Formats) Track {
 	}
 	t.Year, t.Gain, t.Peak, t.HasGain = tags.Year, tags.Gain, tags.Peak, tags.HasGain
 	t.AlbumGain, t.AlbumPeak, t.HasAlbumGain = tags.AlbumGain, tags.AlbumPeak, tags.HasAlbumGain
+	t.SpotifyID = tags.SpotifyID
 	return t
+}
+
+// FileOf is the path of the library's file of Spotify song id, as an import
+// downloaded it; ok is false when there is none.
+func FileOf(db *sql.DB, id string) (path string, ok bool, err error) {
+	if id == "" {
+		return "", false, nil
+	}
+	err = db.QueryRow(`SELECT path FROM tracks WHERE spotify_id = ? LIMIT 1`, id).Scan(&path)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	return path, err == nil, err
+}
+
+// SpotifyIDs are the Spotify songs the library has files of.
+func SpotifyIDs(db *sql.DB) (map[string]bool, error) {
+	rows, err := db.Query(`SELECT spotify_id FROM tracks WHERE spotify_id != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids[id] = true
+	}
+	return ids, rows.Err()
 }
 
 func nullable(v float64, ok bool) any {
@@ -362,7 +395,7 @@ const variousArtists = "Various Artists"
 // match so every part of the app keys the album the same way.
 func Albums(db *sql.DB) ([]Album, error) {
 	rows, err := db.Query(`SELECT id, path, artist, album_artist, album, title, disc, number, year, gain, peak, album_gain, album_peak,
-			duration_ms, added, mtime
+			duration_ms, added, mtime, spotify_id
 		FROM tracks ORDER BY disc, number, title`)
 	if err != nil {
 		return nil, err
@@ -454,7 +487,7 @@ func scanTrack(rows *sql.Rows) (t Track, added, mtime int64, err error) {
 	var gain, peak, albumGain, albumPeak sql.NullFloat64
 	var ms int64
 	if err := rows.Scan(&t.ID, &t.Path, &t.Artist, &t.AlbumArtist, &t.Album, &t.Title, &t.Disc, &t.Number,
-		&t.Year, &gain, &peak, &albumGain, &albumPeak, &ms, &added, &mtime); err != nil {
+		&t.Year, &gain, &peak, &albumGain, &albumPeak, &ms, &added, &mtime, &t.SpotifyID); err != nil {
 		return Track{}, 0, 0, err
 	}
 	t.Gain, t.Peak, t.HasGain = gain.Float64, peak.Float64, gain.Valid

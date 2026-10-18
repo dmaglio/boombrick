@@ -166,9 +166,11 @@ func TestEndOfAlbumWithRepeatAll(t *testing.T) {
 	p.CycleRepeat() // all
 	p.SetSleep(SleepAlbum)
 	p.Play([]Track{{Path: "a1", Album: "A"}, {Path: "a2", Album: "A"}}, 0)
+	// Opened: a1, a2 to follow it, a1 cued at the stop, and a2 to follow
+	// that.
 	eventually(t, "a stop at the album's end", func() bool {
 		s := p.State()
-		return s.Track.Path == "a1" && !s.Playing && len(f.log()) >= 3
+		return s.Track.Path == "a1" && !s.Playing && len(f.log()) >= 4
 	})
 	n := len(f.log())
 	time.Sleep(200 * time.Millisecond)

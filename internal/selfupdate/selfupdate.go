@@ -34,7 +34,7 @@ type Pak struct {
 	Asset, Dir string
 }
 
-// The limits on an update: the zip is about 12 MB.
+// The limits on an update: the zip is about 14 MB.
 var (
 	maxZip      int64 = 64 << 20
 	maxUnpacked int64 = 160 << 20

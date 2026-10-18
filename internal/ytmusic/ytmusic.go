@@ -95,6 +95,9 @@ type Song struct {
 	Number, Year   int
 	Duration       time.Duration
 	Thumb          string
+	// SpotifyID and ISRC are the Spotify song an import matched this to,
+	// written into the file's tags.
+	SpotifyID, ISRC string
 }
 
 // Song is a song result as a download.

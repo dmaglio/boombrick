@@ -18,7 +18,12 @@ type Tags struct {
 	HasGain                           bool
 	AlbumGain, AlbumPeak              float64 // ReplayGain album gain in dB and sample peak
 	HasAlbumGain                      bool
+	SpotifyID                         string // BOOMBRICK_SPOTIFY_ID, on a song an import downloaded
 }
+
+// SpotifyIDTag names the tag holding the Spotify ID of a song an import
+// downloaded.
+const SpotifyIDTag = "BOOMBRICK_SPOTIFY_ID"
 
 // ReadTags reads ID3 (MP3), Vorbis comment (FLAC), OpusTags (Opus) and MP4
 // (M4A) metadata.
@@ -58,6 +63,7 @@ func ReadTags(path string) (t Tags, err error) {
 		t.AlbumArtist = rawText(m.Raw(), "album_artist", "album artist", "albumartist")
 	}
 	t.Gain, t.Peak, t.HasGain, t.AlbumGain, t.AlbumPeak, t.HasAlbumGain = replayGains(m.Raw())
+	t.SpotifyID = rawText(m.Raw(), SpotifyIDTag)
 	return t, nil
 }
 

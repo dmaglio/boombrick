@@ -12,6 +12,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
 	"github.com/ujjwal313/boombrick/internal/resume"
+	"github.com/ujjwal313/boombrick/internal/spotify"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui/anim"
 	"github.com/ujjwal313/boombrick/internal/ui/uitest"
@@ -471,5 +472,42 @@ func TestHomeBeforeLoadAndEmpty(t *testing.T) {
 	uitest.Golden(t, "home-empty", render(t, h, t0))
 	if !h.Handle(press(input.Y), t0) || scans != 1 {
 		t.Fatal("Y on the empty Home rescans")
+	}
+}
+
+// Spotify playlists starts with Liked Songs; each card opens its page.
+func TestSpotifyRow(t *testing.T) {
+	if _, ok := SpotifyRow(nil, nil, nil); ok {
+		t.Fatal("a row with no playlists kept")
+	}
+	pls := []spotify.Playlist{
+		{URI: "spotify:playlist:37i9dQZF1DX76Wlfdnj7AP", Name: "This Is Eminem", Owner: "Spotify", Count: 50},
+		{URI: "spotify:playlist:5ABHKGoOzxkaa28ttQV9sE", Name: "Road trip", Owner: "Ujjwal", Count: 1},
+	}
+	var opened, imported []string
+	row, ok := SpotifyRow(pls, func(p spotify.Playlist) { opened = append(opened, p.Name) },
+		func(p spotify.Playlist) { imported = append(imported, p.URI) })
+	if !ok || row.Meta != "2 playlists" || !row.Spotify || len(row.Items) != 3 {
+		t.Fatalf("row %+v", row)
+	}
+	if it := row.Items[0]; it.Title != "Liked Songs" || it.Art.Glyph != "♥" {
+		t.Fatalf("first card %+v", it)
+	}
+	if row.Items[1].Subtitle != "50 songs" || row.Items[2].Subtitle != "1 song" {
+		t.Fatalf("subtitles %q, %q", row.Items[1].Subtitle, row.Items[2].Subtitle)
+	}
+	for _, it := range row.Items {
+		it.Play()
+	}
+	if strings.Join(opened, ",") != "Liked Songs,This Is Eminem,Road trip" {
+		t.Fatalf("opened %v", opened)
+	}
+	h := New([]fixture.Row{row})
+	if got := h.hints(); got[0].Label != "Open" || got[1].Key != "X" {
+		t.Fatalf("hints %v", got)
+	}
+	h.Handle(input.Event{Button: input.X, Kind: input.Press}, time.Time{})
+	if strings.Join(imported, ",") != spotify.LikedURI {
+		t.Fatalf("X imported %v", imported)
 	}
 }

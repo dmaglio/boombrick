@@ -363,7 +363,7 @@ type shower struct {
 func (s *shower) ShowsDownloads() bool { return s.on }
 
 // A change to the download queue redraws only what shows it: the shown tab's
-// top page, or the open overlay.
+// top page, or the open overlay, which hides the tab.
 func TestOnlyWhatShowsDownloadsRedrawsForThem(t *testing.T) {
 	library, downloads := &page{name: "library"}, &shower{page: page{name: "downloads"}, on: true}
 	np := &shower{page: page{name: "now playing"}}
@@ -393,5 +393,11 @@ func TestOnlyWhatShowsDownloadsRedrawsForThem(t *testing.T) {
 	s.handle(press(input.Start), t0)
 	if s.showsDownloads() {
 		t.Fatal("Now Playing closed still redraws the Library")
+	}
+	s.handle(press(input.R1), t0)
+	np.on = false
+	s.handle(press(input.Start), t0)
+	if s.showsDownloads() {
+		t.Fatal("the Downloads tab redraws for downloads under Now Playing")
 	}
 }

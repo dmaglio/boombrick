@@ -31,7 +31,7 @@ type row struct {
 }
 
 const rowColumns = `video_id, title, artist, album, album_id, album_artist, number, year, duration_ms, thumb,
-	state, failure, message, path, bytes, added, priority, finished`
+	state, failure, message, path, bytes, added, priority, finished, spotify_id, isrc`
 
 // loadRows reads the table, by video ID.
 func loadRows(db *sql.DB) (map[string]*row, error) {
@@ -46,7 +46,7 @@ func loadRows(db *sql.DB) (map[string]*row, error) {
 		var ms int64
 		if err := rs.Scan(&r.song.VideoID, &r.song.Title, &r.song.Artist, &r.song.Album, &r.song.AlbumID,
 			&r.song.AlbumArtist, &r.song.Number, &r.song.Year, &ms, &r.song.Thumb, &r.state, &r.failure, &r.message,
-			&r.path, &r.bytes, &r.added, &r.priority, &r.finished); err != nil {
+			&r.path, &r.bytes, &r.added, &r.priority, &r.finished, &r.song.SpotifyID, &r.song.ISRC); err != nil {
 			return nil, err
 		}
 		r.song.Duration = time.Duration(ms) * time.Millisecond
@@ -65,12 +65,13 @@ func saveRows(db *sql.DB, rows []row) error {
 		return err
 	}
 	defer tx.Rollback()
-	st, err := tx.Prepare(`INSERT INTO downloads (` + rowColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	st, err := tx.Prepare(`INSERT INTO downloads (` + rowColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (video_id) DO UPDATE SET title = excluded.title, artist = excluded.artist, album = excluded.album,
 			album_id = excluded.album_id, album_artist = excluded.album_artist, number = excluded.number,
 			year = excluded.year, duration_ms = excluded.duration_ms, thumb = excluded.thumb, state = excluded.state,
 			failure = excluded.failure, message = excluded.message, path = excluded.path, bytes = excluded.bytes,
-			added = excluded.added, priority = excluded.priority, finished = excluded.finished`)
+			added = excluded.added, priority = excluded.priority, finished = excluded.finished,
+			spotify_id = excluded.spotify_id, isrc = excluded.isrc`)
 	if err != nil {
 		return err
 	}
@@ -79,7 +80,7 @@ func saveRows(db *sql.DB, rows []row) error {
 		s := r.song
 		if _, err := st.Exec(s.VideoID, s.Title, s.Artist, s.Album, s.AlbumID, s.AlbumArtist, s.Number, s.Year,
 			s.Duration.Milliseconds(), s.Thumb, r.state, r.failure, r.message, r.path, r.bytes, r.added, r.priority,
-			r.finished); err != nil {
+			r.finished, s.SpotifyID, s.ISRC); err != nil {
 			return err
 		}
 	}
