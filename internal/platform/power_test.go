@@ -4,13 +4,15 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
-// panel stands in for the display driver.
+// panel stands in for the display driver, keeping the levels it was set to.
 type panel struct {
 	level int
 	fail  bool
+	set   []int
 }
 
 func (p *panel) brightness() (int, error) { return p.level, nil }
@@ -20,7 +22,23 @@ func (p *panel) setBrightness(v int) error {
 		return errors.New("driver refused")
 	}
 	p.level = v
+	p.set = append(p.set, v)
 	return nil
+}
+
+// The Brick's panel comes back from 0 by way of a low level, as NextUI wakes
+// it, then takes the level it had.
+func TestBacklightOnGoesByWayOfALowLevel(t *testing.T) {
+	p := &panel{level: 128}
+	b := &Backlight{dev: p}
+	b.Off()
+	p.set = nil
+	if err := b.On(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.set, []int{wakeBrightness, 128}) {
+		t.Fatalf("On set the levels %v, want %d then 128", p.set, wakeBrightness)
+	}
 }
 
 func TestBacklightOffAndOn(t *testing.T) {

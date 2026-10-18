@@ -25,6 +25,10 @@ type display interface {
 // light off was already 0: NextUI's level 6 of 10 on the Brick.
 const fallbackBrightness = 96
 
+// wakeBrightness is set before the level is put back: the Brick's panel stays
+// dark when set straight from 0, so NextUI wakes it by way of this level.
+const wakeBrightness = 8
+
 // NewBacklight returns the Brick's backlight. On a desktop there is no
 // /dev/disp, and Off fails.
 func NewBacklight() *Backlight { return &Backlight{dev: dispDevice{path: "/dev/disp"}} }
@@ -52,6 +56,9 @@ func (b *Backlight) Off() error {
 func (b *Backlight) On() error {
 	if !b.off {
 		return nil
+	}
+	if err := b.dev.setBrightness(wakeBrightness); err != nil {
+		return err
 	}
 	if err := b.dev.setBrightness(b.saved); err != nil {
 		return err
