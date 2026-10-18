@@ -96,6 +96,9 @@ func (s *SignIn) Due(t time.Time) (time.Time, bool) {
 // Draw renders the frame, and closes the page once the code is approved.
 func (s *SignIn) Draw(u *ui.Context) {
 	st, err := s.src.Status()
+	if err == nil {
+		err = s.src.LoginErr()
+	}
 	if st.State == spotify.Ready && !s.done {
 		s.done = true
 		name := st.Name

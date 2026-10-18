@@ -3,6 +3,7 @@ package spotify
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -21,6 +22,7 @@ type fakeClient struct {
 	playlists []Playlist
 	tracks    map[string][]Track
 	err       error // every list's answer, when set
+	loginErr  error // a sign-in's answer, when set
 	asked     map[string]int
 }
 
@@ -51,6 +53,12 @@ func (f *fakeClient) Status(context.Context) (Status, error) {
 
 func (f *fakeClient) Login(context.Context) (Login, error) {
 	f.count("login")
+	f.mu.Lock()
+	err := f.loginErr
+	f.mu.Unlock()
+	if err != nil {
+		return Login{}, err
+	}
 	f.set(func() {
 		f.status = Status{State: SigningIn, Login: &Login{URL: "https://spotify.com/pair?code=ABCD", Code: "ABCD"}}
 	})
@@ -202,6 +210,26 @@ func TestSavedDoesntAskTheHelper(t *testing.T) {
 
 // The status is asked once a second; signing in and out ask it again at
 // once, and signing out forgets the lists.
+// A sign-in that fails says why until the next one, though the helper's
+// status, asked again meanwhile, has no error.
+func TestFailedSignInIsKept(t *testing.T) {
+	db := openDB(t)
+	c := &fakeClient{status: Status{State: SignedOut}, loginErr: ErrOffline, asked: map[string]int{}}
+	l, _ := library(t, c, db)
+	l.Login()
+	waitFor(t, "the failure", func() bool { return errors.Is(l.LoginErr(), ErrOffline) })
+	waitFor(t, "the status after it", func() bool { st, err := l.Status(); return st.State == SignedOut && err == nil })
+	if !errors.Is(l.LoginErr(), ErrOffline) {
+		t.Fatalf("after the status, the failure is %v", l.LoginErr())
+	}
+	c.set(func() { c.loginErr = nil })
+	l.Login()
+	if err := l.LoginErr(); err != nil {
+		t.Fatalf("trying again still says %v", err)
+	}
+	waitFor(t, "the code", func() bool { st, _ := l.Status(); return st.Login != nil })
+}
+
 func TestStatusSignInAndOut(t *testing.T) {
 	db := openDB(t)
 	c := &fakeClient{status: Status{State: SignedOut}, playlists: gym, asked: map[string]int{}}

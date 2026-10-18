@@ -29,6 +29,8 @@ type Source interface {
 	Tracks(uri string) ([]spotify.Track, bool, error)
 	Retry()
 	Login()
+	// LoginErr is why the last sign-in failed, until the next one starts.
+	LoginErr() error
 }
 
 // Player plays and queues a playlist's songs, and says which is playing.

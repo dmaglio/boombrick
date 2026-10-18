@@ -1,6 +1,8 @@
 package spotify
 
 import (
+	"bytes"
+	"errors"
 	"image"
 	"reflect"
 	"slices"
@@ -33,6 +35,7 @@ type fakeSource struct {
 	listErr   error
 	tracks    map[string][]spotify.Track
 	logins    int
+	loginErr  error
 	retries   int
 }
 
@@ -44,8 +47,9 @@ func (s *fakeSource) Tracks(uri string) ([]spotify.Track, bool, error) {
 	ts, ok := s.tracks[uri]
 	return ts, ok, s.listErr
 }
-func (s *fakeSource) Retry() { s.retries++ }
-func (s *fakeSource) Login() { s.logins++ }
+func (s *fakeSource) Retry()          { s.retries++ }
+func (s *fakeSource) Login()          { s.logins++ }
+func (s *fakeSource) LoginErr() error { return s.loginErr }
 
 // fakePlayer records what the screens ask it.
 type fakePlayer struct {
@@ -238,6 +242,22 @@ func TestSignInClosesWhenApproved(t *testing.T) {
 	if len(nav.pushed) != 0 || !slices.Equal(nav.toasts, []string{"Signed in as Ujjwal"}) {
 		t.Fatalf("pages %d, toasts %v", len(nav.pushed), nav.toasts)
 	}
+}
+
+// A sign-in that failed before a code came says why, and X tries again.
+func TestSignInSaysWhyItFailed(t *testing.T) {
+	src := &fakeSource{status: spotify.Status{State: spotify.SignedOut}, loginErr: errors.New("x509: certificate signed by unknown authority")}
+	s := NewSignIn(&Env{Nav: &fakeNav{}, Src: src})
+	failed := render(t, s)
+	waiting := render(t, NewSignIn(&Env{Nav: &fakeNav{}, Src: &fakeSource{status: src.status}}))
+	if bytes.Equal(failed.Pix, waiting.Pix) {
+		t.Fatal("a sign-in that failed looks like one waiting for its code")
+	}
+	s.Handle(press(input.X), t0)
+	if src.logins != 2 {
+		t.Fatalf("%d logins after X", src.logins)
+	}
+	uitest.Golden(t, "spotify-sign-in-failed", failed)
 }
 
 func TestQRCodeImage(t *testing.T) {

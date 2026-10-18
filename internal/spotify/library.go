@@ -49,7 +49,8 @@ type Library struct {
 	status    Status
 	statusErr error
 	statusAt  time.Time
-	asking    bool // a status request is under way
+	loginErr  error // why the last sign-in failed, until the next
+	asking    bool  // a status request is under way
 	lists     map[string]*list
 }
 
@@ -169,6 +170,9 @@ func (l *Library) Retry() {
 
 // Login starts a sign-in; its code comes in the Status.
 func (l *Library) Login() {
+	l.mu.Lock()
+	l.loginErr = nil
+	l.mu.Unlock()
 	l.wg.Add(1)
 	go func() {
 		defer l.wg.Done()
@@ -177,12 +181,19 @@ func (l *Library) Login() {
 		_, err := l.c.Login(ctx)
 		l.mu.Lock()
 		l.statusAt = time.Time{} // ask again at once
-		if err != nil {
-			l.statusErr = err
-		}
+		l.loginErr = err
 		l.mu.Unlock()
 		l.signal()
 	}()
+}
+
+// LoginErr is why the last sign-in failed, until the next one starts. It is
+// kept apart from the status's error: the helper answers the status after a
+// sign-in fails, signed out, and that would hide why.
+func (l *Library) LoginErr() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.loginErr
 }
 
 // Logout signs out, and forgets the lists.
