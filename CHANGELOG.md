@@ -2,6 +2,15 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.2.0-beta.1]
+
+A beta for testers: Settings doesn't offer it, and it is installed by hand.
+
+### Added
+
+- **CrossMix:** `Boombrick-CrossMix.zip` installs Boombrick in CrossMix's Apps, with its data in the app's folder. It keeps the Brick awake while it's open, powers off when Power is held, and updates itself from Settings.
+- Betas: a version with a suffix, like this one, is published as a pre-release, which only testers install. Every version is offered the next full release.
+
 ## [v0.1.1]
 
 ### Added
