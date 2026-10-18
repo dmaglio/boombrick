@@ -2,6 +2,23 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.3.0]
+
+### Added
+
+- **Play in background** (quick menu): the music goes on after you leave Boombrick, as while you play a game, with the volume keys setting both. Spotify keeps streaming. Opening Boombrick again takes the music back where it got to, with the sleep timer's time left. Downloads wait for Boombrick, so songs still downloading are skipped meanwhile.
+- **Volume on screen:** the volume buttons show the level in Boombrick, since NextUI's own overlay is hidden while it's open.
+
+### Changed
+
+- The Spotify tab's library runs the full width: the "Take it offline" card is gone. Y still imports a playlist.
+
+### Fixed
+
+- Spotify songs show their lyrics, from LRCLIB or from a copy an import downloaded, instead of "No lyrics for this song".
+- A sleep timer that ends while a Spotify song is still opening stops it, instead of letting it play on.
+- Quitting while a Spotify song is still opening keeps its place in the queue, instead of starting it again from the top next time.
+
 ## [v0.2.1]
 
 ### Fixed
