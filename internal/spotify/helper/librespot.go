@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -20,6 +21,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	// Used only when the system has no CA certificates, as on the Brick.
+	_ "golang.org/x/crypto/x509roots/fallback"
 
 	librespot "github.com/devgianlu/go-librespot"
 	"github.com/devgianlu/go-librespot/ap"
@@ -645,6 +649,7 @@ func classify(err error) error {
 		key   *audio.KeyProviderError
 		limit *spclient.RateLimitedError
 		login *ap.AccesspointLoginError
+		cert  *tls.CertificateVerificationError
 		nerr  net.Error
 	)
 	switch {
@@ -656,6 +661,8 @@ func classify(err error) error {
 		return &spotify.Throttled{Wait: limit.RetryAfter}
 	case errors.As(err, &login):
 		return fmt.Errorf("%w: %w", spotify.ErrSignedOut, err)
+	case errors.As(err, &cert):
+		return err // inside a network error, but the network is there
 	case errors.As(err, &nerr):
 		return fmt.Errorf("%w: %w", spotify.ErrOffline, err)
 	}

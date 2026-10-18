@@ -1,8 +1,11 @@
 package helper
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -99,6 +102,14 @@ func TestClassify(t *testing.T) {
 	}
 	if err := classify(fmt.Errorf("resolve: %w", &netErr{})); !errors.Is(err, spotify.ErrOffline) {
 		t.Fatalf("a network error: %v", err)
+	}
+	// A certificate that can't be checked comes inside a network error, but
+	// the network is there: saying "offline" would send the user the wrong
+	// way, as when the helper had no CA certificates on the Brick.
+	bad := &url.Error{Op: "Post", URL: "https://clienttoken.spotify.com/v1/clienttoken",
+		Err: &tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}}}
+	if err := classify(fmt.Errorf("failed requesting clienttoken: %w", bad)); errors.Is(err, spotify.ErrOffline) {
+		t.Fatalf("a certificate that can't be checked: %v", err)
 	}
 }
 
