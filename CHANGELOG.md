@@ -2,6 +2,13 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.2.1]
+
+### Fixed
+
+- Signing in to Spotify on the Brick no longer stays on "Getting a code…": the Spotify helper brings its own CA certificates, as Boombrick does, since the Brick has none.
+- A Spotify sign-in that fails says so, with Try again, and a certificate that can't be checked is no longer taken for being offline.
+
 ## [v0.2.0]
 
 ### Added
