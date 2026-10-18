@@ -2,13 +2,16 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
-## [Unreleased]
+## [v0.2.0]
 
 ### Added
 
 - **Spotify** (Premium): sign in with a code or a QR code on your phone, then play Liked Songs and your playlists, Spotify's own mixes included, in the same queue as your music. Streams play at 96, 160 or 320 kbps (Settings → Streaming quality) and are levelled like your files. Home shows your Spotify playlists, and Settings the account, with Sign out.
 - **Spotify import:** Y on the Spotify tab, or X on a playlist, downloads its songs from YouTube Music, matched by ISRC or by title, artist and length. Doubtful matches wait for you to use, swap or skip them, and a progress page follows the downloads. Songs with a copy are marked on playlist pages and play from the file, offline too (Settings → Prefer downloaded copies).
+- **CrossMix:** `Boombrick-CrossMix.zip` installs Boombrick in CrossMix's Apps, with its data in the app's folder. It keeps the Brick awake while it's open, powers off when Power is held, and updates itself from Settings.
+- The status bar names the Bluetooth headphones or speaker connected.
 - Offline, the Spotify and YouTube tabs say so, with a button that opens Downloads.
+- Betas: a version with a suffix is published as a pre-release, which only testers install; Settings offers full releases only.
 - `THIRD-PARTY.txt` in both zips holds the third-party licences in full, next to NOTICE.
 
 ### Changed

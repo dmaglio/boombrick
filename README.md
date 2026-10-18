@@ -1,6 +1,6 @@
 # Boombrick
 
-A music player for the [TrimUI Brick](https://trimui.com) running [NextUI](https://github.com/LoveRetro/NextUI) or, in beta, [CrossMix](https://github.com/cizia64/CrossMix-OS). It plays the music on your SD card, streams your Spotify playlists, finds covers and synced lyrics, and downloads songs and albums from YouTube Music for offline listening. Its colours come from the album that's playing.
+A music player for the [TrimUI Brick](https://trimui.com) running [NextUI](https://github.com/LoveRetro/NextUI) or [CrossMix](https://github.com/cizia64/CrossMix-OS). It plays the music on your SD card, streams your Spotify playlists, finds covers and synced lyrics, and downloads songs and albums from YouTube Music for offline listening. Its colours come from the album that's playing.
 
 See [CHANGELOG.md](CHANGELOG.md) for what each release adds.
 
@@ -18,11 +18,11 @@ See [CHANGELOG.md](CHANGELOG.md) for what each release adds.
 
 ## Installing
 
-You need a TrimUI Brick with NextUI, or CrossMix for the beta. Wi-Fi is used for Spotify, YouTube Music, covers, lyrics and updates; music on the card plays without it. Spotify needs a Premium account.
+You need a TrimUI Brick with NextUI or CrossMix. Wi-Fi is used for Spotify, YouTube Music, covers, lyrics and updates; music on the card plays without it. Spotify needs a Premium account.
 
 1. Download the zip for your firmware:
    - **NextUI:** `Boombrick.pak.zip` from the [latest release](https://github.com/ujjwal313/boombrick/releases/latest).
-   - **CrossMix (beta):** `Boombrick-CrossMix.zip` from the newest [release](https://github.com/ujjwal313/boombrick/releases) marked Pre-release.
+   - **CrossMix:** `Boombrick-CrossMix.zip` from the same release.
 2. Unzip it at the root of the SD card. It goes to `Tools/tg5040/Boombrick.pak` on NextUI and `Apps/Boombrick` on CrossMix.
 3. Put your music in the card's `Music` folder, in any layout; `Artist/Album/01 Title.flac` works best when files have no tags.
 4. Start Boombrick from Tools on NextUI, or from Apps on CrossMix. The library is scanned on the first launch, and again on every launch after that.
