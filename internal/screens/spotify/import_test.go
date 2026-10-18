@@ -85,7 +85,7 @@ func importEnv(nav *fakeNav, src *fakeSource) (*Env, *fakeImporter, *fakeQueue) 
 	q := &fakeQueue{states: map[string]media.DownloadState{}}
 	have := map[string]bool{road[0].ID: true}
 	e := &Env{Nav: nav, Src: src, Player: &fakePlayer{}, Import: im, Queue: q,
-		Copies: func(id string) bool { return have[id] }, Count: func() int { return len(have) },
+		Copies:   func(id string) bool { return have[id] },
 		Online:   func() bool { return true },
 		Estimate: func() (float64, int64) { return 72, 386 << 27 }}
 	return e, im, q

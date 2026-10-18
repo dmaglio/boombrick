@@ -36,9 +36,8 @@ type Env struct {
 	Import Importer
 	Queue  Queue
 	// Copies reports whether the library has a file an import downloaded of
-	// Spotify song id, and Count how many such songs it has; nil for none.
+	// Spotify song id; nil for none.
 	Copies func(id string) bool
-	Count  func() int
 	// Online reports the Wi-Fi; nil counts as online.
 	Online func() bool
 	// Estimate is the download quality's MB per hour, and the SD card's free
@@ -55,13 +54,6 @@ func (e *Env) online() bool { return e.Online == nil || e.Online() }
 func (e *Env) CanImport() bool { return e.Import != nil && e.online() }
 
 func (e *Env) has(id string) bool { return e.Copies != nil && e.Copies(id) }
-
-func (e *Env) count() int {
-	if e.Count == nil {
-		return 0
-	}
-	return e.Count()
-}
 
 // liked is Liked Songs as a playlist, for the import screens.
 func liked() spotify.Playlist { return spotify.Playlist{URI: spotify.LikedURI, Name: likedTitle} }

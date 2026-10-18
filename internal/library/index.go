@@ -83,9 +83,6 @@ func (ix *Index) Album(artist, title string) *Album { return ix.byKey[[2]string{
 // returns nil.
 func (ix *Index) Spotify(id string) *Track { return ix.spotify[id] }
 
-// SpotifyCount is how many Spotify songs imports have downloaded.
-func (ix *Index) SpotifyCount() int { return len(ix.spotify) }
-
 // Compare orders names as people read them: ignoring case, and comparing runs
 // of digits by value, so "Track 2" sorts before "Track 10".
 func Compare(a, b string) int {

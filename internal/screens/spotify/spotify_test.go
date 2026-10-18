@@ -299,8 +299,8 @@ func TestExpiredDialog(t *testing.T) {
 	}
 }
 
-// With importing, the tab has the offline card, and Y opens Choose; offline,
-// it says streaming has paused, and Y does nothing.
+// With importing, the list spans the full width and Y opens Choose; offline,
+// Y does nothing.
 func TestTabWithImport(t *testing.T) {
 	nav := &fakeNav{}
 	e, _, _ := importEnv(nav, signedIn())

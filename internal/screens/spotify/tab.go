@@ -18,18 +18,14 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
-// The tab's layout: the heading and the account under the tabs, the list
-// below them, and with importing the offline card on the right; signed out, a
-// card in the middle.
+// The tab's layout: the heading and the account under the tabs and the list
+// below them, the full width; signed out, a card in the middle.
 const (
-	headTop  = screens.ContentTop + 8
-	listTop  = headTop + 52
-	chip     = 40 // the account's initial, in an accent circle
-	cardW    = 460
-	cardPad  = 24
-	offlineW = 280 // the offline card
-	offlineG = 24  // between the list and it
-	iconRing = 56
+	headTop = screens.ContentTop + 8
+	listTop = headTop + 52
+	chip    = 40 // the account's initial, in an accent circle
+	cardW   = 460
+	cardPad = 24
 )
 
 var (
@@ -49,8 +45,7 @@ var (
 )
 
 // Tab is the Spotify tab: signed out, a card that opens the sign-in; signed
-// in, the user's library, Liked Songs first and then their playlists, and
-// with importing a card that counts the songs kept for offline.
+// in, the user's library, Liked Songs first and then their playlists.
 type Tab struct {
 	e     *Env
 	list  views.Grid
@@ -60,10 +55,7 @@ type Tab struct {
 	liked int                // Liked Songs' song count the first row says, -1 while unknown
 	msg   widgets.Wrapped
 	body  widgets.Wrapped // the sign-in card's line
-	note  widgets.Wrapped // the offline card's line
 	off   widgets.Wrapped // the offline state's line
-	kept  int             // the count the offline card says
-	keptS string
 
 	// What the frame drawn last showed, for Handle: signed out, the status
 	// not to be had, offline with no playlists kept, the playlists not to be
@@ -73,12 +65,8 @@ type Tab struct {
 
 // NewTab makes the tab.
 func NewTab(e *Env) *Tab {
-	w := float32(theme.ScreenW - 2*screens.Side)
-	if e.Import != nil {
-		w -= offlineW + offlineG
-	}
-	t := &Tab{e: e, liked: -1, kept: -1,
-		list: views.Grid{Cols: 1, CellW: w, CellH: widgets.RowHeight, Pad: screens.Pad, ViewH: screens.ContentBot - listTop}}
+	t := &Tab{e: e, liked: -1,
+		list: views.Grid{Cols: 1, CellW: theme.ScreenW - 2*screens.Side, CellH: widgets.RowHeight, Pad: screens.Pad, ViewH: screens.ContentBot - listTop}}
 	t.setRows(nil, -1)
 	return t
 }
@@ -259,8 +247,7 @@ func (t *Tab) drawSignedOut(u *ui.Context) {
 }
 
 // drawLibrary draws the heading, the account and the list, with what the
-// playlists' asking says below Liked Songs while there are none, and with
-// importing the offline card.
+// playlists' asking says below Liked Songs while there are none.
 func (t *Tab) drawLibrary(u *ui.Context, st spotify.Status, listErr error) {
 	u.Text("Your library", text.Heading, screens.Side, headTop, theme.Paper)
 	t.drawAccount(u, st)
@@ -283,44 +270,6 @@ func (t *Tab) drawLibrary(u *ui.Context, st spotify.Status, listErr error) {
 		}
 		top := float32(listTop + screens.Pad + widgets.RowHeight)
 		message(u, &t.msg, s, gfx.Rect{X: screens.Side, Y: top, W: t.list.CellW, H: screens.ContentBot - top})
-	}
-	if t.e.Import != nil {
-		t.drawOffline(u)
-	}
-}
-
-// drawOffline draws the card that counts the songs kept for offline, or
-// says streaming has paused.
-func (t *Tab) drawOffline(u *ui.Context) {
-	online := t.e.online()
-	if n := t.e.count(); n != t.kept {
-		t.kept, t.keptS = n, songs(n)+" downloaded."
-	}
-	icon, title, line := "download", "Take it offline", t.keptS+" Import a playlist to keep its songs."
-	if !online {
-		icon, title, line = "wifioff", "Streaming paused", "Downloaded songs still play."
-	}
-	lines := t.note.Lines(u, line, text.Meta, offlineW-2*cardPad)
-	h := cardPad + iconRing + 14 + u.LineHeight(cardTitle) + float32(len(lines))*u.LineHeight(text.Meta) + cardPad
-	if online {
-		h += 18 + widgets.PillHeight
-	}
-	box := gfx.Rect{X: theme.ScreenW - screens.Side - offlineW, Y: listTop + screens.Pad, W: offlineW, H: h}
-	u.Shape(raster.Shape{W: int(box.W), H: int(box.H), Radius: 16, Kind: raster.Ring, RingOffset: -1.5, RingWidth: 1.5},
-		box, theme.PaperA(0.18))
-	x, y := box.X+cardPad, box.Y+cardPad
-	u.Shape(raster.Shape{W: iconRing, H: iconRing, Radius: iconRing / 2, Kind: raster.Fill},
-		gfx.Rect{X: x, Y: y, W: iconRing, H: iconRing}, u.Accent.Color)
-	u.Icon(icon, 28, 2, false, x+(iconRing-28)/2, y+(iconRing-28)/2, theme.Ground)
-	y += iconRing + 14
-	u.Text(title, cardTitle, x, y, theme.Paper)
-	y += u.LineHeight(cardTitle)
-	for _, l := range lines {
-		u.Text(l, text.Meta, x, y, theme.Ink2)
-		y += u.LineHeight(text.Meta)
-	}
-	if online {
-		widgets.Pill(u, "download", "Import", x, y+18, 0)
 	}
 }
 

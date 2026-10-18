@@ -41,12 +41,6 @@ func (a *App) spotifyEnv() *spotifyscreen.Env {
 	}
 	e.Import, e.Queue, e.Estimate = a.opts.Importer, a.opts.Downloads, a.estimate
 	e.Copies = func(id string) bool { return a.ix != nil && a.ix.Spotify(id) != nil }
-	e.Count = func() int {
-		if a.ix == nil {
-			return 0
-		}
-		return a.ix.SpotifyCount()
-	}
 	a.forward(a.opts.Importer.Ready(), &a.imported)
 	return e
 }

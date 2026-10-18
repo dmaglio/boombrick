@@ -92,8 +92,8 @@ func TestIndexBySpotifyID(t *testing.T) {
 	if tr := ix.Spotify("4Q0qVhFQa7j6jRKzo3HDmP"); tr == nil || tr.Title != "Sapphire" {
 		t.Fatalf("Spotify = %+v", tr)
 	}
-	if ix.Spotify("") != nil || ix.SpotifyCount() != 1 {
-		t.Fatalf("%d songs by Spotify ID", ix.SpotifyCount())
+	if ix.Spotify("") != nil || len(ix.spotify) != 1 {
+		t.Fatalf("%d songs by Spotify ID", len(ix.spotify))
 	}
 }
 
