@@ -2,6 +2,16 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.1.1]
+
+### Added
+
+- With the screen off, L1 and R1 skip back and on, and A plays or pauses.
+
+### Fixed
+
+- Power turns the screen back on: the Brick's backlight is woken as NextUI wakes it.
+
 ## [v0.1.0]
 
 First release.
@@ -15,6 +25,6 @@ First release.
 - **YouTube Music:** search and browse; downloads saved as tagged Opus files with art and lyrics; a Downloads tab; songs that play when their download lands.
 - **Quick menu** (Menu): sleep timer, screen off, Settings and Quit.
 - **Settings:** download quality, storage and cache clearing, sleep timer, volume levelling.
-- **Screen off:** Power turns the screen off and on, and holding it powers the Brick off. With the screen off, L1 and R1 skip and A plays or pauses.
+- **Screen off:** Power turns the screen off and on, and holding it powers the Brick off.
 - **Updates:** the downloader and Boombrick update from Settings, from GitHub releases.
 - **Perf mode:** an empty `perf` file in the pak folder logs memory, CPU and frame times.
