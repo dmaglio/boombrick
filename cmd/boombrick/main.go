@@ -18,9 +18,8 @@ import (
 
 	"github.com/ujjwal313/boombrick/internal/app"
 	"github.com/ujjwal313/boombrick/internal/art"
-	"github.com/ujjwal313/boombrick/internal/audio"
-	"github.com/ujjwal313/boombrick/internal/audio/alsa"
 	"github.com/ujjwal313/boombrick/internal/audio/decode"
+	"github.com/ujjwal313/boombrick/internal/background"
 	"github.com/ujjwal313/boombrick/internal/download"
 	"github.com/ujjwal313/boombrick/internal/importer"
 	"github.com/ujjwal313/boombrick/internal/library"
@@ -52,12 +51,17 @@ const releaseEvery = 6 * time.Hour
 func main() {
 	started := time.Now()
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	inBackground := flag.Bool("background", false, "play the saved queue with no screen until stopped, as Play in background starts it")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version.String())
 		return
 	}
-	if err := run(started); err != nil {
+	mode := func() error { return run(started) }
+	if *inBackground {
+		mode = runBackground
+	}
+	if err := mode(); err != nil {
 		fmt.Fprintln(os.Stderr, "boombrick:", err)
 		os.Exit(1)
 	}
@@ -117,7 +121,6 @@ func run(started time.Time) error {
 	// music is looked up online while the device is. They close after the
 	// player, so the music stops at once on quitting, and before the database.
 	web := netx.NewClient()
-	online := func() bool { return platform.ReadStatus("/sys").Online }
 	covers := art.New(art.Options{
 		DB:     db.DB,
 		Dir:    filepath.Join(paths.Data, "cache", "art"),
@@ -126,7 +129,11 @@ func run(started time.Time) error {
 		Log:    log,
 	})
 	defer covers.Close()
-	words := lyrics.New(lyrics.Options{DB: db.DB, Fetch: lyrics.NewClient(web), Online: online, Log: log})
+	words := lyrics.New(lyrics.Options{DB: db.DB, Fetch: lyrics.NewClient(web), Online: online, Log: log,
+		FileOf: func(id string) (string, bool) {
+			path, ok, err := library.FileOf(db.DB, id)
+			return path, ok && err == nil
+		}})
 	defer words.Close()
 	// YouTube Music is asked, its thumbnails fetched and its songs downloaded
 	// off the UI thread too. The searcher falls back to yt-dlp's search.
@@ -187,54 +194,46 @@ func run(started time.Time) error {
 
 	// Spotify runs in its helper, started the first time a Spotify song is
 	// played; it stops after the player.
-	sp := spotify.NewHelper(filepath.Join(dir, "bin", "boombrick-spotify"), filepath.Join(paths.Data, "spotify"), log, logOut)
+	sp := newHelper(dir, paths, log, logOut)
 	defer sp.Close()
 	// The library the Spotify screens ask, kept in the database; it stops
 	// before the helper.
 	spLib := spotify.NewLibrary(sp, db.DB, log)
 	defer spLib.Close()
 
-	p := player.New(alsa.New(), decode.Open, log)
-	defer p.Close()
-	p.SetLevelling(prefs.Bool(settings.VolumeLevelling))
 	notices := make(chan player.Notice, 8)
-	p.SetStreaming(func(ctx context.Context, t player.Track, frame int64, level bool) (audio.Source, error) {
-		// A song an import downloaded plays from its file: no key, no Wi-Fi.
-		if prefs.Bool(settings.PreferDownloaded) {
-			if path, ok, err := library.FileOf(db.DB, t.SpotifyID); err == nil && ok {
-				return decode.Open(path)
-			}
-		}
-		if !online() {
-			return nil, spotify.ErrOffline
-		}
-		s, err := sp.Open(ctx, t.SpotifyID, frame, prefs.Int(settings.StreamingKbps), level)
-		if err != nil {
-			return nil, err // not s: a nil *Stream isn't a nil Source
-		}
-		return s, nil
-	}, func(n player.Notice) {
+	p := newPlayer(db.DB, prefs, sp, online, log, func(n player.Notice) {
 		select {
 		case notices <- n:
 		default: // a burst of them: the toast shows the latest anyway
 		}
 	})
+	defer p.Close()
 
-	// Reading the saved queue and opening its track mustn't hold up the first
-	// frame.
+	// A background player gives the music back before the saved queue is
+	// read; neither must hold up the first frame. Every later release keeps
+	// this take-back at launch, as only it can stop a background player an
+	// earlier version left playing (design.md, Background play, Release).
 	restored := make(chan struct{})
 	go func() {
 		defer close(restored)
-		if snap, ok, err := resume.Load(db.DB); err != nil {
-			log.Warn("load saved queue", "err", err)
-		} else if ok {
-			p.Restore(snap)
+		background.TakeBack(prof.PlayerLock(), 5*time.Second, p, background.Store{
+			Load:         func() (player.Snapshot, bool, error) { return resume.Load(db.DB) },
+			LoadHandover: func() (resume.Handover, error) { return resume.LoadHandover(db.DB) },
+			SaveHandover: func(h resume.Handover) error { return resume.SaveHandover(db.DB, h) },
+		}, log)
+		// A background player stopping by itself just as it was taken back can
+		// remove the file launch.sh has just written.
+		if f := prof.StayAwake(); f != "" {
+			if err := os.WriteFile(f, []byte("1\n"), 0o644); err != nil {
+				log.Warn("keep CrossMix awake", "err", err)
+			}
 		}
 	}()
-	saver := resume.NewSaver(db.DB)
+	gate := &saves{saver: resume.NewSaver(db.DB).Save}
 	save := func() {
 		if s, ok := p.Snapshot(); ok {
-			if err := saver.Save(s); err != nil {
+			if err := gate.save(s); err != nil {
 				log.Warn("save queue", "err", err)
 			}
 		}
@@ -377,11 +376,29 @@ func run(started time.Time) error {
 		Notices:      notices,
 		Spotify:      spLib,
 		Importer:     im,
+		Background: func() error {
+			exe, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			return gate.handOver(func() error {
+				return background.HandOver(p, gate.now, func(h resume.Handover) error { return resume.SaveHandover(db.DB, h) },
+					exe, os.Environ(), 5*time.Second)
+			})
+		},
 	})
 	if err != nil {
 		return err
 	}
 	defer a.Close()
+	// The volume watcher stops before the app and SDL close under it.
+	if f := prof.VolumeSettings(); f != "" {
+		vol, stop := context.WithCancel(context.Background())
+		defer stop()
+		_, ok := platform.NextUIVolume(f)
+		log.Info("volume", "source", f, "ok", ok)
+		go platform.WatchVolume(vol, f, 150*time.Millisecond, a.VolumeChanged)
+	}
 	rec.Mark("window")
 
 	// A signal from the launcher ends the run like a quit, so the queue is saved.
