@@ -23,6 +23,10 @@ const (
 // TabNames are the top-level tabs in order.
 var TabNames = [...]string{"Home", "Library", "Spotify", "YouTube", "Downloads"}
 
+// maxDeviceName is the most room the Bluetooth device's name takes in the
+// status bar.
+const maxDeviceName = 220
+
 // StatusBar draws u.Status across the top of the screen. A negative Battery
 // means there is none to show.
 func StatusBar(u *ui.Context) {
@@ -48,9 +52,11 @@ func StatusBar(u *ui.Context) {
 		}})
 	}
 	if s.Bluetooth != "" {
-		items = append(items, item{28 + u.TextWidth(s.Bluetooth, text.Chrome), func(x float32) {
+		// A long device name is cut short, so the track title keeps its room.
+		name := u.Fit(s.Bluetooth, text.Chrome, maxDeviceName)
+		items = append(items, item{28 + u.TextWidth(name, text.Chrome), func(x float32) {
 			u.Icon("headphones", 22, 2, false, x, (h-22)/2, theme.Paper)
-			u.Text(s.Bluetooth, text.Chrome, x+28, ty, theme.Paper)
+			u.Text(name, text.Chrome, x+28, ty, theme.Paper)
 		}})
 	}
 	if s.Battery >= 0 {

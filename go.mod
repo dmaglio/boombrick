@@ -6,6 +6,7 @@ require (
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/go-text/render v0.2.1
 	github.com/go-text/typesetting v0.3.5
+	github.com/godbus/dbus/v5 v5.1.0
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef

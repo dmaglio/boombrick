@@ -147,6 +147,10 @@ func run(started time.Time) error {
 		Parts:      space.Funcs{SizeOf: dl.Leftovers, Empty: dl.ClearLeftovers},
 		Downloader: filepath.Join(paths.Data, "bin"), Log: log})
 	defer meter.Close()
+	// The status bar names the Bluetooth headphones or speaker connected,
+	// asking BlueZ on the status reader's goroutine.
+	bt := &platform.Bluetooth{}
+	defer bt.Close()
 	// On the Brick, Power turns the backlight off and holding it shuts down.
 	var light app.Backlight
 	var powerOff func() error
@@ -297,17 +301,21 @@ func run(started time.Time) error {
 	}()
 
 	a, err := app.New(app.Options{
-		Fullscreen:   paths.OnDevice,
-		Log:          log,
-		Started:      started,
-		Player:       p,
-		MusicDir:     paths.Music,
-		Load:         func() (*library.Index, error) { return library.Load(db.DB) },
-		Progress:     func() ([]resume.Progress, error) { return resume.Recent(db.DB, 8) },
-		Rescan:       rescan,
-		Scanned:      scanned,
-		Saved:        savedTrack,
-		Status:       func() platform.Status { return platform.ReadStatus("/sys") },
+		Fullscreen: paths.OnDevice,
+		Log:        log,
+		Started:    started,
+		Player:     p,
+		MusicDir:   paths.Music,
+		Load:       func() (*library.Index, error) { return library.Load(db.DB) },
+		Progress:   func() ([]resume.Progress, error) { return resume.Recent(db.DB, 8) },
+		Rescan:     rescan,
+		Scanned:    scanned,
+		Saved:      savedTrack,
+		Status: func() platform.Status {
+			st := platform.ReadStatus("/sys")
+			st.Bluetooth = bt.Connected()
+			return st
+		},
 		Covers:       covers,
 		Lyrics:       words,
 		Thumbs:       thumbs,
