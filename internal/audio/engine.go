@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/ujjwal313/boombrick/internal/audio/resample"
 )
@@ -76,6 +77,8 @@ type Engine struct {
 	quiet    bool  // nothing has been written since the output last went idle
 	replay   int   // output frames from history to write again before reading on
 	back     int64 // source frames the pause took off Frame, which the replay restores
+	fadeOut  fadeOut
+	fadeEnd  fadeEnd
 	closed   bool
 	st       Status
 
@@ -85,6 +88,17 @@ type Engine struct {
 	nwake   *sync.Cond
 	pending []End
 	stopped bool // the loop has exited
+}
+
+// fadeOut takes the output down to silence over total output frames, left of
+// them still to go, and then pauses playback. The zero fadeOut is none.
+type fadeOut struct{ left, total int }
+
+// fadeEnd takes src down over its last frames source frames, so that it ends
+// in silence. src nil is none.
+type fadeEnd struct {
+	src    Source
+	frames int64
 }
 
 // NewEngine starts the playback goroutine. onEnd runs each time a source plays
@@ -163,6 +177,7 @@ func (e *Engine) load(src Source, paused bool, seek int64) {
 	}
 	next, queued := e.next, e.queued // handed over but never started
 	e.next, e.queued, e.switched, e.paused, e.seek = src, nil, true, paused, seek
+	e.fadeOut, e.fadeEnd = fadeOut{}, fadeEnd{}
 	e.mu.Unlock()
 	if next != src {
 		closeSource(next)
@@ -203,14 +218,42 @@ func (e *Engine) Queue(src Source) {
 func (e *Engine) Stop() { e.Play(nil) }
 
 // Pause holds playback. What the device still held is played again on Resume.
-func (e *Engine) Pause() { e.set(func() { e.paused = true }) }
+// A FadeOut under way ends.
+func (e *Engine) Pause() { e.set(func() { e.paused, e.fadeOut = true, fadeOut{} }) }
 
-// Resume continues after Pause or Cue, or after an output error paused
-// playback.
-func (e *Engine) Resume() { e.set(func() { e.paused, e.st.Err = false, nil }) }
+// Resume continues after Pause or Cue, after an output error paused playback,
+// or after a FadeOut, at full volume.
+func (e *Engine) Resume() { e.set(func() { e.paused, e.st.Err, e.fadeOut = false, nil, fadeOut{} }) }
 
-// SeekFrame moves the current source to frame.
-func (e *Engine) SeekFrame(frame int64) { e.set(func() { e.seek = max(frame, 0) }) }
+// SeekFrame moves the current source to frame. A FadeOut under way ends.
+func (e *Engine) SeekFrame(frame int64) {
+	e.set(func() { e.seek, e.fadeOut = max(frame, 0), fadeOut{} })
+}
+
+// FadeOut fades playback down to silence over d, then pauses it, as the sleep
+// timer ends. It carries on across a gapless hand-over. Pause, Resume,
+// SeekFrame, CancelFade and loading a source end it, at full volume again;
+// a fade already under way is replaced.
+func (e *Engine) FadeOut(d time.Duration) {
+	n := max(int(int64(d)*OutputRate/int64(time.Second)), 1)
+	e.set(func() { e.fadeOut = fadeOut{left: n, total: n} })
+}
+
+// FadeEnd fades src out over its last d, so that it ends in silence. It
+// applies while src plays, from wherever src is; a source of unknown length
+// isn't faded. A nil src ends a FadeEnd under way, leaving a FadeOut be;
+// loading a source and CancelFade end it too.
+func (e *Engine) FadeEnd(src Source, d time.Duration) {
+	if src == nil {
+		e.set(func() { e.fadeEnd = fadeEnd{} })
+		return
+	}
+	frames := int64(d) * int64(src.SampleRate()) / int64(time.Second)
+	e.set(func() { e.fadeEnd = fadeEnd{src: src, frames: max(frames, 1)} })
+}
+
+// CancelFade ends FadeOut and FadeEnd, at full volume again.
+func (e *Engine) CancelFade() { e.set(func() { e.fadeOut, e.fadeEnd = fadeOut{}, fadeEnd{} }) }
 
 func (e *Engine) set(f func()) {
 	e.mu.Lock()
@@ -323,6 +366,7 @@ func (e *Engine) loop() {
 			continue
 		}
 		cur, rate, replay, back := e.cur, e.st.Rate, e.replay, e.back
+		frame, fo, fe := e.st.Frame, e.fadeOut, e.fadeEnd
 		e.replay, e.back, e.quiet = 0, 0, false
 		e.mu.Unlock()
 
@@ -346,8 +390,15 @@ func (e *Engine) loop() {
 
 		n, rerr := cur.Read(in)
 		var werr error
+		k := 0
 		if n > 0 {
-			k := rs.Process(rate, OutputRate, in[:2*n], out)
+			if fe.src == cur {
+				fadeTail(in[:2*n], frame, cur.Frames(), fe.frames)
+			}
+			k = rs.Process(rate, OutputRate, in[:2*n], out)
+			if fo.total > 0 {
+				fadeDown(out[:2*k], fo)
+			}
 			toInt16(pcm[:2*k], out[:2*k])
 			if werr = e.write(pcm[:2*k]); werr == nil {
 				hist.add(pcm[:2*k])
@@ -370,6 +421,13 @@ func (e *Engine) loop() {
 			continue
 		}
 		e.st.Frame += int64(n)
+		if fo.total > 0 && e.fadeOut == fo {
+			if left := fo.left - k; left > 0 {
+				e.fadeOut.left = left
+			} else {
+				e.fadeOut, e.paused = fadeOut{}, true // faded out: playback stops here
+			}
+		}
 		if rerr == nil {
 			e.mu.Unlock()
 			continue
@@ -423,6 +481,40 @@ func (e *Engine) drop() {
 func closeSource(s Source) {
 	if s != nil {
 		s.Close()
+	}
+}
+
+// fadeGain is the level a fade is at with left of total frames to go: falling
+// slowly at first and quickly at the end, as the ear hears a fade even.
+func fadeGain(left, total int64) float32 {
+	if left <= 0 {
+		return 0
+	}
+	g := float32(left) / float32(total)
+	return g * g
+}
+
+// fadeTail fades the frames of buf, which start at frame first of a source
+// total frames long, that fall in its last over frames.
+func fadeTail(buf []float32, first, total, over int64) {
+	if total <= 0 {
+		return
+	}
+	for i := range int64(len(buf) / 2) {
+		if left := total - first - i; left < over {
+			g := fadeGain(left, over)
+			buf[2*i] *= g
+			buf[2*i+1] *= g
+		}
+	}
+}
+
+// fadeDown applies fade f to the output frames in buf, which come next.
+func fadeDown(buf []float32, f fadeOut) {
+	for i := range len(buf) / 2 {
+		g := fadeGain(int64(f.left-i), int64(f.total))
+		buf[2*i] *= g
+		buf[2*i+1] *= g
 	}
 }
 

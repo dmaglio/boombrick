@@ -101,11 +101,22 @@ type Player struct {
 	shuffle           bool
 	repeat            Repeat
 	rng               *rand.Rand
+	// The sleep timer: what it is set to, a timed one's timer and the
+	// generation that timer belongs to, when the fade it began ends, and
+	// whether the engine fades out the end of cur, where it stops playback.
+	sleep      Sleep
+	sleepTimer stopper
+	sleepGen   uint64
+	fadeEnds   time.Time
+	endFade    bool
+	after      func(time.Duration, func()) stopper // time.AfterFunc; tests stand in for it
+	now        func() time.Time
 }
 
 // New creates a player that plays through out and opens files with open.
 func New(out audio.Output, open Opener, log *slog.Logger) *Player {
-	p := &Player{open: open, log: log, rng: rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 0))}
+	p := &Player{open: open, log: log, rng: rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 0)),
+		after: afterFunc, now: time.Now}
 	p.engine = audio.NewEngine(out, p.ended)
 	return p
 }
@@ -114,6 +125,9 @@ func New(out audio.Output, open Opener, log *slog.Logger) *Player {
 func (p *Player) Close() error {
 	p.mu.Lock()
 	p.closed = true
+	if p.sleepTimer != nil {
+		p.sleepTimer.Stop()
+	}
 	p.mu.Unlock()
 	p.wg.Wait()
 	return p.engine.Close()
@@ -190,6 +204,7 @@ func (p *Player) Play(tracks []Track, start int) { p.PlayFrom(tracks, start, 0) 
 func (p *Player) PlayFrom(tracks []Track, start int, frame int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.keepPlayingLocked()
 	p.version++
 	p.empties = 0 // the listener chose this; earlier silent tracks don't count
 	if len(tracks) == 0 {
@@ -289,6 +304,15 @@ func (p *Player) primeLocked() {
 	p.gen++
 	p.next = nil
 	p.engine.Queue(nil)
+	if p.cur != nil && p.sleepsAfterLocked() {
+		p.engine.FadeEnd(p.cur, sleepFade) // the sleep timer stops playback at its end
+		p.endFade = true
+		return
+	}
+	if p.endFade {
+		p.engine.FadeEnd(nil, 0) // a track follows now, as one was added
+		p.endFade = false
+	}
 	pos, ok := p.followingLocked(p.pos)
 	if !ok || p.cur == nil || p.closed {
 		return
@@ -339,6 +363,12 @@ func (p *Player) ended(end audio.End) {
 		p.stopLocked()
 		return
 	}
+	if end.Next == nil && (p.sleepsAfterLocked() || p.fadingLocked()) {
+		// The sleep timer stops playback here, with the next track cued: after
+		// the track it ends with, or at a change of track during a timed fade.
+		p.sleepEndLocked()
+		return
+	}
 	if end.Next != nil && end.Next == p.next {
 		// The primed track took over without a gap.
 		p.cur, p.pos, p.curRate, p.curFrames, p.startFrame = p.next, p.nextPos, p.nextRate, p.nextFrames, 0
@@ -356,10 +386,14 @@ func (p *Player) ended(end audio.End) {
 }
 
 // Toggle pauses or resumes, or plays the current track again once the queue
-// has played out.
+// has played out. During the sleep timer's fade it keeps playing instead, at
+// full volume again.
 func (p *Player) Toggle() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.keepPlayingLocked() {
+		return
+	}
 	switch {
 	case p.waiting:
 		p.cued = false // it plays as soon as it lands
@@ -378,6 +412,7 @@ func (p *Player) Toggle() {
 func (p *Player) Next() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.keepPlayingLocked()
 	p.empties = 0
 	switch {
 	case len(p.queue) == 0:
@@ -397,6 +432,7 @@ func (p *Player) Next() {
 func (p *Player) Prev() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.keepPlayingLocked()
 	p.empties = 0
 	if len(p.queue) == 0 {
 		return
@@ -414,6 +450,7 @@ func (p *Player) Prev() {
 func (p *Player) Seek(d time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.keepPlayingLocked()
 	if p.cur == nil || p.curRate <= 0 {
 		return
 	}
@@ -494,6 +531,7 @@ func (p *Player) PlayIndex(i int) {
 	if i < 0 || i >= len(p.order) {
 		return
 	}
+	p.keepPlayingLocked()
 	p.pos, p.empties = i, 0
 	p.startLocked()
 }
