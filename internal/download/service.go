@@ -139,6 +139,7 @@ type Service struct {
 	offlineWait time.Duration // how often to look again while offline
 	stopWait    time.Duration // and while stopped for space or the downloader
 	panicWait   time.Duration // how long a loop rests after a panic
+	writeWait   time.Duration // how long rows that couldn't be written wait to be tried again
 	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
@@ -170,6 +171,7 @@ type Service struct {
 	clock       int64          // the last added or priority stamp given out
 	closed      bool           // Close was called
 	shut        bool           // Ready is closed
+	retrying    bool           // a write failed, and the writer will try again
 	paused      bool
 	update      bool // update yt-dlp before the next batch, or now if asked from Settings
 	installing  bool
@@ -212,7 +214,8 @@ func newService(opts Options, rows map[string]*row, inst installer, runner func(
 		clock = max(clock, r.added, r.priority)
 	}
 	return &Service{opts: opts, log: opts.Log, inst: inst, runner: runner, parts: parts, space: diskSpace,
-		offlineWait: 15 * time.Second, stopWait: time.Minute, panicWait: time.Second, ctx: ctx, cancel: cancel,
+		offlineWait: 15 * time.Second, stopWait: time.Minute, panicWait: time.Second, writeWait: 5 * time.Second,
+		ctx: ctx, cancel: cancel,
 		wake: make(chan struct{}, 1), land: make(chan struct{}, 1), flushes: make(chan struct{}, 1),
 		ready: make(chan struct{}, 1), tool: make(chan struct{}, 1), rows: rows, dirty: map[string]bool{},
 		scrap: map[string]bool{}, live: map[string]Event{}, netFails: map[string]int{}, clock: clock, version: 1,
@@ -651,7 +654,30 @@ func (s *Service) save(rows ...*row) {
 	s.mu.Unlock()
 	if err := saveRows(s.opts.DB, now); err != nil {
 		s.log.Warn("save downloads", "err", err)
+		s.mu.Lock()
+		for _, r := range now {
+			s.dirty[r.song.VideoID] = true
+		}
+		s.mu.Unlock()
+		s.retryWrites()
 	}
+}
+
+// retryWrites has the writer write again a little later, after a write
+// failed: once, however many fail meanwhile.
+func (s *Service) retryWrites() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.retrying || s.closed {
+		return
+	}
+	s.retrying = true
+	time.AfterFunc(s.writeWait, func() {
+		s.mu.Lock()
+		s.retrying = false
+		s.mu.Unlock()
+		signal(s.flushes)
+	})
 }
 
 // writer writes what the queue's calls change, as they change it.
@@ -681,8 +707,8 @@ func (s *Service) flush() {
 }
 
 // writeDirty writes the rows the calls changed as they are now, and deletes
-// those they forgot; one that can't be written is tried again next time. It
-// returns the songs whose partial files go, and whether to prune.
+// those they forgot; one that can't be written is tried again a little later.
+// It returns the songs whose partial files go, and whether to prune.
 func (s *Service) writeDirty() (scrap []string, prune bool) {
 	s.write.Lock()
 	defer s.write.Unlock()
@@ -721,13 +747,16 @@ func (s *Service) writeDirty() (scrap []string, prune bool) {
 			s.dirty[id] = true
 		}
 		s.mu.Unlock()
+		s.retryWrites()
 	}
 	return scrap, prune
 }
 
 // dropParts deletes the partial files of the songs removed, except those the
 // finisher has or is about to work on, which are its to delete. The songs
-// can then be downloaded again.
+// can then be downloaded again: one asked for first again meanwhile, as when
+// it is played right after it was removed, stops the batch that started
+// without it, as First does.
 func (s *Service) dropParts(ids []string) {
 	for _, id := range ids {
 		parts, _ := filepath.Glob(filepath.Join(s.parts, id+".*"))
@@ -746,6 +775,9 @@ func (s *Service) dropParts(ids []string) {
 	s.mu.Lock()
 	for _, id := range ids {
 		delete(s.scrap, id)
+	}
+	if q := s.queuedLocked(); len(q) > 0 && slices.Contains(ids, q[0]) && s.stopBatch != nil && !s.leadsLocked(q[0]) {
+		s.stopBatch()
 	}
 	s.mu.Unlock()
 	signal(s.wake)

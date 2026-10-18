@@ -1012,6 +1012,58 @@ func TestCallsDontWaitForTheDatabase(t *testing.T) {
 	})
 }
 
+// A song played right after it was removed, while its partial files wait to
+// be deleted, goes first once they are, rather than after the batch that
+// started without it.
+func TestARemovedSongPlayedAgainGoesFirst(t *testing.T) {
+	e := newEnv(t)
+	e.f.set("a", "hold")
+	e.f.set("b", "hold")
+	e.s.Get([]ytmusic.Song{song("a", "x", 1), song("b", "x", 2)})
+	e.s.First("a")
+	eventually(t, "a downloading", func() bool { return e.leads("a") })
+	e.s.write.Lock() // the writer can't delete a's partial files yet
+	e.s.Remove("a")
+	e.s.Get([]ytmusic.Song{song("a", "x", 1)})
+	e.s.First("a")
+	eventually(t, "a batch without a", func() bool { return e.leads("b") })
+	e.s.write.Unlock()
+	eventually(t, "a batch led by a", func() bool { return e.leads("a") })
+}
+
+// leads reports whether the last batch started began with id.
+func (e *env) leads(id string) bool {
+	e.f.mu.Lock()
+	defer e.f.mu.Unlock()
+	n := len(e.f.batches)
+	return n > 0 && len(e.f.batches[n-1]) > 0 && e.f.batches[n-1][0] == id
+}
+
+// A write that fails, as on a card that is full for a moment, is tried again
+// by itself, not only with the queue's next change.
+func TestFailedWritesAreTriedAgain(t *testing.T) {
+	e := newEnv(t)
+	e.s.writeWait = 20 * time.Millisecond
+	if _, err := e.db.Exec(`CREATE TABLE full (x); INSERT INTO full VALUES (1);
+		CREATE TRIGGER full_insert BEFORE INSERT ON downloads WHEN EXISTS (SELECT 1 FROM full)
+		BEGIN SELECT RAISE(ABORT, 'disk full'); END`); err != nil {
+		t.Fatal(err)
+	}
+	e.f.set("a", "hold")
+	e.s.Get([]ytmusic.Song{song("a", "x", 1)})
+	time.Sleep(60 * time.Millisecond) // writes fail meanwhile, and are tried again
+	if rows, err := loadRows(e.db); err != nil || len(rows) != 0 {
+		t.Fatalf("rows %v, %v while writes fail", rows, err)
+	}
+	if _, err := e.db.Exec(`DELETE FROM full`); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the row written", func() bool {
+		rows, err := loadRows(e.db)
+		return err == nil && rows["a"] != nil
+	})
+}
+
 // Close writes what the queue's calls changed and wasn't written yet.
 func TestCloseWritesWhatIsPending(t *testing.T) {
 	e := newEnv(t)
