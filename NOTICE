@@ -27,11 +27,26 @@ It includes or links the following third-party components:
                                Code from FAAD2 is copyright (c) Nero AG, www.nero.com
   speexdsp resampler           BSD-3-Clause          https://speex.org (SpeexDSP-1.2.1)
   dhowden/tag                  BSD-2-Clause          https://github.com/dhowden/tag
-  godbus/dbus                  BSD-2-Clause          https://github.com/godbus/dbus (v5.1.0)
+  godbus/dbus                  BSD-2-Clause          https://github.com/godbus/dbus (v5.2.0)
+  rsc.io/qr                    BSD-3-Clause          https://github.com/rsc/qr (v0.2.0)
   ALSA library (libasound)     LGPL-2.1              https://www.alsa-project.org
   QuickJS-NG                   MIT                   https://github.com/quickjs-ng/quickjs (v0.17.0)
   yt-dlp                       Unlicense             https://github.com/yt-dlp/yt-dlp
                                Downloaded on first use; not shipped in the pak
+
+The Spotify helper, bin/boombrick-spotify, includes or links:
+
+  go-librespot                 GPL-3.0               https://github.com/devgianlu/go-librespot (v0.10.5)
+  protobuf-go                  BSD-3-Clause          https://github.com/protocolbuffers/protobuf-go
+  golang.org/x/crypto, exp, oauth2  BSD-3-Clause     https://golang.org/x
+  shannon                      MIT                   https://github.com/devgianlu/shannon
+  backoff                      MIT                   https://github.com/cenkalti/backoff
+  websocket                    ISC                   https://github.com/coder/websocket
+  pulse                        MIT                   https://github.com/jfreymuth/pulse
+  jfreymuth/vorbis             MIT                   https://github.com/jfreymuth/vorbis (v1.0.2)
+                               Decodes the Spotify streams
+  libFLAC                      BSD-3-Clause          https://xiph.org/flac
+  libmpg123                    LGPL-2.1              https://mpg123.de (1.33.7)
 
 It uses these services at run time:
 
@@ -39,7 +54,10 @@ It uses these services at run time:
   Cover Art Archive            album covers                   https://coverartarchive.org
   LRCLIB                       lyrics                         https://lrclib.net
   YouTube Music                search, thumbnails, downloads  https://music.youtube.com
+  Spotify                      sign-in, playlists, streaming  https://spotify.com
   GitHub releases              yt-dlp and its SHA2-256SUMS    https://github.com/yt-dlp/yt-dlp/releases
 
 The font licences (OFL-*.txt) are in assets/fonts/ in the source tree and
-next to this file in the pak.
+next to this file in the pak. The other licences are in full in
+THIRD-PARTY.txt, next to this file in the pak, which scripts/licenses.sh makes
+from the modules built in and third_party/licenses/.

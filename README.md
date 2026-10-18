@@ -1,8 +1,8 @@
 # Boombrick
 
-A music player for the [TrimUI Brick](https://trimui.com) running [NextUI](https://github.com/LoveRetro/NextUI) or, in beta, [CrossMix](https://github.com/cizia64/CrossMix-OS). It plays the music on your SD card, finds covers and synced lyrics for it, and downloads songs and albums from YouTube Music for offline listening. Its colours come from the album that's playing.
+A music player for the [TrimUI Brick](https://trimui.com) running [NextUI](https://github.com/LoveRetro/NextUI) or, in beta, [CrossMix](https://github.com/cizia64/CrossMix-OS). It plays the music on your SD card, streams your Spotify playlists, finds covers and synced lyrics, and downloads songs and albums from YouTube Music for offline listening. Its colours come from the album that's playing.
 
-Spotify streaming and playlist import are planned; see [CHANGELOG.md](CHANGELOG.md) for what each release adds.
+See [CHANGELOG.md](CHANGELOG.md) for what each release adds.
 
 ## Features
 
@@ -10,13 +10,15 @@ Spotify streaming and playlist import are planned; see [CHANGELOG.md](CHANGELOG.
 - **Covers** from the files, folder pictures or the Cover Art Archive.
 - **Synced lyrics** from the files, `.lrc` files or LRCLIB, with the line being sung highlighted.
 - **YouTube Music:** search, browse albums and artists, and download songs as tagged Opus files with covers and lyrics. A song that is still downloading plays as soon as it lands.
+- **Spotify** (Premium): sign in with a code on your phone, then play Liked Songs and your playlists, Spotify's own mixes included, in the same queue as your music. Streams play at 96, 160 or 320 kbps over Wi-Fi.
+- **Spotify import:** download your playlists' songs, or Liked Songs, from YouTube Music to keep them offline. Each song is matched by its ISRC, or its title, artist and length, and you check the doubtful ones. A Spotify song with a downloaded copy plays the copy, without Wi-Fi.
 - **Sleep timer:** 15 to 60 minutes, or the end of the track or album, with a fade.
 - **Screen off** with Power, with the music still playing and the buttons for skipping and pausing still working.
 - **Updates** for Boombrick and its downloader, from Settings.
 
 ## Installing
 
-You need a TrimUI Brick with NextUI, or CrossMix for the beta. Wi-Fi is used for YouTube Music, covers, lyrics and updates; music on the card plays without it.
+You need a TrimUI Brick with NextUI, or CrossMix for the beta. Wi-Fi is used for Spotify, YouTube Music, covers, lyrics and updates; music on the card plays without it. Spotify needs a Premium account.
 
 1. Download the zip for your firmware:
    - **NextUI:** `Boombrick.pak.zip` from the [latest release](https://github.com/ujjwal313/boombrick/releases/latest).
@@ -59,7 +61,7 @@ On the SD card:
 |---|---|---|
 | Your music | `Music/` | `Music/` |
 | Downloads | `Music/Boombrick/<Artist>/<Album>/` | `Music/Boombrick/<Artist>/<Album>/` |
-| Library, covers, lyrics, downloader | `.userdata/tg5040/Boombrick/` | `Apps/Boombrick/data/` |
+| Library, covers, lyrics, downloader, Spotify sign-in | `.userdata/tg5040/Boombrick/` | `Apps/Boombrick/data/` |
 | Log | `.userdata/tg5040/logs/Boombrick.txt` | `Apps/Boombrick/logs/Boombrick.txt` |
 
 Settings → Storage shows how much room the caches take and clears them. Your music and downloads are never touched.

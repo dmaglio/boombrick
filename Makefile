@@ -14,6 +14,7 @@ QJS_SHA_x86_64  := 0bfc02511a9f549c28b53880d988fc7cd5d361e90c5e8afdfcd7dc6774cea
 
 build:
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/desktop/boombrick ./cmd/boombrick
+	$(GO) build -trimpath -ldflags '-s -w' -o dist/desktop/bin/boombrick-spotify ./cmd/boombrick-spotify
 
 build: dist/desktop/bin/qjs
 
@@ -54,23 +55,29 @@ device-image:
 	docker build --build-arg GO_VERSION=$(GO_VERSION) -t $(DEVICE_IMAGE) build/docker
 
 # Inside the container the checkout can belong to another user, which git
-# refuses to read; the version comes from VERSION, not from git.
+# refuses to read; the version comes from VERSION, not from git. The Spotify
+# helper is built alongside.
 device: device-image
 	docker run --rm -v "$$(pwd)":/src \
 		-v boombrick-gomod:/root/go/pkg/mod -v boombrick-gocache:/root/.cache/go-build \
-		$(DEVICE_IMAGE) go build -trimpath -buildvcs=false -ldflags '$(LDFLAGS)' -o dist/tg5040/boombrick ./cmd/boombrick
+		$(DEVICE_IMAGE) sh -c "go build -trimpath -buildvcs=false -ldflags '$(LDFLAGS)' -o dist/tg5040/boombrick ./cmd/boombrick && \
+			go build -trimpath -buildvcs=false -ldflags '-s -w' -o dist/tg5040/boombrick-spotify ./cmd/boombrick-spotify"
 
 # app fills the folder $(1) with what every firmware's app holds: the
-# program, its launch.sh from build/$(2), QuickJS, the libraries the device
-# lacks, and the licences.
+# program, its launch.sh from build/$(2), QuickJS, the Spotify helper, the
+# libraries the device lacks (Opus and Ogg for Boombrick; FLAC and mpg123,
+# which go-librespot links, for the helper), and the licences.
 define app
 	rm -rf $(1)
 	mkdir -p $(1)/bin
 	cp dist/tg5040/boombrick build/$(2)/launch.sh LICENSE NOTICE assets/fonts/OFL-*.txt $(1)/
+	scripts/licenses.sh dist/tg5040/boombrick dist/tg5040/boombrick-spotify > $(1)/THIRD-PARTY.txt
 	chmod +x $(1)/boombrick $(1)/launch.sh
 	cp dist/qjs/qjs-linux-aarch64 $(1)/bin/qjs
+	cp dist/tg5040/boombrick-spotify $(1)/bin/
 	docker run --rm -v "$$(pwd)":/src $(DEVICE_IMAGE) sh -c \
-		'mkdir -p $(1)/lib && cp -L $$SYSROOT/usr/lib/libopus.so.0 $$SYSROOT/usr/lib/libogg.so.0 $(1)/lib/'
+		'mkdir -p $(1)/lib && cd $$SYSROOT/usr/lib && cp -L libopus.so.0 libogg.so.0 libFLAC.so.8 libmpg123.so.0 \
+			/src/$(1)/lib/'
 endef
 
 pak: device dist/qjs/qjs-linux-aarch64
