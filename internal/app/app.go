@@ -82,8 +82,8 @@ type Options struct {
 	// Backlight turns the screen's light off and on. Without it, or when it
 	// fails, a screen turned off is drawn black instead, as on a desktop.
 	Backlight Backlight
-	// PowerOff asks NextUI to shut the device down once Boombrick has quit;
-	// nil on a desktop, where holding Power only quits.
+	// PowerOff asks the firmware to shut the device down once Boombrick has
+	// quit; nil on a desktop, where holding Power only quits.
 	PowerOff func() error
 	// Version and Device are shown at the foot of Settings.
 	Version, Device string
@@ -913,13 +913,13 @@ func (a *App) powerHeld(now time.Time) bool {
 	return true
 }
 
-// powerOff quits, asking NextUI to shut the device down after, as holding
-// Power does in NextUI's own apps. Quitting saves the queue as ever.
+// powerOff quits, asking the firmware to shut the device down after, as
+// holding Power does in NextUI's own apps. Quitting saves the queue as ever.
 func (a *App) powerOff() {
 	a.opts.Log.Info("powering off")
 	if a.opts.PowerOff != nil {
 		if err := a.opts.PowerOff(); err != nil {
-			a.opts.Log.Error("ask NextUI to power off", "err", err)
+			a.opts.Log.Error("ask the firmware to power off", "err", err)
 		}
 	}
 	a.quit = true

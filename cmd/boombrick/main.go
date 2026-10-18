@@ -64,9 +64,13 @@ func run(started time.Time) error {
 	// Keep the heap well inside the Brick's 1 GB, next to NextUI.
 	debug.SetMemoryLimit(96 << 20)
 
-	paths := platform.DetectPaths()
-	for _, dir := range []string{paths.Data, paths.Logs} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+	// The program's folder holds QuickJS and, on the Brick, the app that
+	// updates are staged in; on CrossMix, Boombrick's data too.
+	dir := programDir()
+	prof := platform.Detect(dir)
+	paths := prof.Paths
+	for _, d := range []string{paths.Data, paths.Logs} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
 	}
@@ -81,10 +85,7 @@ func run(started time.Time) error {
 		logOut = io.MultiWriter(os.Stderr, logFile)
 	}
 	log := slog.New(slog.NewTextHandler(logOut, nil))
-	log.Info("starting", "version", version.Version, "data", paths.Data)
-	// The program's folder holds QuickJS and, on the Brick, the pak that
-	// updates are staged in.
-	dir := programDir()
+	log.Info("starting", "version", version.Version, "firmware", prof.Firmware, "data", paths.Data)
 	// Perf mode logs the launch's stages, then memory, CPU and frame times
 	// every 10 s.
 	var rec *perf.Recorder
@@ -151,7 +152,7 @@ func run(started time.Time) error {
 	var powerOff func() error
 	if paths.OnDevice {
 		light = platform.NewBacklight()
-		powerOff = func() error { return platform.PowerOff("/tmp") }
+		powerOff = prof.PowerOff
 	}
 	// Settings says when yt-dlp or Boombrick has a newer release, asking
 	// GitHub at most every 6 hours while it is open. On the Brick, Update
@@ -163,7 +164,7 @@ func run(started time.Time) error {
 	defer releases.Close()
 	var updater app.Updater
 	if paths.OnDevice && dir != "" {
-		up := selfupdate.New(web, dir, log)
+		up := selfupdate.New(web, dir, selfupdate.Pak{Asset: prof.ReleaseAsset, Dir: prof.ReleaseDir}, log)
 		defer up.Close()
 		updater = up
 	}

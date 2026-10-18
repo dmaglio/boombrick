@@ -86,12 +86,13 @@ func TestNoDisplayDriver(t *testing.T) {
 	}
 }
 
-func TestPowerOff(t *testing.T) {
+func TestPowerOffOnNextUI(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmp, "nextui_exec"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := PowerOff(tmp); err != nil {
+	p := Profile{Firmware: NextUI, tmp: tmp}
+	if err := p.PowerOff(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(tmp, "nextui_exec")); !os.IsNotExist(err) {
@@ -100,7 +101,32 @@ func TestPowerOff(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(tmp, "poweroff")); err != nil {
 		t.Errorf("poweroff wasn't written: %v", err)
 	}
-	if err := PowerOff(tmp); err != nil {
+	if err := p.PowerOff(); err != nil {
 		t.Errorf("a second PowerOff failed: %v", err)
+	}
+}
+
+// On CrossMix, Boombrick's own launch.sh powers off once Boombrick has quit,
+// when it finds the flag.
+func TestPowerOffOnCrossMix(t *testing.T) {
+	tmp := t.TempDir()
+	if err := (Profile{Firmware: CrossMix, tmp: tmp}).PowerOff(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "boombrick-poweroff")); err != nil {
+		t.Errorf("the flag wasn't written: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "poweroff")); !os.IsNotExist(err) {
+		t.Error("NextUI's poweroff file was written")
+	}
+}
+
+func TestPowerOffOnADesktop(t *testing.T) {
+	tmp := t.TempDir()
+	if err := (Profile{Firmware: Desktop, tmp: tmp}).PowerOff(); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
+		t.Fatalf("wrote %d files", len(entries))
 	}
 }

@@ -1,7 +1,8 @@
 // Package selfupdate stages a newer Boombrick beside the running one: the
-// release's pak, checked against its SHA256SUMS and unpacked into the pak's
-// .update folder. The pak's launch.sh moves it into place when Boombrick next
-// starts; the running program is never touched.
+// release's zip for its firmware, checked against its SHA256SUMS, and its
+// own folder's files unpacked into the app's .update folder. The app's
+// launch.sh moves them into place when Boombrick next starts; the running
+// program is never touched.
 package selfupdate
 
 import (
@@ -24,12 +25,14 @@ import (
 	"github.com/ujjwal313/boombrick/internal/release"
 )
 
-// The release's files, and where the pak's own files sit in its zip.
-const (
-	Asset = "Boombrick.pak.zip"
-	Sums  = "SHA256SUMS"
-	inZip = "Tools/tg5040/Boombrick.pak/"
-)
+// Sums is the release's list of checksums.
+const Sums = "SHA256SUMS"
+
+// Pak is a firmware's update: the release file, and the folder in its zip
+// that holds the app's own files, as "Apps/Boombrick/".
+type Pak struct {
+	Asset, Dir string
+}
 
 // The limits on an update: the zip is about 12 MB.
 var (
@@ -47,22 +50,22 @@ func Staged(pakDir string) (string, bool) {
 	return strings.TrimSpace(string(b)), true
 }
 
-// Stage fetches r's pak into pakDir/.update, replacing whatever is there,
-// reporting progress as the zip comes. The ready file is written last, after
-// a sync, so launch.sh never moves in an update that isn't whole; a failed
-// stage leaves no .update behind.
-func Stage(ctx context.Context, c *http.Client, r release.Release, pakDir string, progress func(done, total int64)) (err error) {
-	zipURL, sumsURL := r.Assets[Asset], r.Assets[Sums]
+// Stage fetches r's zip for pak into pakDir/.update, replacing whatever is
+// there, reporting progress as the zip comes. The ready file is written
+// last, after a sync, so launch.sh never moves in an update that isn't whole;
+// a failed stage leaves no .update behind.
+func Stage(ctx context.Context, c *http.Client, r release.Release, pakDir string, pak Pak, progress func(done, total int64)) (err error) {
+	zipURL, sumsURL := r.Assets[pak.Asset], r.Assets[Sums]
 	if zipURL == "" || sumsURL == "" {
-		return fmt.Errorf("release %s has no %s or %s", r.Tag, Asset, Sums)
+		return fmt.Errorf("release %s has no %s or %s", r.Tag, pak.Asset, Sums)
 	}
 	sums, err := netx.Get(ctx, c, sumsURL, 64<<10)
 	if err != nil {
 		return fmt.Errorf("%s: %w", Sums, err)
 	}
-	want, ok := netx.SumFor(sums, Asset)
+	want, ok := netx.SumFor(sums, pak.Asset)
 	if !ok {
-		return fmt.Errorf("%s: no %s", Sums, Asset)
+		return fmt.Errorf("%s: no %s", Sums, pak.Asset)
 	}
 	dir := filepath.Join(pakDir, ".update")
 	if err := os.RemoveAll(dir); err != nil {
@@ -76,11 +79,11 @@ func Stage(ctx context.Context, c *http.Client, r release.Release, pakDir string
 			os.RemoveAll(dir)
 		}
 	}()
-	zipPath := filepath.Join(dir, Asset)
+	zipPath := filepath.Join(dir, pak.Asset)
 	if err := netx.Download(ctx, c, zipURL, zipPath, want, maxZip, progress); err != nil {
-		return fmt.Errorf("%s: %w", Asset, err)
+		return fmt.Errorf("%s: %w", pak.Asset, err)
 	}
-	if err := unpack(ctx, zipPath, filepath.Join(dir, "pak")); err != nil {
+	if err := unpack(ctx, zipPath, filepath.Join(dir, "pak"), pak); err != nil {
 		return err
 	}
 	if err := os.Remove(zipPath); err != nil {
@@ -88,7 +91,7 @@ func Stage(ctx context.Context, c *http.Client, r release.Release, pakDir string
 	}
 	for _, f := range []string{"boombrick", "launch.sh"} {
 		if _, err := os.Stat(filepath.Join(dir, "pak", f)); err != nil {
-			return fmt.Errorf("%s holds no %s", Asset, f)
+			return fmt.Errorf("%s holds no %s", pak.Asset, f)
 		}
 	}
 	// FAT and exFAT can lose file data to a power cut; the ready file must
@@ -101,30 +104,30 @@ func Stage(ctx context.Context, c *http.Client, r release.Release, pakDir string
 	return nil
 }
 
-// unpack writes the pak's own files from the zip at src into the folder dst,
-// refusing entries that would land outside it, that are neither folders nor
-// plain files, or that make it larger than a pak can be.
-func unpack(ctx context.Context, src, dst string) error {
+// unpack writes the files in pak's folder of the zip at src into the folder
+// dst, refusing entries that would land outside it, that are neither folders
+// nor plain files, or that make it larger than a pak can be.
+func unpack(ctx context.Context, src, dst string, pak Pak) error {
 	r, err := zip.OpenReader(src)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
 	if len(r.File) > maxEntries {
-		return fmt.Errorf("%s holds %d entries", Asset, len(r.File))
+		return fmt.Errorf("%s holds %d entries", pak.Asset, len(r.File))
 	}
 	left := maxUnpacked
 	for _, f := range r.File {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		rel, ok := strings.CutPrefix(f.Name, inZip)
+		rel, ok := strings.CutPrefix(f.Name, pak.Dir)
 		if !ok || rel == "" {
 			continue // the folders above the pak
 		}
 		name := filepath.FromSlash(rel)
 		if !filepath.IsLocal(name) {
-			return fmt.Errorf("%s holds %q, outside the pak", Asset, f.Name)
+			return fmt.Errorf("%s holds %q, outside the pak", pak.Asset, f.Name)
 		}
 		p := filepath.Join(dst, name)
 		if f.FileInfo().IsDir() {
@@ -134,7 +137,7 @@ func unpack(ctx context.Context, src, dst string) error {
 			continue
 		}
 		if f.Mode()&fs.ModeType != 0 {
-			return fmt.Errorf("%s holds %q, which is not a plain file", Asset, f.Name)
+			return fmt.Errorf("%s holds %q, which is not a plain file", pak.Asset, f.Name)
 		}
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			return err
@@ -161,7 +164,7 @@ func unpackFile(f *zip.File, path string, limit int64) (int64, error) {
 	}
 	n, err := io.Copy(out, io.LimitReader(rc, limit+1))
 	if err == nil && n > limit {
-		err = fmt.Errorf("%s unpacks to too much", Asset)
+		err = errors.New("the update unpacks to too much")
 	}
 	if err != nil {
 		out.Close()
@@ -187,6 +190,7 @@ const tellEvery = 250 * time.Millisecond
 type Updater struct {
 	http   *http.Client
 	dir    string
+	pak    Pak
 	log    *slog.Logger
 	ready  chan struct{}
 	ctx    context.Context
@@ -199,14 +203,14 @@ type Updater struct {
 	closed bool
 }
 
-// New returns an updater for the pak in pakDir, knowing any update staged
-// there already.
-func New(c *http.Client, pakDir string, log *slog.Logger) *Updater {
+// New returns an updater for the app in pakDir, which installs pak from each
+// release, knowing any update staged there already.
+func New(c *http.Client, pakDir string, pak Pak, log *slog.Logger) *Updater {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	u := &Updater{http: c, dir: pakDir, log: log, ready: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
+	u := &Updater{http: c, dir: pakDir, pak: pak, log: log, ready: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
 	u.st.Staged, _ = Staged(pakDir)
 	return u
 }
@@ -228,7 +232,7 @@ func (u *Updater) stage(r release.Release) {
 	defer u.wg.Done()
 	ctx, cancel := context.WithTimeout(u.ctx, 10*time.Minute)
 	defer cancel()
-	err := Stage(ctx, u.http, r, u.dir, u.progress)
+	err := Stage(ctx, u.http, r, u.dir, u.pak, u.progress)
 	u.mu.Lock()
 	u.st.Staging = false
 	if err != nil {

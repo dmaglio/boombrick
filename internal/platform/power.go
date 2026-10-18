@@ -67,21 +67,33 @@ func (b *Backlight) On() error {
 	return nil
 }
 
-// PowerOff asks NextUI to shut the device down once Boombrick quits, as its
-// own apps do when Power is held: without nextui_exec its launcher stops
-// starting the menu again, and with poweroff it shuts down. tmp is /tmp on
-// the device.
-func PowerOff(tmp string) error {
-	if err := os.Remove(filepath.Join(tmp, "nextui_exec")); err != nil && !os.IsNotExist(err) {
-		return err
+// PowerOff asks the firmware to shut the device down once Boombrick quits.
+// On NextUI it does as NextUI's own apps do when Power is held: without
+// nextui_exec its launcher stops starting the menu again, and with poweroff
+// it shuts down. On CrossMix it leaves boombrick-poweroff for Boombrick's
+// launch.sh, which powers off when Boombrick has exited. On a desktop it does
+// nothing.
+func (p Profile) PowerOff() error {
+	switch p.Firmware {
+	case NextUI:
+		if err := os.Remove(filepath.Join(p.tmp, "nextui_exec")); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err := touch(filepath.Join(p.tmp, "poweroff")); err != nil {
+			return err
+		}
+		syscall.Sync()
+	case CrossMix:
+		return touch(filepath.Join(p.tmp, "boombrick-poweroff"))
 	}
-	f, err := os.Create(filepath.Join(tmp, "poweroff"))
+	return nil
+}
+
+// touch creates an empty file at path.
+func touch(path string) error {
+	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	syscall.Sync()
-	return nil
+	return f.Close()
 }

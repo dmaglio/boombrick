@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,14 +25,21 @@ type file struct {
 	mode       os.FileMode
 }
 
-// pak is a release's zip as make pak builds it.
-func pak(extra ...file) []file {
+// The two firmwares' paks, as their profiles name them.
+var (
+	nextUI   = Pak{Asset: "Boombrick.pak.zip", Dir: "Tools/tg5040/Boombrick.pak/"}
+	crossMix = Pak{Asset: "Boombrick-CrossMix.zip", Dir: "Apps/Boombrick/"}
+)
+
+// pak is p's release zip as the Makefile builds it.
+func pak(p Pak, extra ...file) []file {
+	top, _, _ := strings.Cut(p.Dir, "/")
 	return append([]file{
-		{name: "Tools/", mode: os.ModeDir | 0o755},
-		{name: "Tools/tg5040/Boombrick.pak/", mode: os.ModeDir | 0o755},
-		{name: "Tools/tg5040/Boombrick.pak/boombrick", body: "new program", mode: 0o755},
-		{name: "Tools/tg5040/Boombrick.pak/launch.sh", body: "#!/bin/sh\n", mode: 0o755},
-		{name: "Tools/tg5040/Boombrick.pak/lib/libopus.so.0", body: "opus", mode: 0o644},
+		{name: top + "/", mode: os.ModeDir | 0o755},
+		{name: p.Dir, mode: os.ModeDir | 0o755},
+		{name: p.Dir + "boombrick", body: "new program", mode: 0o755},
+		{name: p.Dir + "launch.sh", body: "#!/bin/sh\n", mode: 0o755},
+		{name: p.Dir + "lib/libopus.so.0", body: "opus", mode: 0o644},
 	}, extra...)
 }
 
@@ -54,25 +62,26 @@ func makeZip(t *testing.T, files []file) []byte {
 	return buf.Bytes()
 }
 
-// server serves a release's zip and SHA256SUMS, and counts downloads of
-// the zip.
+// server serves a release's zip, named asset, and SHA256SUMS, and counts
+// downloads of the zip.
 type server struct {
 	srv   *httptest.Server
+	asset string
 	zip   []byte
 	sum   string
 	pulls atomic.Int32
 	stall chan struct{} // if set, serve a few bytes, signal, and hang
 }
 
-func newServer(t *testing.T, files []file) *server {
-	s := &server{zip: makeZip(t, files)}
+func newServer(t *testing.T, asset string, files []file) *server {
+	s := &server{asset: asset, zip: makeZip(t, files)}
 	h := sha256.Sum256(s.zip)
 	s.sum = hex.EncodeToString(h[:])
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/SHA256SUMS":
-			w.Write([]byte(s.sum + "  Boombrick.pak.zip\n"))
-		case "/Boombrick.pak.zip":
+			w.Write([]byte(s.sum + "  " + asset + "\n"))
+		case "/" + asset:
 			s.pulls.Add(1)
 			w.Header().Set("Content-Length", strconv.Itoa(len(s.zip)))
 			if s.stall != nil {
@@ -93,16 +102,16 @@ func newServer(t *testing.T, files []file) *server {
 
 func (s *server) release(tag string) release.Release {
 	return release.Release{Tag: tag, Assets: map[string]string{
-		Asset: s.srv.URL + "/Boombrick.pak.zip",
-		Sums:  s.srv.URL + "/SHA256SUMS",
+		s.asset: s.srv.URL + "/" + s.asset,
+		Sums:    s.srv.URL + "/SHA256SUMS",
 	}}
 }
 
 func TestStage(t *testing.T) {
-	s := newServer(t, pak(file{name: "README.txt", body: "not the pak's", mode: 0o644}))
+	s := newServer(t, nextUI.Asset, pak(nextUI, file{name: "README.txt", body: "not the pak's", mode: 0o644}))
 	dir := t.TempDir()
 	var last, total int64
-	if err := Stage(context.Background(), s.srv.Client(), s.release("v0.5.0"), dir, func(d, n int64) { last, total = d, n }); err != nil {
+	if err := Stage(context.Background(), s.srv.Client(), s.release("v0.5.0"), dir, nextUI, func(d, n int64) { last, total = d, n }); err != nil {
 		t.Fatal(err)
 	}
 	if last != int64(len(s.zip)) || total != last {
@@ -115,7 +124,7 @@ func TestStage(t *testing.T) {
 	if info, err := os.Stat(filepath.Join(staged, "boombrick")); err != nil || info.Mode()&0o100 == 0 {
 		t.Fatalf("the program: %v, %v", info, err)
 	}
-	for _, gone := range []string{filepath.Join(staged, "README.txt"), filepath.Join(staged, "Tools"), filepath.Join(dir, ".update", Asset)} {
+	for _, gone := range []string{filepath.Join(staged, "README.txt"), filepath.Join(staged, "Tools"), filepath.Join(dir, ".update", nextUI.Asset)} {
 		if _, err := os.Stat(gone); !os.IsNotExist(err) {
 			t.Errorf("%s is there", gone)
 		}
@@ -125,16 +134,34 @@ func TestStage(t *testing.T) {
 	}
 }
 
+// CrossMix's zip holds Apps/Boombrick/, and only that is staged; a zip for
+// the other firmware holds nothing of it.
+func TestStageCrossMix(t *testing.T) {
+	s := newServer(t, crossMix.Asset, pak(crossMix))
+	dir := t.TempDir()
+	if err := Stage(context.Background(), s.srv.Client(), s.release("v0.5.0"), dir, crossMix, nil); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, ".update", "pak", "boombrick")); string(b) != "new program" {
+		t.Fatal("the program wasn't staged")
+	}
+	other := newServer(t, crossMix.Asset, pak(nextUI))
+	dir = t.TempDir()
+	if err := Stage(context.Background(), other.srv.Client(), other.release("v0.5.0"), dir, crossMix, nil); err == nil {
+		t.Fatal("staged NextUI's pak for CrossMix")
+	}
+}
+
 func TestStageRefuses(t *testing.T) {
 	cases := map[string][]file{
-		"an entry outside the pak": pak(file{name: "Tools/tg5040/Boombrick.pak/../../../evil", body: "x", mode: 0o644}),
-		"a link":                   pak(file{name: "Tools/tg5040/Boombrick.pak/link", body: "/etc/passwd", mode: os.ModeSymlink | 0o777}),
-		"no program":               pak()[:2],
+		"an entry outside the pak": pak(nextUI, file{name: nextUI.Dir + "../../../evil", body: "x", mode: 0o644}),
+		"a link":                   pak(nextUI, file{name: nextUI.Dir + "link", body: "/etc/passwd", mode: os.ModeSymlink | 0o777}),
+		"no program":               pak(nextUI)[:2],
 	}
 	for what, files := range cases {
-		s := newServer(t, files)
+		s := newServer(t, nextUI.Asset, files)
 		dir := t.TempDir()
-		if err := Stage(context.Background(), s.srv.Client(), s.release("v0.5.0"), dir, nil); err == nil {
+		if err := Stage(context.Background(), s.srv.Client(), s.release("v0.5.0"), dir, nextUI, nil); err == nil {
 			t.Errorf("%s: staged", what)
 		}
 		if _, err := os.Stat(filepath.Join(dir, ".update")); !os.IsNotExist(err) {
@@ -142,17 +169,17 @@ func TestStageRefuses(t *testing.T) {
 		}
 	}
 	// A zip that isn't the one SHA256SUMS lists.
-	s := newServer(t, pak())
+	s := newServer(t, nextUI.Asset, pak(nextUI))
 	s.sum = "00" + s.sum[2:]
 	dir := t.TempDir()
-	if err := Stage(context.Background(), s.srv.Client(), s.release("v0.5.0"), dir, nil); err == nil {
+	if err := Stage(context.Background(), s.srv.Client(), s.release("v0.5.0"), dir, nextUI, nil); err == nil {
 		t.Error("staged a zip with the wrong checksum")
 	}
 	if _, ok := Staged(dir); ok {
 		t.Error("a bad zip is staged")
 	}
 	// A release without the files.
-	if err := Stage(context.Background(), s.srv.Client(), release.Release{Tag: "v0.5.0"}, dir, nil); err == nil {
+	if err := Stage(context.Background(), s.srv.Client(), release.Release{Tag: "v0.5.0"}, dir, nextUI, nil); err == nil {
 		t.Error("staged a release with no assets")
 	}
 }
@@ -173,9 +200,9 @@ func waitFor(t *testing.T, u *Updater, ok func(Status) bool) Status {
 }
 
 func TestUpdater(t *testing.T) {
-	s := newServer(t, pak())
+	s := newServer(t, nextUI.Asset, pak(nextUI))
 	dir := t.TempDir()
-	u := New(s.srv.Client(), dir, nil)
+	u := New(s.srv.Client(), dir, nextUI, nil)
 	defer u.Close()
 	if st := u.Status(); st != (Status{}) {
 		t.Fatalf("before staging: %+v", st)
@@ -193,7 +220,7 @@ func TestUpdater(t *testing.T) {
 	if u.Status().Staging || s.pulls.Load() != 1 {
 		t.Fatalf("staged again: %+v, %d downloads", u.Status(), s.pulls.Load())
 	}
-	again := New(s.srv.Client(), dir, nil)
+	again := New(s.srv.Client(), dir, nextUI, nil)
 	defer again.Close()
 	if st := again.Status(); st.Staged != "0.5.0" {
 		t.Fatalf("a new updater: %+v", st)
@@ -201,9 +228,9 @@ func TestUpdater(t *testing.T) {
 }
 
 func TestUpdaterFails(t *testing.T) {
-	s := newServer(t, pak())
+	s := newServer(t, nextUI.Asset, pak(nextUI))
 	s.sum = "00" + s.sum[2:]
-	u := New(s.srv.Client(), t.TempDir(), nil)
+	u := New(s.srv.Client(), t.TempDir(), nextUI, nil)
 	defer u.Close()
 	u.Stage(s.release("v0.5.0"))
 	st := waitFor(t, u, func(st Status) bool { return !st.Staging })
@@ -213,10 +240,10 @@ func TestUpdaterFails(t *testing.T) {
 }
 
 func TestCloseStopsAStage(t *testing.T) {
-	s := newServer(t, pak())
+	s := newServer(t, nextUI.Asset, pak(nextUI))
 	s.stall = make(chan struct{}, 1)
 	dir := t.TempDir()
-	u := New(s.srv.Client(), dir, nil)
+	u := New(s.srv.Client(), dir, nextUI, nil)
 	u.Stage(s.release("v0.5.0"))
 	select {
 	case <-s.stall:

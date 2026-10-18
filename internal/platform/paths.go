@@ -1,12 +1,32 @@
-// Package platform holds device integration: where data lives, the battery
-// and network state the status bar shows, and (in subpackages) input, power
-// and connectivity.
+// Package platform holds device integration: the firmware Boombrick runs
+// under and where its data lives, the battery and network state the status
+// bar shows, and (in subpackages) input, power and connectivity.
 package platform
 
 import (
 	"os"
 	"path/filepath"
 )
+
+// Firmware is what runs Boombrick: one of the Brick's firmwares, or a
+// desktop.
+type Firmware uint8
+
+const (
+	Desktop Firmware = iota
+	NextUI
+	CrossMix
+)
+
+func (f Firmware) String() string {
+	switch f {
+	case NextUI:
+		return "NextUI"
+	case CrossMix:
+		return "CrossMix"
+	}
+	return "desktop"
+}
 
 // Paths are the directories Boombrick reads and writes.
 type Paths struct {
@@ -16,20 +36,51 @@ type Paths struct {
 	OnDevice bool
 }
 
-// DetectPaths uses the variables NextUI passes to launch.sh when present, and
-// $BOOMBRICK_DATA (default dist/desktop/data) on a desktop.
-func DetectPaths() Paths {
-	if ud := os.Getenv("USERDATA_PATH"); ud != "" {
-		sd := envOr("SDCARD_PATH", "/mnt/SDCARD")
-		return Paths{
-			Data:     filepath.Join(ud, "Boombrick"),
-			Logs:     envOr("LOGS_PATH", filepath.Join(ud, "logs")),
-			Music:    filepath.Join(sd, "Music"),
-			OnDevice: true,
+// Profile is what differs from one firmware to another: where Boombrick
+// keeps its files, how it powers the device off, and the release file that
+// updates it.
+type Profile struct {
+	Firmware Firmware
+	Paths    Paths
+	// ReleaseAsset is the release file self-update installs, and ReleaseDir
+	// the folder in its zip that holds the app's own files; both "" on a
+	// desktop.
+	ReleaseAsset, ReleaseDir string
+	tmp                      string // where the power-off files go: /tmp
+}
+
+// Detect works out the firmware from what its launcher passes. CrossMix's
+// launch.sh, Boombrick's own, sets BOOMBRICK_PLATFORM=crossmix; NextUI
+// passes USERDATA_PATH and its other paths; a desktop passes neither, and
+// $BOOMBRICK_DATA (default dist/desktop/data) holds everything. dir is the
+// program's folder, which on CrossMix holds Boombrick's data, as CrossMix's
+// own apps keep theirs.
+func Detect(dir string) Profile {
+	if os.Getenv("BOOMBRICK_PLATFORM") == "crossmix" {
+		if dir == "" {
+			dir = "/mnt/SDCARD/Apps/Boombrick"
 		}
+		return Profile{Firmware: CrossMix, tmp: "/tmp",
+			Paths: Paths{
+				Data:     filepath.Join(dir, "data"),
+				Logs:     filepath.Join(dir, "logs"),
+				Music:    filepath.Join(envOr("SDCARD_PATH", "/mnt/SDCARD"), "Music"),
+				OnDevice: true,
+			},
+			ReleaseAsset: "Boombrick-CrossMix.zip", ReleaseDir: "Apps/Boombrick/"}
+	}
+	if ud := os.Getenv("USERDATA_PATH"); ud != "" {
+		return Profile{Firmware: NextUI, tmp: "/tmp",
+			Paths: Paths{
+				Data:     filepath.Join(ud, "Boombrick"),
+				Logs:     envOr("LOGS_PATH", filepath.Join(ud, "logs")),
+				Music:    filepath.Join(envOr("SDCARD_PATH", "/mnt/SDCARD"), "Music"),
+				OnDevice: true,
+			},
+			ReleaseAsset: "Boombrick.pak.zip", ReleaseDir: "Tools/tg5040/Boombrick.pak/"}
 	}
 	base := envOr("BOOMBRICK_DATA", filepath.Join("dist", "desktop", "data"))
-	return Paths{Data: base, Logs: base, Music: filepath.Join(base, "Music")}
+	return Profile{Firmware: Desktop, tmp: "/tmp", Paths: Paths{Data: base, Logs: base, Music: filepath.Join(base, "Music")}}
 }
 
 func envOr(key, def string) string {
