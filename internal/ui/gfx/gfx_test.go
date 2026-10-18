@@ -105,3 +105,28 @@ func TestOffscreenDrawsAndReadsBack(t *testing.T) {
 		t.Errorf("tinted texture = %v, want gold", got)
 	}
 }
+
+// Drawing runs for every texture of every frame, so it allocates nothing.
+func TestDrawingDoesNotAllocate(t *testing.T) {
+	o, err := NewOffscreen(64, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	mask := image.NewNRGBA(image.Rect(0, 0, 8, 8))
+	tex, err := o.Upload(mask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tex.Destroy()
+	white := color.NRGBA{255, 255, 255, 255}
+	n := testing.AllocsPerRun(100, func() {
+		o.Clip(Rect{X: 1, Y: 1, W: 40, H: 20})
+		o.Draw(tex, Rect{X: 2.5, Y: 3, W: 8, H: 8}, white)
+		o.Fill(Rect{X: 0, Y: 0, W: 16, H: 16}, white)
+		o.Unclip()
+	})
+	if n != 0 {
+		t.Fatalf("a clip, a draw and a fill allocate %v times", n)
+	}
+}

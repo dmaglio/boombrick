@@ -14,9 +14,14 @@ import (
 // Rect is a destination rectangle in device pixels.
 type Rect struct{ X, Y, W, H float32 }
 
-// Canvas draws textures and rectangles with an SDL renderer.
+// Canvas draws textures and rectangles with an SDL renderer, from the UI
+// thread only.
 type Canvas struct {
 	r *sdl.Renderer
+	// What a draw hands SDL. A rectangle passed to C escapes to the heap, so
+	// these are reused rather than made for every draw.
+	dst  sdl.FRect
+	clip sdl.Rect
 }
 
 // New wraps r.
@@ -66,7 +71,8 @@ func (c *Canvas) Draw(t *Texture, dst Rect, col color.NRGBA) {
 	}
 	t.t.SetColorMod(col.R, col.G, col.B)
 	t.t.SetAlphaMod(col.A)
-	c.r.CopyF(t.t, nil, &sdl.FRect{X: dst.X, Y: dst.Y, W: dst.W, H: dst.H})
+	c.dst = sdl.FRect{X: dst.X, Y: dst.Y, W: dst.W, H: dst.H}
+	c.r.CopyF(t.t, nil, &c.dst)
 }
 
 func nearInt(v float32, n int) bool { return math.Abs(float64(v)-float64(n)) < 0.01 }
@@ -76,7 +82,8 @@ func (c *Canvas) Fill(r Rect, col color.NRGBA) {
 	c.r.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	c.r.SetDrawColor(col.R, col.G, col.B, col.A)
 	x, y, w, h := snapEdges(r)
-	c.r.FillRectF(&sdl.FRect{X: float32(x), Y: float32(y), W: float32(w), H: float32(h)})
+	c.dst = sdl.FRect{X: float32(x), Y: float32(y), W: float32(w), H: float32(h)}
+	c.r.FillRectF(&c.dst)
 }
 
 // snapEdges rounds r's edges, not its size, to whole pixels. A texture and a
@@ -99,7 +106,8 @@ func (c *Canvas) Present() { c.r.Present() }
 // Clip limits drawing to r until Unclip.
 func (c *Canvas) Clip(r Rect) {
 	x, y, w, h := snapEdges(r)
-	c.r.SetClipRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
+	c.clip = sdl.Rect{X: x, Y: y, W: w, H: h}
+	c.r.SetClipRect(&c.clip)
 }
 
 // Unclip removes the clip rectangle.

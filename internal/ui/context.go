@@ -68,6 +68,7 @@ type Context struct {
 	covers   *LRU[coverKey, *gfx.Texture]
 	glows    *LRU[glowKey, glowEntry]
 	fadeFrom map[coverKey]time.Time // when each cover arrived, while it fades in
+	failed   map[any]time.Time      // uploads that failed lately, by cache key, and when
 	uploads  int                    // covers uploaded this frame
 	pending  bool                   // this frame left a cover fading in or waiting to be uploaded
 	tf       []transform
@@ -155,6 +156,14 @@ const (
 	maxFits     = 4096
 )
 
+// failWait is how long a texture that couldn't be uploaded isn't made again:
+// making it every frame would only fail again, at the frame's cost. At most
+// maxFailed failures are remembered.
+const (
+	failWait  = 5 * time.Second
+	maxFailed = 256
+)
+
 // NewContext creates a context that draws to c using fonts, with scale device
 // pixels per design pixel.
 func NewContext(c *gfx.Canvas, fonts *text.Engine, scale float32) *Context {
@@ -178,6 +187,32 @@ func NewContext(c *gfx.Canvas, fonts *text.Engine, scale float32) *Context {
 		fadeFrom:   map[coverKey]time.Time{},
 		MaxUploads: 3,
 	}
+}
+
+// failedLately reports whether the texture under cache key k failed to upload
+// within failWait.
+func (u *Context) failedLately(k any) bool {
+	at, ok := u.failed[k]
+	if !ok {
+		return false
+	}
+	if u.Now.Sub(at) < failWait {
+		return true
+	}
+	delete(u.failed, k)
+	return false
+}
+
+// upload uploads img, the texture for cache key k, remembering a failure.
+func (u *Context) upload(k any, img *image.NRGBA) (*gfx.Texture, error) {
+	t, err := u.Canvas.Upload(img)
+	if err != nil {
+		if u.failed == nil || len(u.failed) >= maxFailed {
+			u.failed = map[any]time.Time{}
+		}
+		u.failed[k] = u.Now
+	}
+	return t, err
 }
 
 // PushScale scales everything drawn until the matching Pop by s around (ox, oy).
@@ -255,11 +290,14 @@ func (u *Context) text(c *TextCache, s string, st text.Style) (textEntry, bool) 
 	if e, ok := c.lru.Get(k); ok {
 		return e, true
 	}
+	if u.failedLately(k) {
+		return textEntry{}, false
+	}
 	ds := u.device(st)
 	line := u.Fonts.Shape(s, ds)
 	img, _ := u.Fonts.Rasterize(line, ds)
 	u.made++
-	tex, err := u.Canvas.Upload(img)
+	tex, err := u.upload(k, img)
 	if err != nil {
 		return textEntry{}, false
 	}
@@ -358,11 +396,14 @@ func (u *Context) Icon(name string, size int, strokeWidth float64, filled bool, 
 	k := iconKey{name, px, strokeWidth, filled}
 	t, ok := u.icons[k]
 	if !ok {
+		if u.failedLately(k) {
+			return
+		}
 		img, err := icons.Rasterize(name, px, strokeWidth, filled)
 		if err != nil {
 			return
 		}
-		if t, err = u.Canvas.Upload(img); err != nil {
+		if t, err = u.upload(k, img); err != nil {
 			return
 		}
 		u.icons[k] = t
@@ -384,8 +425,11 @@ func (u *Context) Shape(s raster.Shape, box gfx.Rect, col color.NRGBA) {
 	}
 	t, ok := u.masks.Get(ds)
 	if !ok {
+		if u.failedLately(ds) {
+			return
+		}
 		var err error
-		if t, err = u.Canvas.Upload(ds.Mask()); err != nil {
+		if t, err = u.upload(ds, ds.Mask()); err != nil {
 			return
 		}
 		u.masks.Put(ds, t)
@@ -402,12 +446,15 @@ func (u *Context) Shape(s raster.Shape, box gfx.Rect, col color.NRGBA) {
 func (u *Context) Image(key string, build func() *image.NRGBA, dst gfx.Rect, col color.NRGBA) {
 	t, ok := u.images.Get(key)
 	if !ok {
+		if u.failedLately(key) {
+			return
+		}
 		img := build()
 		if img == nil {
 			return
 		}
 		var err error
-		if t, err = u.Canvas.Upload(img); err != nil {
+		if t, err = u.upload(key, img); err != nil {
 			return
 		}
 		u.images.Put(key, t)
@@ -557,6 +604,9 @@ func (u *Context) glow(s string, st text.Style, blur float32) (glowEntry, bool) 
 	k := glowKey{s, st, r}
 	e, ok := u.glows.Get(k)
 	if !ok {
+		if u.failedLately(k) {
+			return glowEntry{}, false
+		}
 		ds := u.device(st)
 		ds.Size /= glowDown
 		mask, pad := u.Fonts.Rasterize(u.Fonts.Shape(s, ds), ds)
@@ -574,7 +624,7 @@ func (u *Context) glow(s string, st text.Style, blur float32) (glowEntry, bool) 
 		}
 		raster.BlurAlpha(img, rq)
 		u.made++
-		tex, err := u.Canvas.Upload(img)
+		tex, err := u.upload(k, img)
 		if err != nil {
 			return glowEntry{}, false
 		}

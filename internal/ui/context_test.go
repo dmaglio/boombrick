@@ -273,3 +273,27 @@ func TestCoversNamedByURL(t *testing.T) {
 		t.Fatalf("asked %+v", c.asked)
 	}
 }
+
+// A texture that couldn't be uploaded isn't made again every frame, only once
+// failWait has passed.
+func TestAFailedUploadWaits(t *testing.T) {
+	u, _ := newContext(t, 1)
+	builds := 0
+	build := func() *image.NRGBA {
+		builds++
+		return image.NewNRGBA(image.Rect(0, 0, 0, 0)) // an empty image never uploads
+	}
+	t0 := time.Unix(0, 0)
+	for i := range 3 {
+		u.BeginFrame(t0.Add(time.Duration(i) * time.Second))
+		u.Image("broken", build, gfx.Rect{W: 10, H: 10}, theme.Paper)
+	}
+	if builds != 1 {
+		t.Fatalf("built %d times in 3 s, want once", builds)
+	}
+	u.BeginFrame(t0.Add(failWait))
+	u.Image("broken", build, gfx.Rect{W: 10, H: 10}, theme.Paper)
+	if builds != 2 {
+		t.Fatalf("built %d times, want again after %v", builds, failWait)
+	}
+}
