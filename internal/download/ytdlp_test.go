@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // release serves a yt-dlp release: SHA2-256SUMS and the zip named asset,
@@ -93,6 +94,36 @@ func (r *release) set(t *testing.T, files map[string]string) {
 
 func testInstaller(r *release, dir string) *Installer {
 	return &Installer{HTTP: r.srv.Client(), Dir: dir, Asset: "yt-dlp_test.zip", Base: r.srv.URL + "/"}
+}
+
+func TestVersion(t *testing.T) {
+	r := newRelease(t, map[string]string{"yt-dlp_test": "#!/bin/sh\necho 2026.10.11\n"})
+	in := testInstaller(r, t.TempDir())
+	if v, _ := in.Version(); v != "" {
+		t.Fatalf("version %q before installing", v)
+	}
+	if _, err := in.Install(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if v, at := in.Version(); v != "2026.10.11" || time.Since(at) > time.Minute {
+		t.Fatalf("version %q, installed %v", v, at)
+	}
+	// An install made before versions were kept has none until it is asked.
+	os.Remove(filepath.Join(in.Dir, "yt-dlp", "VERSION"))
+	if v, _ := in.Version(); v != "" {
+		t.Fatalf("version %q without the file", v)
+	}
+	if err := in.RecordVersion(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := in.Version(); v != "2026.10.11" {
+		t.Fatalf("recorded %q", v)
+	}
+	// What isn't a version isn't kept as one.
+	os.WriteFile(in.Program(), []byte("#!/bin/sh\necho 'Usage: yt-dlp [OPTIONS] URL'\n"), 0o755)
+	if err := in.RecordVersion(context.Background()); err == nil {
+		t.Fatal("kept a usage line as the version")
+	}
 }
 
 func TestInstallAndUpdate(t *testing.T) {

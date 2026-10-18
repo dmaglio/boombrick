@@ -2,21 +2,19 @@ package download
 
 import (
 	"archive/zip"
-	"bufio"
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/ujjwal313/boombrick/internal/netx"
 )
@@ -67,7 +65,7 @@ func (in *Installer) Install(ctx context.Context, progress func(done, total int6
 	if err != nil {
 		return false, fmt.Errorf("yt-dlp checksums: %w", err)
 	}
-	want, ok := sumFor(sums, in.Asset)
+	want, ok := netx.SumFor(sums, in.Asset)
 	if !ok {
 		return false, fmt.Errorf("yt-dlp checksums: no %s", in.Asset)
 	}
@@ -85,8 +83,8 @@ func (in *Installer) Install(ctx context.Context, progress func(done, total int6
 		return false, err
 	}
 	defer os.Remove(zipPath)
-	if err := in.fetch(ctx, zipPath, want, progress); err != nil {
-		return false, err
+	if err := netx.Download(ctx, in.HTTP, in.Base+in.Asset, zipPath, want, maxZip, progress); err != nil {
+		return false, fmt.Errorf("yt-dlp: %w", err)
 	}
 	// A .new from a crashed run is never trusted, and a .old with no folder
 	// beside it is replaced by this download.
@@ -125,79 +123,44 @@ func (in *Installer) Install(ctx context.Context, progress func(done, total int6
 		return false, err
 	}
 	os.RemoveAll(old)
+	in.RecordVersion(ctx) // without it Settings shows no version, which isn't worth failing for
 	return true, nil
 }
 
-// sumFor finds name's SHA-256 in a SHA2-256SUMS file.
-func sumFor(sums []byte, name string) (string, bool) {
-	sc := bufio.NewScanner(bytes.NewReader(sums))
-	for sc.Scan() {
-		f := strings.Fields(sc.Text())
-		if len(f) == 2 && strings.TrimPrefix(f[1], "*") == name {
-			return strings.ToLower(f[0]), true
-		}
+// Version is the installed yt-dlp's version, as it gave it after installing,
+// and when it was installed; "" when there is none, or it isn't known.
+func (in *Installer) Version() (string, time.Time) {
+	cur := filepath.Join(in.Dir, "yt-dlp")
+	var at time.Time
+	if info, err := os.Stat(filepath.Join(cur, "SHA256")); err == nil {
+		at = info.ModTime()
 	}
-	return "", false
+	v, err := os.ReadFile(filepath.Join(cur, "VERSION"))
+	if err != nil || in.Program() == "" {
+		return "", at
+	}
+	return strings.TrimSpace(string(v)), at
 }
 
-// fetch streams the zip to path, checking it against want as it comes.
-func (in *Installer) fetch(ctx context.Context, path, want string, progress func(done, total int64)) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, in.Base+in.Asset, nil)
+// RecordVersion asks the installed yt-dlp for its version and keeps it for
+// Version. Install does it after each install; an install made before the
+// version was kept needs it once.
+func (in *Installer) RecordVersion(ctx context.Context) error {
+	prog := in.Program()
+	if prog == "" {
+		return errors.New("yt-dlp isn't installed")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, prog, "--version").Output()
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", netx.UserAgent())
-	resp, err := in.HTTP.Do(req)
-	if err != nil {
-		return err
+	v := strings.TrimSpace(string(out))
+	if v == "" || len(v) > 40 || strings.ContainsAny(v, "\n ") {
+		return fmt.Errorf("yt-dlp gave its version as %q", v)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return &netx.StatusError{Code: resp.StatusCode}
-	}
-	if resp.ContentLength > maxZip {
-		return errors.New("yt-dlp: the download is too large")
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	h := sha256.New()
-	pw := &progressWriter{total: resp.ContentLength, report: progress}
-	n, err := io.Copy(io.MultiWriter(f, h, pw), io.LimitReader(resp.Body, maxZip+1))
-	if err != nil {
-		return err
-	}
-	if n > maxZip {
-		return errors.New("yt-dlp: the download is too large")
-	}
-	pw.flush()
-	if got := hex.EncodeToString(h.Sum(nil)); got != want {
-		return fmt.Errorf("yt-dlp: the download's checksum is %s, not %s", got, want)
-	}
-	return f.Close()
-}
-
-// progressWriter reports bytes as they pass, every 256 KB and at the end.
-type progressWriter struct {
-	done, total, told int64
-	report            func(done, total int64)
-}
-
-func (p *progressWriter) Write(b []byte) (int, error) {
-	p.done += int64(len(b))
-	if p.done-p.told >= 256<<10 {
-		p.flush()
-	}
-	return len(b), nil
-}
-
-func (p *progressWriter) flush() {
-	if p.report != nil {
-		p.report(p.done, p.total)
-	}
-	p.told = p.done
+	return os.WriteFile(filepath.Join(in.Dir, "yt-dlp", "VERSION"), []byte(v+"\n"), 0o644)
 }
 
 // unzip unpacks the zip at src into the folder dst, refusing entries that

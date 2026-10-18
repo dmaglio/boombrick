@@ -156,6 +156,7 @@ type fakeInstaller struct {
 	block     chan struct{} // an install waits for this to close
 	entered   chan struct{} // and says when it has begun
 	steps     int           // progress reports, 1 when 0
+	version   string        // what Version reports
 }
 
 func (i *fakeInstaller) Program() string {
@@ -192,7 +193,24 @@ func (i *fakeInstaller) Install(ctx context.Context, progress func(done, total i
 		progress(d, n)
 	}
 	i.installed = true
+	i.version = "2026.10.11"
 	return true, nil
+}
+
+func (i *fakeInstaller) Version() (string, time.Time) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.version, time.Time{}
+}
+
+func (i *fakeInstaller) RecordVersion(context.Context) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if !i.installed {
+		return errors.New("yt-dlp isn't installed")
+	}
+	i.version = "2026.10.11"
+	return nil
 }
 
 func (i *fakeInstaller) count() int {
@@ -424,6 +442,69 @@ func TestADownloaderThatWontInstall(t *testing.T) {
 	e.inst.fail = nil
 	e.inst.mu.Unlock()
 	eventually(t, "v1 saved", e.is("v1", media.Saved))
+}
+
+func TestUpdateDownloader(t *testing.T) {
+	e := newEnv(t)
+	if d := e.s.Downloader(); d.Version != "" || d.Updating || d.Failed {
+		t.Fatalf("before asking: %+v", d)
+	}
+	// Asked for from Settings, it installs with nothing queued.
+	e.s.UpdateDownloader()
+	eventually(t, "yt-dlp installed", func() bool { d := e.s.Downloader(); return d.Version == "2026.10.11" && !d.Updating })
+	if n := e.inst.count(); n != 1 || e.s.Status().Waiting != "" || len(e.f.runs()) != 0 {
+		t.Fatalf("%d installs, waiting %q, %d batches", n, e.s.Status().Waiting, len(e.f.runs()))
+	}
+	// Offline, it fails at once rather than wait for Wi-Fi.
+	e.online.Store(false)
+	e.s.UpdateDownloader()
+	eventually(t, "the failure", func() bool { return e.s.Downloader().Failed })
+	if d := e.s.Downloader(); d.Updating || e.inst.count() != 1 || e.s.Status().Waiting != "" {
+		t.Fatalf("offline: %+v, %d installs, waiting %q", d, e.inst.count(), e.s.Status().Waiting)
+	}
+	// A failed install says so, and asking again tries again.
+	e.online.Store(true)
+	e.inst.mu.Lock()
+	e.inst.fail = errors.New("the release is gone")
+	e.inst.mu.Unlock()
+	e.s.UpdateDownloader()
+	if d := e.s.Downloader(); d.Failed || !d.Updating {
+		t.Fatalf("asked again: %+v", d)
+	}
+	eventually(t, "the failure", func() bool { return e.s.Downloader().Failed })
+	if d := e.s.Downloader(); d.Updating || d.Version != "2026.10.11" || e.inst.count() != 2 {
+		t.Fatalf("after failing: %+v, %d installs", d, e.inst.count())
+	}
+}
+
+// An update asked for by retrying a song waits for the next batch, with the
+// queue paused or offline: only Settings' ask runs with nothing to download,
+// and only it says how it went.
+func TestARetrysUpdateWaitsForABatch(t *testing.T) {
+	e := newEnv(t)
+	e.f.set("v1", "gone")
+	e.s.Get([]ytmusic.Song{song("v1", "a", 1)})
+	eventually(t, "the failure", e.is("v1", media.Failed))
+	e.s.SetPaused(true)
+	e.online.Store(false)
+	e.s.Retry("v1", true)
+	time.Sleep(50 * time.Millisecond)
+	if d := e.s.Downloader(); d.Failed || d.Updating || e.inst.count() != 1 {
+		t.Fatalf("after a retry with the queue paused: %+v, %d installs", d, e.inst.count())
+	}
+}
+
+func TestAnInstallWithoutAVersionGetsOne(t *testing.T) {
+	e := newEnv(t)
+	e.s.Close()
+	e.inst.mu.Lock()
+	e.inst.installed = true
+	e.inst.mu.Unlock()
+	e.start(t)
+	eventually(t, "the version", func() bool { return e.s.Downloader().Version == "2026.10.11" })
+	if n := e.inst.count(); n != 0 {
+		t.Fatalf("%d installs", n)
+	}
 }
 
 func TestRemove(t *testing.T) {

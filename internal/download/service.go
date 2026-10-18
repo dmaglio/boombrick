@@ -101,6 +101,17 @@ type fetcher interface {
 type installer interface {
 	Program() string
 	Install(ctx context.Context, progress func(done, total int64)) (bool, error)
+	Version() (string, time.Time)
+	RecordVersion(ctx context.Context) error
+}
+
+// Downloader is yt-dlp as Settings shows it.
+type Downloader struct {
+	Version   string    // "" when it isn't installed, or its version isn't known
+	Installed time.Time // when it was installed
+	Updating  bool
+	Progress  float32 // how far an install has got, 0 to 1
+	Failed    bool    // the last install failed
 }
 
 // landed is a downloaded file waiting to be finished. It keeps the row it was
@@ -160,9 +171,13 @@ type Service struct {
 	closed      bool           // Close was called
 	shut        bool           // Ready is closed
 	paused      bool
-	update      bool // update yt-dlp before the next batch
+	update      bool // update yt-dlp before the next batch, or now if asked from Settings
 	installing  bool
 	install     float32
+	asked       bool      // Settings asked for an install, which runs with nothing to download
+	toolFailed  bool      // the last install failed
+	toolVersion string    // yt-dlp's version, read off the UI thread
+	toolAt      time.Time // and when it was installed
 	waiting     string
 	storage     Storage
 	outcomes    []Outcome
@@ -509,6 +524,29 @@ func (s *Service) Note() string {
 	return ""
 }
 
+// Downloader reports yt-dlp's version and any install under way.
+func (s *Service) Downloader() Downloader {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return Downloader{Version: s.toolVersion, Installed: s.toolAt, Updating: s.installing || s.asked,
+		Progress: s.install, Failed: s.toolFailed}
+}
+
+// UpdateDownloader installs yt-dlp, or updates it to its latest release, as
+// soon as no batch runs, even with nothing queued.
+func (s *Service) UpdateDownloader() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.update, s.asked, s.toolFailed = true, true, false
+	s.changedLocked()
+	s.mu.Unlock()
+	signal(s.wake)
+	s.notify()
+}
+
 // Paused reports whether the queue is paused.
 func (s *Service) Paused() bool {
 	s.mu.Lock()
@@ -790,6 +828,7 @@ func (s *Service) worker() {
 	defer s.wg.Done()
 	s.guard("worker", s.tidy)
 	s.guard("worker", s.refreshStorage)
+	s.guard("worker", s.recordVersion)
 	rest := s.panicWait
 	for s.ctx.Err() == nil {
 		var ids []string
@@ -826,6 +865,29 @@ func (s *Service) tidy() {
 		}
 		return nil
 	})
+}
+
+// recordVersion reads yt-dlp's version for Settings, first asking an install
+// made before versions were kept what its version is.
+func (s *Service) recordVersion() {
+	if v, _ := s.inst.Version(); v == "" && s.inst.Program() != "" && s.take(s.ctx) == nil {
+		if err := s.inst.RecordVersion(s.ctx); err != nil {
+			s.log.Warn("read yt-dlp's version", "err", err)
+		}
+		s.give()
+	}
+	s.readVersion()
+}
+
+// readVersion keeps the installed yt-dlp's version, so Settings never reads
+// it from the card.
+func (s *Service) readVersion() {
+	v, at := s.inst.Version()
+	s.mu.Lock()
+	s.toolVersion, s.toolAt = v, at
+	s.changedLocked()
+	s.mu.Unlock()
+	s.notify()
 }
 
 // pass looks for work and does it, or waits for some. ids is the batch it runs.
@@ -880,40 +942,61 @@ func (s *Service) next() ([]string, uint64, time.Duration) {
 	s.mu.Lock()
 	ids := s.queuedLocked()
 	ver := s.queueVer
-	paused, update, searching := s.paused, s.update, s.searching > 0
+	paused, update, asked, searching := s.paused, s.update, s.asked, s.searching > 0
 	rest := time.Until(s.netRest)
 	s.mu.Unlock()
+	// Nothing to download, though Settings may have asked for yt-dlp.
+	idle := len(ids) == 0 || paused
 	switch {
-	case len(ids) == 0 || paused:
+	case idle && !asked:
 		s.setWaiting("")
 		return nil, 0, 0
 	case searching:
 		return nil, 0, 0 // the search wakes the queue when it is done
+	case s.opts.Online != nil && !s.opts.Online() && idle:
+		// Settings asked, and says it failed rather than wait for Wi-Fi.
+		s.mu.Lock()
+		s.asked, s.toolFailed = false, true
+		s.changedLocked()
+		s.mu.Unlock()
+		s.notify()
+		return nil, 0, 0
 	case s.opts.Online != nil && !s.opts.Online():
 		s.setWaiting(waitOffline)
 		return nil, 0, s.offlineWait
-	case rest > 0:
+	case rest > 0 && !idle:
 		s.setWaiting(waitNetwork)
 		return nil, 0, rest
 	}
-	if free, ok := s.readSpace(); ok && free < minFree {
+	if free, ok := s.readSpace(); ok && free < minFree && !idle {
 		s.setWaiting(waitSpace)
 		return nil, 0, s.stopWait
 	}
 	if s.inst.Program() == "" || update {
 		if err := s.installYtdlp(); err != nil {
 			s.log.Warn("install yt-dlp", "err", err)
-			if s.inst.Program() == "" {
+			switch {
+			case idle:
+				// Asked for from Settings, which says it failed: not tried again
+				// until asked again.
+				s.mu.Lock()
+				s.update = false
+				s.mu.Unlock()
+			case s.inst.Program() == "":
 				s.setWaiting(waitDownloader)
 				return nil, 0, s.stopWait
+			default:
+				// A failed update doesn't stop downloads with the yt-dlp there is.
+				s.mu.Lock()
+				s.update = false
+				s.mu.Unlock()
 			}
-			// A failed update doesn't stop downloads with the yt-dlp there is.
-			s.mu.Lock()
-			s.update = false
-			s.mu.Unlock()
 		}
 	}
 	s.setWaiting("")
+	if idle {
+		return nil, 0, 0
+	}
 	return ids[:min(len(ids), batchSize)], ver, 0
 }
 
@@ -960,11 +1043,15 @@ func (s *Service) installYtdlp() error {
 	var err error
 	returned := false
 	defer func() {
+		v, at := s.inst.Version()
 		s.mu.Lock()
 		s.installing = false
 		if returned && err == nil {
 			s.update = false
 		}
+		s.toolFailed = !returned || err != nil
+		s.asked = false // what Settings asked for is done, or has failed
+		s.toolVersion, s.toolAt = v, at
 		s.changedLocked()
 		s.mu.Unlock()
 		s.notify()
