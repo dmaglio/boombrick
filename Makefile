@@ -46,8 +46,9 @@ clean:
 DEVICE_IMAGE := boombrick-tg5040
 GO_VERSION   := $(shell $(GO) env GOVERSION 2>/dev/null | sed 's/^go//')
 PAK_DIR      := dist/pak/Tools/tg5040/Boombrick.pak
+CROSSMIX_DIR := dist/crossmix/Apps/Boombrick
 
-.PHONY: device-image device pak
+.PHONY: device-image device pak crossmix
 
 device-image:
 	docker build --build-arg GO_VERSION=$(GO_VERSION) -t $(DEVICE_IMAGE) build/docker
@@ -59,15 +60,33 @@ device: device-image
 		-v boombrick-gomod:/root/go/pkg/mod -v boombrick-gocache:/root/.cache/go-build \
 		$(DEVICE_IMAGE) go build -trimpath -buildvcs=false -ldflags '$(LDFLAGS)' -o dist/tg5040/boombrick ./cmd/boombrick
 
+# app fills the folder $(1) with what every firmware's app holds: the
+# program, its launch.sh from build/$(2), QuickJS, the libraries the device
+# lacks, and the licences.
+define app
+	rm -rf $(1)
+	mkdir -p $(1)/bin
+	cp dist/tg5040/boombrick build/$(2)/launch.sh LICENSE NOTICE assets/fonts/OFL-*.txt $(1)/
+	chmod +x $(1)/boombrick $(1)/launch.sh
+	cp dist/qjs/qjs-linux-aarch64 $(1)/bin/qjs
+	docker run --rm -v "$$(pwd)":/src $(DEVICE_IMAGE) sh -c \
+		'mkdir -p $(1)/lib && cp -L $$SYSROOT/usr/lib/libopus.so.0 $$SYSROOT/usr/lib/libogg.so.0 $(1)/lib/'
+endef
+
 pak: device dist/qjs/qjs-linux-aarch64
 	rm -rf dist/pak
-	mkdir -p $(PAK_DIR)
-	cp dist/tg5040/boombrick build/pak/launch.sh LICENSE NOTICE $(PAK_DIR)/
-	mkdir -p $(PAK_DIR)/bin
-	cp dist/qjs/qjs-linux-aarch64 $(PAK_DIR)/bin/qjs
-	cp assets/fonts/OFL-*.txt $(PAK_DIR)/
-	docker run --rm -v "$$(pwd)":/src $(DEVICE_IMAGE) sh -c \
-		'mkdir -p $(PAK_DIR)/lib && cp -L $$SYSROOT/usr/lib/libopus.so.0 $$SYSROOT/usr/lib/libogg.so.0 $(PAK_DIR)/lib/'
+	$(call app,$(PAK_DIR),pak)
 	rm -f dist/Boombrick.pak.zip
 	cd dist/pak && zip -qr ../Boombrick.pak.zip Tools
 	@echo "dist/Boombrick.pak.zip"
+
+# CrossMix lists the app in its Apps menu from config.json, with the icon
+# drawn from the logo.
+crossmix: device dist/qjs/qjs-linux-aarch64
+	rm -rf dist/crossmix
+	$(call app,$(CROSSMIX_DIR),crossmix)
+	cp build/crossmix/config.json $(CROSSMIX_DIR)/
+	$(GO) run ./scripts/appicon $(CROSSMIX_DIR)/icon.png
+	rm -f dist/Boombrick-CrossMix.zip
+	cd dist/crossmix && zip -qr ../Boombrick-CrossMix.zip Apps
+	@echo "dist/Boombrick-CrossMix.zip"
