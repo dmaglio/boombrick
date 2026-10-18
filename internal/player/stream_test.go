@@ -241,3 +241,58 @@ func TestPausedWhileOpening(t *testing.T) {
 	p.Toggle()
 	eventually(t, "a to play", func() bool { return p.State().Elapsed > 0 })
 }
+
+// A stream cued while it loads that then fails to open moves on to the next
+// track without playing it: the pause stays, and play starts that track.
+func TestCuedStreamThatFailsStaysCuedOnTheNext(t *testing.T) {
+	p, s, _, _ := streamPlayer(t, map[string]int64{"c": long}, long)
+	s.set("b", fmt.Errorf("restricted: %w", spotify.ErrUnavailable))
+	s.hold = make(chan struct{})
+	p.Play(append(spotifyTracks("b"), Track{Path: "c"}), 0)
+	p.Toggle()
+	if st := p.State(); st.Playing || !st.Loading || !st.Cued {
+		t.Fatalf("paused while opening: %+v", st)
+	}
+	close(s.hold)
+	eventually(t, "b to fail", func() bool { return p.State().Index == 1 })
+	time.Sleep(50 * time.Millisecond)
+	if st := p.State(); st.Playing || st.Loading || !st.Cued || st.Index != 1 {
+		t.Fatalf("after the failure: %+v, want it cued on the next track", st)
+	}
+	p.Toggle()
+	eventually(t, "c to play", func() bool { st := p.State(); return st.Playing && st.Index == 1 })
+}
+
+// A stream being opened from a restored place is still saved at that place.
+func TestSnapshotWhileAStreamLoadsKeepsItsFrame(t *testing.T) {
+	p, s, _, _ := streamPlayer(t, nil, long)
+	s.hold = make(chan struct{})
+	defer close(s.hold)
+	p.Restore(Snapshot{Queue: spotifyTracks("a"), Order: []int{0}, Frame: 4410})
+	p.Toggle()
+	if st := p.State(); !st.Loading {
+		t.Fatalf("not loading: %+v", st)
+	}
+	if got, _ := p.Snapshot(); got.Frame != 4410 {
+		t.Fatalf("frame %d while it loads, want 4410", got.Frame)
+	}
+}
+
+// The sleep timer's time comes while a stream opens: it lands paused rather
+// than playing on with the timer spent.
+func TestSleepWhileAStreamLoads(t *testing.T) {
+	p, s, a, _ := streamPlayer(t, nil, long)
+	s.hold = make(chan struct{})
+	p.Play(spotifyTracks("a"), 0)
+	p.SetSleep(Sleep15)
+	a.last(t).f()
+	if st := p.State(); st.Playing || !st.Loading || !st.Cued {
+		t.Fatalf("after the timer's time: %+v, want it loading and cued", st)
+	}
+	close(s.hold)
+	eventually(t, "a to open", func() bool { return !p.State().Loading })
+	time.Sleep(50 * time.Millisecond)
+	if st := p.State(); st.Playing || st.Elapsed != 0 {
+		t.Fatalf("after opening: playing %v at %v", st.Playing, st.Elapsed)
+	}
+}

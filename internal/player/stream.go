@@ -146,19 +146,32 @@ func (p *Player) refusedLocked(err error, frame int64) {
 		p.log.Warn("skipping stream", "id", p.queue[p.order[p.pos]].SpotifyID, "err", err)
 		p.tellLocked(Notice{Kind: kind})
 		p.failures++
+		// A stream cued while it loaded, paused by the listener or stopped on by
+		// the sleep timer, moves on but isn't played: the next track is cued in
+		// its place, and play starts it.
 		switch {
 		case p.failures >= len(p.order):
 			p.failures, p.cued = 0, true // nothing in the queue opens: stop here
 		case p.pos+1 < len(p.order):
 			p.pos++
-			p.startLocked()
+			p.moveOnLocked()
 		case p.repeat == RepeatAll:
 			p.pos = 0
-			p.startLocked()
+			p.moveOnLocked()
 		default:
 			p.cued = true // the queue's end: stop on its last track
 		}
 	}
+}
+
+// moveOnLocked plays the track at pos from its start after one that failed to
+// open, or, when playback is cued, leaves it cued there from its start.
+func (p *Player) moveOnLocked() {
+	if p.cued {
+		p.failures, p.startFrame = 0, 0
+		return
+	}
+	p.startLocked()
 }
 
 // primeStreamLocked opens the streamed track at pos to follow cur once cur

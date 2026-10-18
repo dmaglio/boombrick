@@ -64,6 +64,7 @@ type State struct {
 	Index, Count      int   // position in play order, from 0, and queue length
 	Playing           bool
 	Waiting           bool // the current track is still downloading; it plays when it lands
+	Cued              bool // the current track is stopped on: it plays only when asked
 	Loading           bool // the current track is a stream being opened
 	Stalled           bool // the current stream broke, and is being picked up again
 	Kbps              int  // the current stream's quality, 0 for a file
@@ -772,7 +773,7 @@ func (p *Player) State() State {
 	}
 	t := p.queue[p.order[p.pos]]
 	s.Queued, s.Track, s.Index = true, t, p.pos
-	s.Waiting, s.Loading = p.waiting, p.loading
+	s.Waiting, s.Loading, s.Cued = p.waiting, p.loading, p.cued
 	s.Format = strings.ToUpper(strings.TrimPrefix(filepath.Ext(t.Path), "."))
 	if p.loading {
 		s.Playing = !p.cued
@@ -860,7 +861,7 @@ func (p *Player) Snapshot() (Snapshot, bool) {
 			elapsed, total = float64(st.Frame), float64(st.Frames)
 		}
 	}
-	if (p.cur != nil || p.cued || p.waiting) && s.Frame < p.startFrame {
+	if (p.cur != nil || p.cued || p.waiting || p.loading) && s.Frame < p.startFrame {
 		// Started, cued or sought, and the engine hasn't got there yet.
 		s.Frame = p.startFrame
 		if p.curFrames > 0 && !p.waiting {
@@ -926,16 +927,16 @@ func (p *Player) albumRunLocked() bool {
 }
 
 // Restore loads a saved snapshot paused at its position, unless something has
-// been queued since launch.
-func (p *Player) Restore(s Snapshot) {
+// been queued since launch. It reports whether it took the snapshot.
+func (p *Player) Restore(s Snapshot) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(p.queue) > 0 || len(s.Queue) == 0 || len(s.Order) != len(s.Queue) || s.Pos < 0 || s.Pos >= len(s.Order) {
-		return
+		return false
 	}
 	for _, i := range s.Order {
 		if i < 0 || i >= len(s.Queue) {
-			return
+			return false
 		}
 	}
 	p.queue, p.order, p.pos = slices.Clone(s.Queue), slices.Clone(s.Order), s.Pos
@@ -946,12 +947,13 @@ func (p *Player) Restore(s Snapshot) {
 	p.cued, p.startFrame, p.playedOut = true, max(s.Frame, 0), false
 	if t.Pending() {
 		p.waiting = true // cued when it lands
-		return
+		return true
 	}
 	if t.Streamed() {
-		return // opened when played: no key is asked for before then
+		return true // opened when played: no key is asked for before then
 	}
 	p.cueLocked()
+	return true
 }
 
 // cueLocked opens the current track paused at startFrame, as a restored

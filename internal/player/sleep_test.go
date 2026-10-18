@@ -237,3 +237,79 @@ func TestTurningSleepOffPrimesTheNextTrack(t *testing.T) {
 	p.SetSleep(SleepOff)
 	eventually(t, "b to be primed", func() bool { return slices.Contains(f.log(), "b") })
 }
+
+// A sleep timer carried over from another process stops playback when it
+// would have there.
+func TestResumeSleepKeepsItsTime(t *testing.T) {
+	p, _, a := sleepyPlayer(t, map[string]int64{"a": long})
+	p.Play(queue("a"), 0)
+	at := time.Now().Add(20 * time.Minute)
+	p.ResumeSleep(Sleep{Mode: Sleep30, At: at})
+	if s := p.Sleep(); s.Mode != Sleep30 || s.At.Sub(at).Abs() > time.Second {
+		t.Fatalf("sleep = %+v, want 30 min ending at %v", s, at)
+	}
+	al := a.last(t)
+	if want := time.Until(at) - sleepFade; al.d < want || al.d > want+time.Second {
+		t.Fatalf("timer set for %v, want about %v", al.d, want)
+	}
+	al.f()
+	eventually(t, "the fade to pause playback", func() bool { return !p.State().Playing })
+}
+
+// The carried end is kept as the clock's now plus the time left, so a wall
+// clock step afterwards doesn't move it.
+func TestResumeSleepStoresNowPlusTimeLeft(t *testing.T) {
+	p, _, a := sleepyPlayer(t, map[string]int64{"a": long})
+	p.Play(queue("a"), 0)
+	now := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	p.now = func() time.Time { return now }
+	left := 20 * time.Minute
+	p.ResumeSleep(Sleep{Mode: Sleep30, At: now.Add(left)})
+	if s := p.Sleep(); s.Mode != Sleep30 || !s.At.Equal(now.Add(left)) {
+		t.Fatalf("sleep = %+v, want it to end at %v", s, now.Add(left))
+	}
+	if d := a.last(t).d; d != left-sleepFade {
+		t.Fatalf("timer set for %v, want %v", d, left-sleepFade)
+	}
+}
+
+// A time already past fades at once; the end of an album carries over as it
+// was set.
+func TestResumeSleepPastAndAtTheEnd(t *testing.T) {
+	p, _, a := sleepyPlayer(t, map[string]int64{"a": long})
+	p.Play(queue("a"), 0)
+	p.ResumeSleep(Sleep{Mode: Sleep15, At: time.Now().Add(-time.Minute)})
+	if d := a.last(t).d; d != 0 {
+		t.Fatalf("a time already past set a timer for %v, want 0", d)
+	}
+	p.ResumeSleep(Sleep{Mode: SleepAlbum})
+	if s := p.Sleep(); s.Mode != SleepAlbum || !s.At.IsZero() {
+		t.Fatalf("sleep = %+v, want the end of the album", s)
+	}
+}
+
+// FadeOut fades the music out and pauses it, keeping the queue; with nothing
+// playing it does nothing.
+func TestFadeOutPauses(t *testing.T) {
+	p, _, _ := sleepyPlayer(t, map[string]int64{"a": long})
+	p.FadeOut(10 * time.Millisecond) // nothing queued
+	p.Play(queue("a"), 0)
+	eventually(t, "playing", func() bool { return p.State().Playing })
+	p.FadeOut(10 * time.Millisecond)
+	eventually(t, "the fade to pause playback", func() bool { return !p.State().Playing })
+	if _, ok := p.Snapshot(); !ok {
+		t.Fatal("the queue went with the fade")
+	}
+}
+
+// The end-of-track timer stops before a song still downloading: the song waits
+// and is stopped on.
+func TestSleepAtTheEndOfTheTrackBeforeAPendingSong(t *testing.T) {
+	p, _, _ := sleepyPlayer(t, map[string]int64{"a": short})
+	p.SetSleep(SleepTrack)
+	p.Play([]Track{{Path: "a"}, {VideoID: "v"}}, 0)
+	eventually(t, "the stop before v", func() bool {
+		s := p.State()
+		return s.Index == 1 && s.Waiting && s.Cued
+	})
+}

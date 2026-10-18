@@ -72,6 +72,40 @@ func (p *Player) Sleep() Sleep {
 	return p.sleep
 }
 
+// ResumeSleep sets the sleep timer as another of Boombrick's processes had
+// it: a timed one stops playback at s.At, so its time left carries over, and
+// the end of a track or an album is set as SetSleep sets it. Call it once
+// playback has started: a time already within the fade fades at once, and
+// with nothing playing there is nothing to stop.
+func (p *Player) ResumeSleep(s Sleep) {
+	if !s.Mode.Timed() {
+		p.SetSleep(s.Mode)
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stopSleepLocked()
+	// The end is kept as now plus the time left, which carries a monotonic
+	// reading that a clock step can't skew.
+	left := s.At.Sub(p.now())
+	p.sleep = Sleep{Mode: s.Mode, At: p.now().Add(left)}
+	gen := p.sleepGen
+	p.sleepTimer = p.after(max(left-sleepFade, 0), func() { p.sleepFire(gen) })
+}
+
+// FadeOut fades the music out over d and pauses it, as the background player
+// stops when Boombrick takes the music back. It does nothing unless music
+// plays.
+func (p *Player) FadeOut(d time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cur == nil || !p.playingLocked() {
+		return
+	}
+	p.engine.FadeOut(d)
+	p.fadeEnds = p.now().Add(d)
+}
+
 // stopSleepLocked turns the timer off and ends a fade it began, at full
 // volume again.
 func (p *Player) stopSleepLocked() {
@@ -86,7 +120,8 @@ func (p *Player) stopSleepLocked() {
 
 // sleepFire begins the fade of a timed sleep, sleepFade before its time. The
 // timer is off from then; the engine pauses playback when the fade is done. A
-// track playback waits on, for its download, lands paused.
+// track playback waits on, for its download or its stream to open, lands
+// paused.
 func (p *Player) sleepFire(gen uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -94,7 +129,7 @@ func (p *Player) sleepFire(gen uint64) {
 		return
 	}
 	p.sleepTimer, p.sleep = nil, Sleep{}
-	if p.waiting {
+	if p.waiting || p.loading {
 		p.cued = true
 		return
 	}

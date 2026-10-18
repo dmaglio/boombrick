@@ -1170,3 +1170,32 @@ func TestAPlayedOutDropReportsAFrameOfTheRightTrack(t *testing.T) {
 		t.Fatalf("snapshot %+v, %v", snap, ok)
 	}
 }
+
+// A restored pending song is stopped on, waiting for its download; asked to
+// play, it waits without being stopped on.
+func TestAWaitingTrackIsCuedUntilPlayed(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"/m/v1.opus": long})
+	p.Restore(Snapshot{Queue: []Track{{VideoID: "v1"}}, Order: []int{0}})
+	if s := p.State(); !s.Waiting || !s.Cued {
+		t.Fatalf("restored: waiting %v, cued %v", s.Waiting, s.Cued)
+	}
+	p.Toggle()
+	if s := p.State(); !s.Waiting || s.Cued {
+		t.Fatalf("played: waiting %v, cued %v", s.Waiting, s.Cued)
+	}
+}
+
+// Restore says whether it took the snapshot: not when something is queued.
+func TestRestoreReportsWhetherItTookTheSnapshot(t *testing.T) {
+	snap := Snapshot{Queue: queue("a"), Order: []int{0}}
+	p, _ := newPlayer(t, map[string]int64{"a": long})
+	if !p.Restore(snap) {
+		t.Fatal("a fresh player refused the snapshot")
+	}
+	if p.Restore(snap) {
+		t.Fatal("a player with a queue took a snapshot")
+	}
+	if q, _ := newPlayer(t, map[string]int64{"a": long}); q.Restore(Snapshot{}) {
+		t.Fatal("an empty snapshot was taken")
+	}
+}
