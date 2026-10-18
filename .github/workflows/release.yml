@@ -1,6 +1,8 @@
-# Pushing a tag like v0.5.0 builds the pak with that version and publishes it,
-# with its checksum, as a GitHub release. Boombrick's Settings offers the
-# latest release as an update.
+# Pushing a tag like v0.5.0 builds the app for NextUI and for CrossMix with
+# that version and publishes both, with their checksums, as a GitHub
+# release. Boombrick's Settings offers the latest release as an update. A
+# tag with a suffix, like v0.5.0-beta.1, is a beta: a pre-release, which
+# GitHub's latest release, and so Settings, leaves out.
 name: Release
 
 on:
@@ -22,13 +24,13 @@ jobs:
           cache: false
       # The toolchain's container writes as root; folders made first stay the
       # runner's, so the steps after it can write beside what it built.
-      - name: Build the pak
+      - name: Build
         run: |
           mkdir -p dist/tg5040 dist/qjs
-          make pak VERSION="${GITHUB_REF_NAME#v}"
+          make pak crossmix VERSION="${GITHUB_REF_NAME#v}"
       - name: Checksums
         working-directory: dist
-        run: sha256sum Boombrick.pak.zip > SHA256SUMS
+        run: sha256sum Boombrick.pak.zip Boombrick-CrossMix.zip > SHA256SUMS
       # The notes are the tag's section of CHANGELOG.md, from its "## [v…]"
       # heading to the next; GitHub's own when there is none.
       - name: Release notes
@@ -41,7 +43,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          notes="--notes-file dist/NOTES.md"
-          grep -q '[^[:space:]]' dist/NOTES.md || notes="--generate-notes"
-          gh release create "$GITHUB_REF_NAME" dist/Boombrick.pak.zip dist/SHA256SUMS \
-            --title "Boombrick ${GITHUB_REF_NAME#v}" $notes
+          flags="--notes-file dist/NOTES.md"
+          grep -q '[^[:space:]]' dist/NOTES.md || flags="--generate-notes"
+          case "$GITHUB_REF_NAME" in *-*) flags="$flags --prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/Boombrick.pak.zip dist/Boombrick-CrossMix.zip dist/SHA256SUMS \
+            --title "Boombrick ${GITHUB_REF_NAME#v}" $flags
