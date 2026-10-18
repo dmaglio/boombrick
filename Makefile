@@ -52,10 +52,12 @@ PAK_DIR      := dist/pak/Tools/tg5040/Boombrick.pak
 device-image:
 	docker build --build-arg GO_VERSION=$(GO_VERSION) -t $(DEVICE_IMAGE) build/docker
 
+# Inside the container the checkout can belong to another user, which git
+# refuses to read; the version comes from VERSION, not from git.
 device: device-image
 	docker run --rm -v "$$(pwd)":/src \
 		-v boombrick-gomod:/root/go/pkg/mod -v boombrick-gocache:/root/.cache/go-build \
-		$(DEVICE_IMAGE) go build -trimpath -ldflags '$(LDFLAGS)' -o dist/tg5040/boombrick ./cmd/boombrick
+		$(DEVICE_IMAGE) go build -trimpath -buildvcs=false -ldflags '$(LDFLAGS)' -o dist/tg5040/boombrick ./cmd/boombrick
 
 pak: device dist/qjs/qjs-linux-aarch64
 	rm -rf dist/pak
