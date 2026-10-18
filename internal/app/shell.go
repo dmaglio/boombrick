@@ -10,10 +10,12 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
-// Toast timing: shown for 2.5 s, fading in and out.
+// Toast timing: shown for 2.5 s, fading in and out. The volume pill, a kind of
+// toast, stays 1.5 s after the last change.
 const (
 	toastFor  = 2500 * time.Millisecond
 	toastFade = 150 * time.Millisecond
+	volumeFor = 1500 * time.Millisecond
 )
 
 // modal is a dialog over everything else, the quick menu, which takes all
@@ -48,7 +50,9 @@ type shell struct {
 	alert    modal      // a dialog opened by news, over everything, the menu too; nil for none
 	menuDown bool       // Menu is down, and opens the menu when let go unless another button comes first
 	toast    string
-	toastAt  time.Time
+	volume   int       // the level the volume pill shows
+	volumeOn bool      // the toast is the volume pill, and toast is empty
+	toastAt  time.Time // when the toast or the pill began
 }
 
 func newShell(roots ...screens.Screen) *shell {
@@ -136,7 +140,16 @@ func (s *shell) showToast(msg string, now time.Time) {
 	if s.toastAlpha(now) >= 1 {
 		now = now.Add(-toastFade)
 	}
-	s.toast, s.toastAt = msg, now
+	s.toast, s.volumeOn, s.toastAt = msg, false, now
+}
+
+// showVolume replaces any toast with the volume pill at level, which stays for
+// volumeFor after the last change; one already fully shown stays at full alpha.
+func (s *shell) showVolume(level int, now time.Time) {
+	if s.toastAlpha(now) >= 1 {
+		now = now.Add(-toastFade)
+	}
+	s.toast, s.volume, s.volumeOn, s.toastAt = "", level, true, now
 }
 
 // openOverlay opens overlay i. Over the tab it slides in; in place of another
@@ -253,7 +266,11 @@ func (s *shell) draw(u *ui.Context) {
 		s.alert.Draw(u)
 	}
 	if a := s.toastAlpha(now); a > 0 {
-		widgets.Toast(u, s.toast, a)
+		if s.volumeOn {
+			widgets.VolumePill(u, s.volume, a)
+		} else {
+			widgets.Toast(u, s.toast, a)
+		}
 	}
 }
 
@@ -286,12 +303,23 @@ func slide(u *ui.Context, scr screens.Screen, t float32) {
 	u.Pop()
 }
 
+// toastLen is how long the toast or the pill is shown; 0 for neither.
+func (s *shell) toastLen() time.Duration {
+	switch {
+	case s.volumeOn:
+		return volumeFor
+	case s.toast != "":
+		return toastFor
+	}
+	return 0
+}
+
 func (s *shell) toastAlpha(now time.Time) float32 {
-	d := now.Sub(s.toastAt)
-	if s.toast == "" || d < 0 || d >= toastFor {
+	d, n := now.Sub(s.toastAt), s.toastLen()
+	if n == 0 || d < 0 || d >= n {
 		return 0
 	}
-	return float32(min(d, toastFor-d, toastFade)) / float32(toastFade)
+	return float32(min(d, n-d, toastFade)) / float32(toastFade)
 }
 
 // animating reports whether the next frame differs without input.
@@ -299,7 +327,7 @@ func (s *shell) animating(now time.Time) bool {
 	if !s.trans.Done(now) || !s.shown.Done(now) {
 		return true
 	}
-	if d := now.Sub(s.toastAt); s.toast != "" && d >= 0 && (d < toastFade || d >= toastFor-toastFade && d < toastFor) {
+	if d, n := now.Sub(s.toastAt), s.toastLen(); n > 0 && d >= 0 && (d < toastFade || d >= n-toastFade && d < n) {
 		return true
 	}
 	if s.menu != nil && s.menu.Visible(now) && s.menu.Animating(now) {
@@ -333,8 +361,9 @@ func dueOf(scr screens.Screen, t time.Time) (time.Time, bool) {
 // wake is when the loop must next draw though nothing animates now: a toast
 // starting to fade out.
 func (s *shell) wake(now time.Time) (time.Time, bool) {
-	out := s.toastAt.Add(toastFor - toastFade)
-	if s.toast != "" && now.Before(out) {
+	n := s.toastLen()
+	out := s.toastAt.Add(n - toastFade)
+	if n > 0 && now.Before(out) {
 		return out, true
 	}
 	return time.Time{}, false

@@ -401,3 +401,58 @@ func TestOnlyWhatShowsDownloadsRedrawsForThem(t *testing.T) {
 		t.Fatal("the Downloads tab redraws for downloads under Now Playing")
 	}
 }
+
+func TestVolumePillIsShownThenGone(t *testing.T) {
+	s, _, _ := testShell()
+	s.showVolume(14, t0)
+	if !s.volumeOn || s.volume != 14 || !s.animating(t0) {
+		t.Fatal("the pill should fade in")
+	}
+	mid := t0.Add(volumeFor / 2)
+	if s.toastAlpha(mid) != 1 || s.animating(mid) {
+		t.Fatal("the pill at rest is fully shown and needs no frames")
+	}
+	if w, ok := s.wake(mid); !ok || !w.Equal(t0.Add(volumeFor-toastFade)) {
+		t.Fatalf("wake = %v, %v: the loop must wake to fade the pill out", w, ok)
+	}
+	if !s.animating(t0.Add(volumeFor - toastFade/2)) {
+		t.Fatal("the pill fades out")
+	}
+	if s.toastAlpha(t0.Add(volumeFor)) != 0 || s.animating(t0.Add(volumeFor)) {
+		t.Fatal("the pill is gone after 1.5 s and the fade")
+	}
+	if _, ok := s.wake(t0.Add(volumeFor)); ok {
+		t.Fatal("a finished pill needs no wake-up")
+	}
+	draw(t, s, mid) // the pill draws, not a toast
+}
+
+func TestVolumePillRestartsOnAChange(t *testing.T) {
+	s, _, _ := testShell()
+	s.showVolume(14, t0)
+	now := t0.Add(time.Second)
+	s.showVolume(15, now)
+	if s.volume != 15 || s.toastAlpha(now) != 1 {
+		t.Fatalf("level %d at alpha %v: a change should not fade the pill in again", s.volume, s.toastAlpha(now))
+	}
+	if s.toastAlpha(t0.Add(volumeFor)) == 0 || s.toastAlpha(now.Add(volumeFor)) != 0 {
+		t.Fatal("the 1.5 s should restart at the change")
+	}
+}
+
+func TestToastAndVolumePillReplaceEachOther(t *testing.T) {
+	s, _, _ := testShell()
+	s.showVolume(3, t0)
+	now := t0.Add(500 * time.Millisecond)
+	s.showToast("Added to queue", now)
+	if s.volumeOn || s.toast != "Added to queue" || s.toastAlpha(now) != 1 {
+		t.Fatalf("a toast should replace the pill: on %v, toast %q", s.volumeOn, s.toast)
+	}
+	if s.toastAlpha(now.Add(volumeFor)) == 0 || s.toastAlpha(now.Add(toastFor)) != 0 {
+		t.Fatal("the toast keeps its own length")
+	}
+	s.showVolume(4, now)
+	if !s.volumeOn || s.toast != "" || s.toastAlpha(now) != 1 || s.toastAlpha(now.Add(volumeFor)) != 0 {
+		t.Fatal("the pill should replace the toast, and last 1.5 s")
+	}
+}

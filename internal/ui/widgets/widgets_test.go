@@ -163,6 +163,9 @@ func TestEmptyState(t *testing.T) {
 // more than drawing its mark and lines does on the test canvas, which
 // allocates for each.
 func TestEmptyStateWrapsOnce(t *testing.T) {
+	if raceEnabled {
+		t.Skip("allocations aren't counted under the race detector")
+	}
 	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
 	const title, body, detail = "Your library is empty",
 		"Copy music to the Music folder on the SD card, or find something on YouTube Music.", "/mnt/SDCARD/Music"
@@ -521,4 +524,12 @@ func TestDialog(t *testing.T) {
 	if len(lines) < 2 || &d.body.lines[0] != &lines[0] {
 		t.Fatal("the body was wrapped again")
 	}
+}
+
+// TestVolumePill draws the volume pill at 14 of 20 over a plain ground.
+func TestVolumePill(t *testing.T) {
+	u, off := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	DrawBackground(u, StateGround)
+	VolumePill(u, 14, 1)
+	uitest.Golden(t, "volume-pill", off.Image())
 }
