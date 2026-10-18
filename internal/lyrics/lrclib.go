@@ -14,11 +14,26 @@ import (
 	"github.com/ujjwal313/boombrick/internal/netx"
 )
 
-// Track is what finding a track's lyrics needs.
+// Track is what finding a track's lyrics needs: a file, or a Spotify song
+// played as a stream, which has no path.
 type Track struct {
 	Path                 string
+	SpotifyID            string // names a streamed song, which has no Path
 	Title, Artist, Album string
 	Duration             time.Duration // 0 when unknown
+}
+
+// Key names t for the service's answers and the cache: its file's path, or
+// "spotify:" and the song's ID when it has none. It is empty for a track that
+// is neither, which has no lyrics to look for.
+func (t Track) Key() string {
+	switch {
+	case t.Path != "":
+		return t.Path
+	case t.SpotifyID != "":
+		return "spotify:" + t.SpotifyID
+	}
+	return ""
 }
 
 // Result is what LRCLIB has for a track.

@@ -335,3 +335,75 @@ func TestPrefetch(t *testing.T) {
 		t.Fatalf("a track without a path: %v", st)
 	}
 }
+
+func TestTrackKey(t *testing.T) {
+	for _, c := range []struct {
+		t    Track
+		want string
+	}{
+		{Track{Path: "/m/1.flac", SpotifyID: "abc"}, "/m/1.flac"},
+		{Track{SpotifyID: "abc"}, "spotify:abc"},
+		{Track{Title: "Rust"}, ""},
+	} {
+		if got := c.t.Key(); got != c.want {
+			t.Errorf("Key of %+v = %q, want %q", c.t, got, c.want)
+		}
+	}
+}
+
+func streamed() Track {
+	return Track{SpotifyID: "abc", Title: "Rust", Artist: "Odalys", Album: "Copper Season", Duration: 222 * time.Second}
+}
+
+func TestStreamedTrackIsLookedUpAndCached(t *testing.T) {
+	db := openDB(t)
+	f := &fakeFetch{r: Result{Synced: twoLines}}
+	s := service(t, db, f, true)
+	if l, st := answer(t, s, streamed()); st != Found || !l.Synced {
+		t.Fatalf("streamed track: %v %+v", st, l)
+	}
+	if f.count() != 1 {
+		t.Fatalf("fetches %d", f.count())
+	}
+	s2 := service(t, db, f, true)
+	if _, st := answer(t, s2, streamed()); st != Found {
+		t.Fatalf("from the cache: %v", st)
+	}
+	if f.count() != 1 {
+		t.Fatalf("asked again despite the cache: %d fetches", f.count())
+	}
+}
+
+func TestStreamedTrackReadsItsDownloadedCopy(t *testing.T) {
+	f := &fakeFetch{r: Result{Synced: "[00:01.00]Online"}}
+	tr := song(t, t.TempDir(), twoLines)
+	var calls atomic.Int32
+	s := New(Options{DB: openDB(t), Fetch: f, Online: func() bool { return true },
+		FileOf: func(id string) (string, bool) {
+			calls.Add(1)
+			return tr.Path, id == "abc"
+		}})
+	t.Cleanup(s.Close)
+	l, st := answer(t, s, streamed())
+	if st != Found || len(l.Lines) != 2 || l.Lines[0].Text != "One" {
+		t.Fatalf("copy's lyrics: %v %+v", st, l)
+	}
+	if f.count() != 0 {
+		t.Fatalf("fetched despite a copy with lyrics: %d", f.count())
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("FileOf called %d times, want 1", n)
+	}
+}
+
+func TestStreamedTrackWithoutFileOrIDIsNone(t *testing.T) {
+	f := &fakeFetch{r: Result{Synced: twoLines}}
+	s := service(t, openDB(t), f, true)
+	if _, st := s.Lyrics(Track{Title: "Rust", Artist: "Odalys"}); st != None {
+		t.Fatalf("no path or ID: %v", st)
+	}
+	s.Prefetch(Track{Title: "Rust", Artist: "Odalys"})
+	if f.count() != 0 {
+		t.Fatalf("fetched for a track with no key: %d", f.count())
+	}
+}

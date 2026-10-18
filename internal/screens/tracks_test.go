@@ -46,6 +46,10 @@ func TestLyricsTrack(t *testing.T) {
 	if got != (lyrics.Track{Path: "/m/1.flac", Title: "Rust", Artist: "Odalys", Album: "Copper Season", Duration: 222 * time.Second}) {
 		t.Fatalf("%+v", got)
 	}
+	got = LyricsTrack(player.Track{SpotifyID: "abc", Title: "Rust", Artist: "Odalys"})
+	if got != (lyrics.Track{SpotifyID: "abc", Title: "Rust", Artist: "Odalys"}) || got.Key() != "spotify:abc" {
+		t.Fatalf("streamed: %+v key %q", got, got.Key())
+	}
 }
 
 func TestPlayingLyricsTrack(t *testing.T) {

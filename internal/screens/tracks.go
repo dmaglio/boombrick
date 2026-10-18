@@ -64,7 +64,7 @@ func Count(n int) string {
 
 // LyricsTrack is what finding a queued track's lyrics needs.
 func LyricsTrack(t player.Track) lyrics.Track {
-	return lyrics.Track{Path: t.Path, Title: t.Title, Artist: t.Artist, Album: t.Album, Duration: t.Duration}
+	return lyrics.Track{Path: t.Path, SpotifyID: t.SpotifyID, Title: t.Title, Artist: t.Artist, Album: t.Album, Duration: t.Duration}
 }
 
 // PlayingLyricsTrack is LyricsTrack for the track st is on, with the length

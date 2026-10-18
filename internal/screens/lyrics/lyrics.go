@@ -85,7 +85,7 @@ type Screen struct {
 	src  Source
 	back func() // back to Now Playing
 
-	path   string // the track whose lyrics are shown
+	key    string // the track whose lyrics are shown, by its lyrics key
 	ly     lrc.Lyrics
 	state  lrc.State
 	line   int           // the current line when last drawn, -1 before the first
@@ -158,8 +158,8 @@ func fillWidth(rows []row, k int, sung float64) float32 {
 
 // refresh picks up the playing track's lyrics, starting over for a new track.
 func (s *Screen) refresh(st player.State) {
-	if st.Track.Path != s.path {
-		s.path, s.line, s.plain = st.Track.Path, -1, nil
+	if key := screens.LyricsTrack(st.Track).Key(); key != s.key {
+		s.key, s.line, s.plain = key, -1, nil
 		clear(s.rows)
 		s.texts.Clear()
 		s.slide.Set(0)

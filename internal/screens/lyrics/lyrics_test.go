@@ -351,3 +351,25 @@ func TestPlainLyricsScroll(t *testing.T) {
 		t.Fatalf("Down scrolled to %v", s.scroll.Target())
 	}
 }
+
+func TestNextSpotifySongResetsTheScreen(t *testing.T) {
+	src := &fakeSource{ly: lrc.Parse(song), state: lrc.Found}
+	p := playing(19 * time.Second)
+	p.st.Track = player.Track{SpotifyID: "one", Title: "Low Tide Radio", Artist: "Marisol Vega", Duration: 222 * time.Second}
+	s := New(p, src, func() {})
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	u.BeginFrame(t0)
+	s.Draw(u)
+	if len(s.rows) == 0 || s.line < 0 {
+		t.Fatalf("first song drew nothing: rows %d line %d", len(s.rows), s.line)
+	}
+	p.st.Track.SpotifyID = "two"
+	src.ly, src.state = lrc.Lyrics{}, lrc.Looking
+	s.refresh(p.st)
+	if len(s.rows) != 0 || s.line != -1 {
+		t.Fatalf("the next song kept the last one's screen: rows %d line %d", len(s.rows), s.line)
+	}
+	if s.key != "spotify:two" {
+		t.Fatalf("key %q", s.key)
+	}
+}
