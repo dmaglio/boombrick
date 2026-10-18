@@ -1,8 +1,66 @@
 # Boombrick
 
-A music player for the TrimUI Brick running NextUI. It plays your own files, streams Spotify, downloads music from YouTube Music for offline listening, and shows synced lyrics in colours taken from the album art.
+A music player for the [TrimUI Brick](https://trimui.com) running [NextUI](https://github.com/LoveRetro/NextUI). It plays the music on your SD card, finds covers and synced lyrics for it, and downloads songs and albums from YouTube Music for offline listening. Its colours come from the album that's playing.
 
-Early development. Playing your own files, synced lyrics, YouTube Music search and downloads, and Settings work on desktop and on the Brick; Spotify and playlist import are still to come.
+Spotify streaming and playlist import are planned; see [CHANGELOG.md](CHANGELOG.md) for what each release adds.
+
+## Features
+
+- **Your music:** MP3, FLAC, Opus and M4A (AAC), gapless, with ReplayGain levelling. Browse by album, artist or song; the queue has shuffle and repeat and is kept between launches.
+- **Covers** from the files, folder pictures or the Cover Art Archive.
+- **Synced lyrics** from the files, `.lrc` files or LRCLIB, with the line being sung highlighted.
+- **YouTube Music:** search, browse albums and artists, and download songs as tagged Opus files with covers and lyrics. A song that is still downloading plays as soon as it lands.
+- **Sleep timer:** 15 to 60 minutes, or the end of the track or album, with a fade.
+- **Screen off** with Power, with the music still playing and the buttons for skipping and pausing still working.
+- **Updates** for Boombrick and its downloader, from Settings.
+
+## Installing
+
+You need a TrimUI Brick with NextUI. Wi-Fi is used for YouTube Music, covers, lyrics and updates; music on the card plays without it.
+
+1. Download `Boombrick.pak.zip` from the [latest release](https://github.com/ujjwal313/boombrick/releases/latest).
+2. Unzip it at the root of the SD card. It goes to `Tools/tg5040/Boombrick.pak`.
+3. Put your music in the card's `Music` folder, in any layout; `Artist/Album/01 Title.flac` works best when files have no tags.
+4. Start Boombrick from Tools. The library is scanned on the first launch, and again on every launch after that.
+
+### Updating
+
+Open Settings from the quick menu (Menu). When a newer release is out, the Boombrick card offers **Update Boombrick**. The update downloads, is checked, and is installed the next time Boombrick starts; choose **Quit now** and open it again.
+
+The Downloader card updates yt-dlp, which YouTube Music downloads use, the same way.
+
+## Controls
+
+| Button | Action |
+|---|---|
+| D-pad | Move |
+| A | Play or open |
+| B | Back |
+| X | Download (YouTube Music) |
+| Y | Add to the queue; on Now Playing, lyrics |
+| L1, R1 | Switch tabs; on Now Playing, previous and next track |
+| L2, R2 | Filters in the Library and YouTube Music |
+| Start | Now Playing |
+| Select | Queue |
+| Menu | Quick menu: sleep timer, screen off, Settings, quit |
+| Power | Screen off and on; hold for a second to power off |
+
+With the screen off, L1 and R1 skip back and on, and A plays or pauses. Each screen shows its buttons along the bottom.
+
+## Files
+
+On the SD card:
+
+| What | Where |
+|---|---|
+| Your music | `Music/` |
+| Downloads | `Music/Boombrick/<Artist>/<Album>/` |
+| Library, covers, lyrics, downloader | `.userdata/tg5040/Boombrick/` |
+| Log | `.userdata/tg5040/logs/Boombrick.txt` |
+
+Settings → Storage shows how much room the caches take and clears them. Your music and downloads are never touched.
+
+An empty file named `perf` in `Tools/tg5040/Boombrick.pak/` turns on perf mode, which logs launch times and, every 10 seconds, memory, CPU and frame times.
 
 ## Building
 
@@ -14,21 +72,13 @@ make test
 make run                    # desktop window at 1024x768
 ```
 
-Device build (needs Docker):
+The device build needs Docker:
 
 ```
-make pak                    # dist/Boombrick.pak.zip
+make pak VERSION=0.1.1      # dist/Boombrick.pak.zip
 ```
 
-Unzip it at the root of the SD card and start Boombrick from Tools. Releases carry the same zip.
-
-An empty file named `perf` in the pak's folder (`BOOMBRICK_PERF=1` on a desktop) turns on perf mode, which logs launch times and, every 10 s, memory, CPU and frame times to `Boombrick.txt`.
-
-## Releases
-
-Pushing a tag like `v0.5.0` builds the pak with that version and publishes it, with its `SHA256SUMS`, as a GitHub release. Settings on the Brick offers the latest release as an update; it is installed the next time Boombrick starts.
-
-## Desktop controls
+On the desktop the keyboard stands in for the Brick's buttons:
 
 | Brick | Keyboard |
 |---|---|
@@ -38,10 +88,14 @@ Pushing a tag like `v0.5.0` builds the pak with that version and publishes it, w
 | L2, R2 | 1, 3 |
 | Start, Select | Return, Tab |
 | Menu | Escape |
-| Power | P |
+| Power | P (holding it quits) |
 | Volume down, up | -, = |
 
-Menu opens the quick menu, which has Quit. P turns the screen off and on; holding it for a second quits, as holding Power powers the Brick off. With the screen off, Q and E (L1, R1) skip back and on, and K (A) plays or pauses.
+`BOOMBRICK_PERF=1 make run` turns on perf mode.
+
+### Releasing
+
+Add a section for the version to [CHANGELOG.md](CHANGELOG.md), then push a tag such as `v0.1.2`. The Release workflow builds the pak with that version and publishes it, with its `SHA256SUMS` and the changelog section as notes. Bricks running an older version are offered it in Settings.
 
 ## Licence
 
