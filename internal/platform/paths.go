@@ -60,7 +60,7 @@ func Detect(dir string) Profile {
 		if dir == "" {
 			dir = "/mnt/SDCARD/Apps/Boombrick"
 		}
-		return Profile{Firmware: CrossMix, tmp: "/tmp",
+		return Profile{Firmware: CrossMix, tmp: tmpDir(),
 			Paths: Paths{
 				Data:     filepath.Join(dir, "data"),
 				Logs:     filepath.Join(dir, "logs"),
@@ -70,7 +70,7 @@ func Detect(dir string) Profile {
 			ReleaseAsset: "Boombrick-CrossMix.zip", ReleaseDir: "Apps/Boombrick/"}
 	}
 	if ud := os.Getenv("USERDATA_PATH"); ud != "" {
-		return Profile{Firmware: NextUI, tmp: "/tmp",
+		return Profile{Firmware: NextUI, tmp: tmpDir(),
 			Paths: Paths{
 				Data:     filepath.Join(ud, "Boombrick"),
 				Logs:     envOr("LOGS_PATH", filepath.Join(ud, "logs")),
@@ -80,7 +80,7 @@ func Detect(dir string) Profile {
 			ReleaseAsset: "Boombrick.pak.zip", ReleaseDir: "Tools/tg5040/Boombrick.pak/"}
 	}
 	base := envOr("BOOMBRICK_DATA", filepath.Join("dist", "desktop", "data"))
-	return Profile{Firmware: Desktop, tmp: "/tmp", Paths: Paths{Data: base, Logs: base, Music: filepath.Join(base, "Music")}}
+	return Profile{Firmware: Desktop, tmp: tmpDir(), Paths: Paths{Data: base, Logs: base, Music: filepath.Join(base, "Music")}}
 }
 
 func envOr(key, def string) string {
@@ -88,4 +88,21 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// tmpDir is where the power-off flags, the background player's lock and
+// CrossMix's keep-awake file go: /tmp, or $BOOMBRICK_TMP, as CrossMix's
+// launch.sh takes it too.
+func tmpDir() string { return envOr("BOOMBRICK_TMP", "/tmp") }
+
+// PlayerLock is the lock the background player holds while it owns the queue.
+func (p Profile) PlayerLock() string { return filepath.Join(p.tmp, "boombrick-player.lock") }
+
+// StayAwake is the file that keeps CrossMix from sleeping while it exists,
+// or "" under other firmwares.
+func (p Profile) StayAwake() string {
+	if p.Firmware != CrossMix {
+		return ""
+	}
+	return filepath.Join(p.tmp, "stay_awake")
 }

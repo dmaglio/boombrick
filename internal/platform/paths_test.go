@@ -3,6 +3,7 @@ package platform
 import "testing"
 
 func TestDetectNextUI(t *testing.T) {
+	t.Setenv("BOOMBRICK_TMP", "")
 	t.Setenv("BOOMBRICK_PLATFORM", "")
 	t.Setenv("USERDATA_PATH", "/mnt/SDCARD/.userdata/tg5040")
 	t.Setenv("SDCARD_PATH", "/mnt/SDCARD")
@@ -23,6 +24,7 @@ func TestDetectNextUI(t *testing.T) {
 // CrossMix passes no paths: Boombrick keeps its data in its app folder, as
 // CrossMix's own apps do.
 func TestDetectCrossMix(t *testing.T) {
+	t.Setenv("BOOMBRICK_TMP", "")
 	t.Setenv("BOOMBRICK_PLATFORM", "crossmix")
 	t.Setenv("USERDATA_PATH", "")
 	t.Setenv("SDCARD_PATH", "")
@@ -46,11 +48,36 @@ func TestDetectCrossMix(t *testing.T) {
 }
 
 func TestDetectDesktop(t *testing.T) {
+	t.Setenv("BOOMBRICK_TMP", "")
 	t.Setenv("BOOMBRICK_PLATFORM", "")
 	t.Setenv("USERDATA_PATH", "")
 	t.Setenv("BOOMBRICK_DATA", "/tmp/bb")
 	want := Profile{Firmware: Desktop, tmp: "/tmp", Paths: Paths{Data: "/tmp/bb", Logs: "/tmp/bb", Music: "/tmp/bb/Music"}}
 	if got := Detect("/home/me/boombrick/dist/desktop"); got != want {
 		t.Fatalf("Detect() = %+v, want %+v", got, want)
+	}
+}
+
+// The background player's lock and CrossMix's keep-awake file are in /tmp,
+// or $BOOMBRICK_TMP, as tests and CrossMix's launch.sh use it.
+func TestTempFiles(t *testing.T) {
+	t.Setenv("USERDATA_PATH", "")
+	t.Setenv("BOOMBRICK_PLATFORM", "crossmix")
+	t.Setenv("BOOMBRICK_TMP", "")
+	p := Detect("/mnt/SDCARD/Apps/Boombrick")
+	if p.PlayerLock() != "/tmp/boombrick-player.lock" || p.StayAwake() != "/tmp/stay_awake" {
+		t.Fatalf("CrossMix: %q, %q", p.PlayerLock(), p.StayAwake())
+	}
+	t.Setenv("USERDATA_PATH", "/mnt/SDCARD/.userdata/tg5040")
+	t.Setenv("BOOMBRICK_PLATFORM", "")
+	p = Detect("/mnt/SDCARD/Tools/tg5040/Boombrick.pak")
+	if p.PlayerLock() != "/tmp/boombrick-player.lock" || p.StayAwake() != "" {
+		t.Fatalf("NextUI: %q, %q", p.PlayerLock(), p.StayAwake())
+	}
+	t.Setenv("USERDATA_PATH", "")
+	t.Setenv("BOOMBRICK_TMP", "/run/bb")
+	p = Detect("")
+	if p.PlayerLock() != "/run/bb/boombrick-player.lock" || p.StayAwake() != "" {
+		t.Fatalf("desktop: %q, %q", p.PlayerLock(), p.StayAwake())
 	}
 }
