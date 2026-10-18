@@ -124,6 +124,14 @@ type Backlight interface {
 	On() error
 }
 
+// transport is what the buttons heard with the screen off do to the music.
+// *player.Player is one.
+type transport interface {
+	Prev()
+	Next()
+	Toggle()
+}
+
 // powerHold is how long Power is held to power the device off, as NextUI's
 // own apps take it; a shorter press turns the screen off or on.
 const powerHold = time.Second
@@ -170,6 +178,7 @@ type App struct {
 	held       map[input.Button]bool
 	home       *home.Home
 	nowPlaying *nowplaying.NowPlaying
+	music      transport // the player, for the buttons heard with the screen off
 	library    *browse.Library
 	queue      *queue.Queue
 	shell      *shell
@@ -273,6 +282,9 @@ func New(opts Options) (*App, error) {
 	// The first accent's backgrounds are rendered as the first frames need
 	// them; every later one's ahead, on a goroutine.
 	a.grounds = newGrounds(a.fade.target(), renderGrounds, a.wake)
+	if opts.Player != nil {
+		a.music = opts.Player
+	}
 	if opts.Status != nil {
 		a.reader.Add(1)
 		go func() {
@@ -806,7 +818,10 @@ func (a *App) dispatch(e input.Event) {
 		return
 	}
 	if a.dark {
-		return // the screen is off: only Power is heard
+		if e.Kind == input.Press {
+			a.darkButton(e.Button)
+		}
+		return // the screen is off: only Power and the music's buttons are heard
 	}
 	if a.shell.handle(e, now) {
 		a.dirty = true
@@ -835,15 +850,33 @@ func (a *App) setDark(dark bool) {
 	}
 	a.dark, a.dirty = dark, true
 	if !dark {
+		a.opts.Log.Info("screen on")
 		a.lightUp()
 		return
 	}
+	a.opts.Log.Info("screen off")
 	if a.opts.Backlight != nil {
 		if err := a.opts.Backlight.Off(); err != nil {
 			a.opts.Log.Info("backlight stays on", "err", err)
 		} else {
 			a.lightOff = true
 		}
+	}
+}
+
+// darkButton does what a button does with the screen off: L1 and R1 skip back
+// and on, and A plays or pauses. The rest do nothing.
+func (a *App) darkButton(b input.Button) {
+	if a.music == nil {
+		return
+	}
+	switch b {
+	case input.L1:
+		a.music.Prev()
+	case input.R1:
+		a.music.Next()
+	case input.A:
+		a.music.Toggle()
 	}
 }
 

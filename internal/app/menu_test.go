@@ -192,6 +192,32 @@ func TestPowerTurnsTheScreenOffAndOn(t *testing.T) {
 	}
 }
 
+// remote records what the buttons heard with the screen off ask of the music.
+type remote struct{ got []string }
+
+func (r *remote) Prev()   { r.got = append(r.got, "prev") }
+func (r *remote) Next()   { r.got = append(r.got, "next") }
+func (r *remote) Toggle() { r.got = append(r.got, "toggle") }
+
+// With the screen off, L1 and R1 skip back and on and A plays or pauses; held,
+// they don't repeat, and the rest are ignored.
+func TestTheMusicsButtonsWithTheScreenOff(t *testing.T) {
+	a, tab := darkApp(&lamp{})
+	r := &remote{}
+	a.music = r
+	a.setDark(true)
+	for _, e := range []input.Event{press(input.R1), release(input.R1), press(input.L1), press(input.A),
+		{Button: input.R1, Kind: input.Repeat}, press(input.B), press(input.Start), press(input.Down)} {
+		a.dispatch(e)
+	}
+	if !slices.Equal(r.got, []string{"next", "prev", "toggle"}) {
+		t.Fatalf("the music was asked for %v", r.got)
+	}
+	if len(tab.got) > 0 || !a.dark {
+		t.Fatalf("with the screen off the screen heard %v; dark %v", tab.got, a.dark)
+	}
+}
+
 // With the backlight off nothing is drawn, however often something changes;
 // the test's context has no canvas, so a frame would panic.
 func TestNothingIsDrawnWithTheLightOff(t *testing.T) {
