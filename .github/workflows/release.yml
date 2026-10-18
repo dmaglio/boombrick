@@ -29,9 +29,19 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: sha256sum Boombrick.pak.zip > SHA256SUMS
+      # The notes are the tag's section of CHANGELOG.md, from its "## [v…]"
+      # heading to the next; GitHub's own when there is none.
+      - name: Release notes
+        run: |
+          awk -v head="## [$GITHUB_REF_NAME]" '
+            index($0, "## [") == 1 { if (on) exit; on = ($0 == head); next }
+            on
+          ' CHANGELOG.md > dist/NOTES.md
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME" dist/Boombrick.pak.zip dist/SHA256SUMS
-          --title "Boombrick ${GITHUB_REF_NAME#v}" --generate-notes
+        run: |
+          notes="--notes-file dist/NOTES.md"
+          grep -q '[^[:space:]]' dist/NOTES.md || notes="--generate-notes"
+          gh release create "$GITHUB_REF_NAME" dist/Boombrick.pak.zip dist/SHA256SUMS \
+            --title "Boombrick ${GITHUB_REF_NAME#v}" $notes
