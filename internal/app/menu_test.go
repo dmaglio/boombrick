@@ -297,6 +297,9 @@ func TestHoldingPowerPowersOff(t *testing.T) {
 	asked := 0
 	a.opts.PowerOff = func() error { asked++; return nil }
 	a.dispatch(press(input.Power))
+	// Pressed at t0, well before a minute ends: in a minute's last second the
+	// clock's tick comes before the hold's end, and the sleep is shorter.
+	a.powerAt = t0
 	if a.powerHeld(a.powerAt.Add(powerHold / 2)) {
 		t.Fatal("powered off half a hold in")
 	}
