@@ -2,6 +2,10 @@
 
 A music player for the [TrimUI Brick](https://trimui.com) running [NextUI](https://github.com/LoveRetro/NextUI) or [CrossMix](https://github.com/cizia64/CrossMix-OS). It plays the music on your SD card, streams your Spotify playlists, finds covers and synced lyrics, and downloads songs and albums from YouTube Music for offline listening. Its colours come from the album that's playing.
 
+<p align="center">
+  <img src=".github/resources/screenshots/overview.png" alt="Boombrick's screens: Now Playing, synced lyrics, the library, YouTube Music, downloads and the queue">
+</p>
+
 See [CHANGELOG.md](CHANGELOG.md) for what each release adds.
 
 ## Features
