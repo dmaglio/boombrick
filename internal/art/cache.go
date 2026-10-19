@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"iter"
 	"log/slog"
 	"net/http"
 	"os"
@@ -394,12 +395,15 @@ func (c *Cache) resolve(cv media.Cover) {
 	if have && strings.HasPrefix(old.source, onlineSource) && !c.exists(old.file) {
 		r.lookedUp = 0 // the art found online has gone; it can be found again
 	}
-	var source string
 	var perr error
 	if !c.decoding(func() {
-		var data []byte
-		if data, source = local(track); data != nil {
-			perr = c.process(&r, data, source)
+		// A picture that won't decode, like an embedded one too big for
+		// the device, gives way to the next.
+		for data, source := range locals(track) {
+			if perr = c.process(&r, data, source); perr == nil || errors.Is(perr, errWrite) {
+				return
+			}
+			c.opts.Log.Warn("album art", "source", source, "err", perr)
 		}
 	}) {
 		return
@@ -414,8 +418,6 @@ func (c *Cache) resolve(cv media.Cover) {
 		}
 		c.settleBroken(key)
 		return
-	} else if perr != nil {
-		c.opts.Log.Warn("album art", "source", source, "err", perr)
 	}
 	if r.file == "" && have && strings.HasPrefix(old.source, onlineSource) && c.exists(old.file) {
 		// Art found online stays until a picture turns up with the music.
@@ -473,28 +475,29 @@ func (c *Cache) exists(file string) bool {
 	return exists(filepath.Join(c.opts.Dir, file+".jpg")) && exists(filepath.Join(c.opts.Dir, file+"-bg.png"))
 }
 
-// local finds the picture for the album of track: in its tags, then beside
-// it. It returns the picture and where it came from.
-func local(track string) ([]byte, string) {
-	if track == "" {
-		return nil, ""
-	}
-	if data, ok := Embedded(track); ok {
-		return data, track
-	}
-	for _, dir := range albumDirs(track) {
-		f, ok := FolderImage(dir)
-		if !ok {
-			continue
+// locals yields the pictures for the album of track, with where each came
+// from: the one in its tags, then those beside it.
+func locals(track string) iter.Seq2[[]byte, string] {
+	return func(yield func([]byte, string) bool) {
+		if track == "" {
+			return
 		}
-		if fi, err := os.Stat(f); err != nil || fi.Size() > maxSourceBytes {
-			continue
+		if data, ok := Embedded(track); ok && !yield(data, track) {
+			return
 		}
-		if data, err := os.ReadFile(f); err == nil {
-			return data, f
+		for _, dir := range albumDirs(track) {
+			f, ok := FolderImage(dir)
+			if !ok {
+				continue
+			}
+			if fi, err := os.Stat(f); err != nil || fi.Size() > maxSourceBytes {
+				continue
+			}
+			if data, err := os.ReadFile(f); err == nil && !yield(data, f) {
+				return
+			}
 		}
 	}
-	return nil, ""
 }
 
 // process decodes a picture and writes the master copy and the backdrop,

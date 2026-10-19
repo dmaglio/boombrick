@@ -138,6 +138,30 @@ func TestCoverFromAFolderImage(t *testing.T) {
 	}
 }
 
+// apicMP3 is an ID3v2.3 tag with pic as its front cover.
+func apicMP3(pic []byte) []byte {
+	body := append([]byte("\x00image/jpeg\x00\x03\x00"), pic...)
+	n := len(body)
+	frame := append([]byte("APIC"), byte(n>>24), byte(n>>16), byte(n>>8), byte(n), 0, 0)
+	frame = append(frame, body...)
+	n = len(frame)
+	tag := append([]byte("ID3\x03\x00\x00"), byte(n>>21&0x7f), byte(n>>14&0x7f), byte(n>>7&0x7f), byte(n&0x7f))
+	return append(tag, frame...)
+}
+
+func TestBrokenEmbeddedPictureGivesWayToTheFolders(t *testing.T) {
+	f := newFixture(t)
+	cv := albumOn(t, f.root, "Odalys", "Copper Season", &red)
+	os.WriteFile(cv.Path, apicMP3([]byte("not a picture")), 0o644)
+	if _, ok := Embedded(cv.Path); !ok {
+		t.Fatal("the track's picture isn't found")
+	}
+	c := f.cache(t, nil, false)
+	if img := waitCover(t, c, cv, 100); !near(img.NRGBAAt(50, 50), red, 6) {
+		t.Fatalf("centre %v, want the folder's red", img.NRGBAAt(50, 50))
+	}
+}
+
 func TestCoverIsHandedOverOnceAndReadAgain(t *testing.T) {
 	f := newFixture(t)
 	cv := albumOn(t, f.root, "Odalys", "Copper Season", &red)

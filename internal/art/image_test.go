@@ -11,6 +11,8 @@ import (
 	"math"
 	"testing"
 
+	"golang.org/x/image/tiff" // registers TIFF, as the text engine does in the app
+
 	"github.com/ujjwal313/boombrick/internal/theme"
 )
 
@@ -151,6 +153,74 @@ func TestSquareReadsEveryKindOfImage(t *testing.T) {
 	}
 }
 
+// gradient is a picture of smooth colour over r, its chroma stored at the
+// given ratio, each chroma sample from the last pixel it covers.
+func gradient(r image.Rectangle, ratio image.YCbCrSubsampleRatio) *image.YCbCr {
+	img := image.NewYCbCr(r, ratio)
+	w, h := r.Dx(), r.Dy()
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			i, j := x-r.Min.X, y-r.Min.Y
+			yy, cb, cr := color.RGBToYCbCr(uint8(40+170*i/w), uint8(200-150*j/h), uint8(100+60*math.Sin(float64(i+2*j)/8)))
+			img.Y[img.YOffset(x, y)] = yy
+			img.Cb[img.COffset(x, y)], img.Cr[img.COffset(x, y)] = cb, cr
+		}
+	}
+	return img
+}
+
+// generic hides a picture's type, so that Square reads it pixel by pixel.
+type generic struct{ image.Image }
+
+func TestSquareYCbCrMatchesConvertingEveryPixel(t *testing.T) {
+	for _, c := range []struct {
+		r     image.Rectangle
+		ratio image.YCbCrSubsampleRatio
+		px    []int
+	}{
+		{image.Rect(0, 0, 300, 300), image.YCbCrSubsampleRatio420, []int{1, 37, 64, 150, 299, 300}},
+		{image.Rect(1, 3, 302, 210), image.YCbCrSubsampleRatio420, []int{50, 206}},
+		{image.Rect(0, 0, 240, 320), image.YCbCrSubsampleRatio422, []int{48, 100, 239}},
+		{image.Rect(3, 0, 200, 200), image.YCbCrSubsampleRatio422, []int{64}},
+		{image.Rect(0, 0, 257, 257), image.YCbCrSubsampleRatio444, []int{17, 128, 256}},
+		{image.Rect(0, 0, 200, 200), image.YCbCrSubsampleRatio440, []int{60}},
+		{image.Rect(2, 1, 203, 202), image.YCbCrSubsampleRatio411, []int{60, 199}},
+		{image.Rect(0, 0, 200, 200), image.YCbCrSubsampleRatio410, []int{60}},
+	} {
+		img := gradient(c.r, c.ratio)
+		for _, px := range c.px {
+			fast, slow := Square(img, px), Square(generic{img}, px)
+			worst := 0
+			for i := range fast.Pix {
+				worst = max(worst, int(math.Abs(float64(int(fast.Pix[i])-int(slow.Pix[i])))))
+			}
+			if worst > 2 || fast.Rect != slow.Rect {
+				t.Errorf("%v at %v to %d px: %v, %v; channels differ by up to %d", c.ratio, c.r, px, fast.Rect, slow.Rect, worst)
+			}
+		}
+	}
+}
+
+func BenchmarkSquare(b *testing.B) {
+	ycc := gradient(image.Rect(0, 0, 3000, 3000), image.YCbCrSubsampleRatio420)
+	b.Run("YCbCr", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			Square(ycc, 512)
+		}
+	})
+	nrgba := image.NewNRGBA(ycc.Rect)
+	for i := range nrgba.Pix {
+		nrgba.Pix[i] = uint8(i)
+	}
+	b.Run("NRGBA", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			Square(nrgba, 512)
+		}
+	})
+}
+
 func TestDecode(t *testing.T) {
 	img, err := Decode(encodePNG(t, solid(30, 20, red)))
 	if err != nil || img.Bounds().Dx() != 30 {
@@ -161,6 +231,13 @@ func TestDecode(t *testing.T) {
 	}
 	if img, err := Decode(encodeJPEG(t, solid(40, 30, red))); err != nil || img.Bounds().Dy() != 30 {
 		t.Fatalf("Decode(JPEG) = %v, %v", img, err)
+	}
+	var tif bytes.Buffer
+	if err := tiff.Encode(&tif, solid(4, 4, red), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Decode(tif.Bytes()); !errors.Is(err, image.ErrFormat) {
+		t.Fatalf("Decode(TIFF) error %v, want image.ErrFormat", err)
 	}
 }
 

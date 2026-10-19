@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"errors"
 	"image"
-	"image/color"
 	_ "image/jpeg" // decoders for Decode
 	_ "image/png"
 	"math"
@@ -19,7 +18,7 @@ import (
 )
 
 // maxDecodeBytes is the memory one decode may take: half the device's 96 MB
-// heap, since the cache decodes one picture at a time. A baseline JPEG takes
+// heap, since Decode runs one picture at a time. A baseline JPEG takes
 // 1.5 bytes a pixel while decoding if its colour is stored at quarter
 // resolution (4:2:0) and 3 if not (4:4:4). A progressive one takes 5 times
 // that, 7.5 and 15, because Go keeps every coefficient of the image as an
@@ -29,8 +28,13 @@ const maxDecodeBytes = 48 << 20
 // ErrTooBig is returned for a picture too large to decode on the device.
 var ErrTooBig = errors.New("art: picture too large")
 
+// decodeSlot lets one picture decode at a time, wherever it comes from: the
+// cache, the online lookup or a download.
+var decodeSlot = make(chan struct{}, 1)
+
 // Decode decodes a JPEG, PNG or WebP picture, refusing one too large to
-// decode in the memory the device has.
+// decode in the memory the device has. Other formats the image package knows,
+// like the TIFF that the text engine registers, are refused too.
 func Decode(data []byte) (image.Image, error) {
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
@@ -45,10 +49,15 @@ func Decode(data []byte) (image.Image, error) {
 		}
 	case "png":
 		perPixel = pngCost(data)
+	case "webp":
+	default:
+		return nil, image.ErrFormat
 	}
 	if tooBig(cfg.Width, cfg.Height, perPixel) {
 		return nil, ErrTooBig
 	}
+	decodeSlot <- struct{}{}
+	defer func() { <-decodeSlot }()
 	img, _, err := image.Decode(bytes.NewReader(data))
 	return img, err
 }
@@ -160,26 +169,28 @@ func Square(src image.Image, px int) *image.NRGBA {
 		return image.NewNRGBA(image.Rectangle{})
 	}
 	x0, y0 := b.Min.X+(b.Dx()-side)/2, b.Min.Y+(b.Dy()-side)/2
-	spans := coverage(side, px)
+	if s, ok := src.(*image.YCbCr); ok {
+		return squareYCbCr(s, x0, y0, side, px)
+	}
+	taps := coverage(side, px, nil)
 	acc := make([]float32, 3*px*px) // the output, summed in rows as source rows arrive
 	row := make([]float32, 3*side)
 	scaled := make([]float32, 3*px)
+	t := 0 // the first tap of the row being read
 	for y := range side {
 		readRow(src, x0, y0+y, side, row)
 		clear(scaled)
-		for x := range side {
-			r, g, bl := row[3*x], row[3*x+1], row[3*x+2]
-			for _, s := range spans[x] {
-				o := 3 * s.out
-				scaled[o] += r * s.w
-				scaled[o+1] += g * s.w
-				scaled[o+2] += bl * s.w
-			}
+		for _, h := range taps {
+			i, o := 3*h.in, 3*h.out
+			scaled[o] += row[i] * h.w
+			scaled[o+1] += row[i+1] * h.w
+			scaled[o+2] += row[i+2] * h.w
 		}
-		for _, s := range spans[y] {
-			line := acc[3*px*s.out : 3*px*(s.out+1)]
-			for i, v := range scaled {
-				line[i] += v * s.w
+		for ; t < len(taps) && taps[t].in == y; t++ {
+			v := taps[t]
+			line := acc[3*px*v.out : 3*px*(v.out+1)]
+			for i, s := range scaled {
+				line[i] += s * v.w
 			}
 		}
 	}
@@ -190,26 +201,90 @@ func Square(src image.Image, px int) *image.NRGBA {
 	return out
 }
 
-// span is a source pixel's share of one output pixel.
-type span struct {
-	out int
-	w   float32
+// squareYCbCr is Square for a JPEG's YCbCr: the brightness and the two colour
+// planes are each averaged at their own resolution, and only the averages
+// are made RGB. The conversion is affine, so this matches converting every
+// source pixel first, but for colours clamped into RGB.
+func squareYCbCr(s *image.YCbCr, x0, y0, side, px int) *image.NRGBA {
+	luma := coverage(side, px, nil)
+	// A chroma sample's column is its offset in the plane's first row, and its
+	// row the offset in the first column over the stride.
+	cx, cy := s.COffset(x0, s.Rect.Min.Y), s.COffset(s.Rect.Min.X, y0)/s.CStride
+	across := coverage(side, px, func(i int) int { return s.COffset(x0+i, s.Rect.Min.Y) - cx })
+	down := coverage(side, px, func(i int) int { return s.COffset(s.Rect.Min.X, y0+i)/s.CStride - cy })
+	ys := average(s.Y[s.YOffset(x0, y0):], s.YStride, luma, luma, px)
+	c := s.COffset(x0, y0)
+	cbs := average(s.Cb[c:], s.CStride, across, down, px)
+	crs := average(s.Cr[c:], s.CStride, across, down, px)
+	out := image.NewNRGBA(image.Rect(0, 0, px, px))
+	for i := range px * px { // JFIF's conversion, as color.YCbCrToRGB does it
+		y, cb, cr := ys[i], cbs[i]-128, crs[i]-128
+		p := out.Pix[4*i : 4*i+4 : 4*i+4]
+		p[0] = to8(y + 1.402*cr)
+		p[1] = to8(y - 0.34414*cb - 0.71414*cr)
+		p[2] = to8(y + 1.772*cb)
+		p[3] = 255
+	}
+	return out
 }
 
-// coverage lists, for each of n source pixels, the output pixels among m that
-// it falls in and with what weight; each output pixel's weights add up to 1.
-func coverage(n, m int) [][]span {
-	spans := make([][]span, n)
+// average scales a plane of 8-bit samples, from the first of plane, down to
+// px by px by the taps across and down.
+func average(plane []uint8, stride int, across, down []tap, px int) []float32 {
+	acc := make([]float32, px*px)
+	scaled := make([]float32, px)
+	t := 0
+	for y := 0; t < len(down); y++ {
+		row := plane[y*stride:]
+		clear(scaled)
+		for _, h := range across {
+			scaled[h.out] += float32(row[h.in]) * h.w
+		}
+		for ; t < len(down) && down[t].in == y; t++ {
+			v := down[t]
+			line := acc[px*v.out : px*(v.out+1)]
+			for i, s := range scaled {
+				line[i] += s * v.w
+			}
+		}
+	}
+	return acc
+}
+
+// tap is a source sample's share w of one output pixel.
+type tap struct {
+	in, out int
+	w       float32
+}
+
+// coverage lists the taps that scale n source pixels down to m, n >= m:
+// the output pixels each source sample falls in, and with what weight. Each
+// output pixel's weights add up to 1. sample is the sample pixel i is read
+// from, for a plane stored at a lower resolution, and must not decrease; nil
+// is the pixels themselves. The taps are in order of sample and of output
+// pixel both.
+func coverage(n, m int, sample func(i int) int) []tap {
+	taps := make([]tap, 0, n+m)
 	scale := float64(n) / float64(m)
 	for o := range m {
 		lo, hi := float64(o)*scale, float64(o+1)*scale
 		for i := int(lo); i < n && float64(i) < hi; i++ {
-			if w := (math.Min(hi, float64(i+1)) - math.Max(lo, float64(i))) / scale; w > 0 {
-				spans[i] = append(spans[i], span{o, float32(w)})
+			w := (math.Min(hi, float64(i+1)) - math.Max(lo, float64(i))) / scale
+			if w <= 0 {
+				continue
+			}
+			in := i
+			if sample != nil {
+				in = sample(i)
+			}
+			if k := len(taps) - 1; k >= 0 && taps[k].in == in && taps[k].out == o {
+				taps[k].w += float32(w)
+			} else {
+				taps = append(taps, tap{in, o, float32(w)})
 			}
 		}
 	}
-	return spans
+	return taps
 }
 
 // readRow reads n pixels of row y from x0 into row as red, green and blue
@@ -217,12 +292,6 @@ func coverage(n, m int) [][]span {
 // dark ground.
 func readRow(src image.Image, x0, y, n int, row []float32) {
 	switch s := src.(type) {
-	case *image.YCbCr:
-		for i := range n {
-			yi, ci := s.YOffset(x0+i, y), s.COffset(x0+i, y)
-			r, g, b := color.YCbCrToRGB(s.Y[yi], s.Cb[ci], s.Cr[ci])
-			row[3*i], row[3*i+1], row[3*i+2] = float32(r), float32(g), float32(b)
-		}
 	case *image.NRGBA:
 		p := s.Pix[s.PixOffset(x0, y):]
 		for i := range n {
@@ -262,8 +331,7 @@ func Colour(img *image.NRGBA) (hue, chroma float64, ok bool) {
 const backdropPx = 64
 
 // Backdrop is the Lyrics screen's background made from the art: 64 x 64,
-// blurred by about 5 % of its width, as the design's
-// 70 px blur is of its 1400 px art, and 20 % more saturated.
+// blurred by about 5 % of its width and 20 % more saturated.
 func Backdrop(img *image.NRGBA) *image.NRGBA {
 	b := Square(img, backdropPx)
 	raster.Blur(b, 3)
