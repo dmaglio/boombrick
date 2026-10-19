@@ -77,12 +77,17 @@ func TestTrackFromMetadata(t *testing.T) {
 }
 
 func TestProductType(t *testing.T) {
-	info := []byte(`<?xml version="1.0" encoding="utf-8"?><products><product><type>premium</type><head-files-url>x</head-files-url></product></products>`)
-	if got := productType(info); got != "premium" {
-		t.Fatalf("productType = %q", got)
-	}
-	if got := productType([]byte("garbage")); got != "" {
-		t.Fatalf("productType of garbage = %q", got)
+	for _, c := range []struct{ info, want string }{
+		{`<?xml version="1.0" encoding="utf-8"?><products><product><type>premium</type><head-files-url>x</head-files-url></product></products>`, "premium"},
+		{"<products>\n  <product>\n    <type>free</type>\n  </product>\n  <product><type>premium</type></product>\n</products>", "free"},
+		{`<products><product><head-files-url>x</head-files-url></product></products>`, ""},
+		{`<products><product><type>premium`, ""},
+		{"garbage", ""},
+		{"", ""},
+	} {
+		if got := productType([]byte(c.info)); got != c.want {
+			t.Errorf("productType(%q) = %q, want %q", c.info, got, c.want)
+		}
 	}
 }
 

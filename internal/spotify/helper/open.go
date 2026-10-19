@@ -82,8 +82,8 @@ func (s *Librespot) open(ctx context.Context, sess *session.Session, id librespo
 		return nil, err
 	}
 	tr, err := newVorbis(dec, raw.Size(), gain)
-	if err == nil && ms > 0 && ms < int64(media.Duration()) {
-		err = tr.SeekMs(ms)
+	if err == nil && ms > 0 {
+		err = tr.SeekMs(ms) // past the end, the stream ends at once
 	}
 	if err != nil {
 		raw.Close()

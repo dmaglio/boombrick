@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -190,6 +192,60 @@ func TestOldListsAreAskedAgain(t *testing.T) {
 	waitFor(t, "the retry", func() bool { _, _, err := l.Playlists(); return err == nil })
 }
 
+// Only the track lists in use stay in memory: the four asked for last, and
+// those asked for within a minute. The others are read from the store again
+// when next asked for, without asking the helper.
+func TestTrackListsNotInUseAreDropped(t *testing.T) {
+	uris := []string{LikedURI}
+	for i := range 7 {
+		uris = append(uris, "spotify:playlist:"+strconv.Itoa(i))
+	}
+	c := &fakeClient{tracks: map[string][]Track{}, asked: map[string]int{}}
+	for _, u := range uris {
+		c.tracks[u] = songs
+	}
+	l, now := library(t, c, openDB(t))
+	ask := func(u string) {
+		t.Helper()
+		v := l.Version()
+		waitFor(t, u, func() bool { _, have, _ := l.Tracks(u); return have })
+		if l.Version() == v {
+			t.Fatalf("the version didn't change with %s", u)
+		}
+	}
+	held := func() []string {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		var out []string
+		for k, e := range l.lists {
+			if e.have {
+				out = append(out, k)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	for _, u := range uris[:7] {
+		ask(u)
+		now.advance(time.Second)
+	}
+	if got := held(); len(got) != 7 {
+		t.Fatalf("within a minute, kept %q", got)
+	}
+	now.advance(2 * idle)
+	l.Tracks(uris[1])
+	ask(uris[7])
+	want := []string{uris[1], uris[5], uris[6], uris[7]}
+	slices.Sort(want)
+	if got := held(); !slices.Equal(got, want) {
+		t.Fatalf("later, kept %q", got)
+	}
+	ask(uris[0])
+	if ts, _, _ := l.Tracks(uris[0]); !reflect.DeepEqual(ts, songs) || c.times(uris[0]) != 1 {
+		t.Fatalf("read again %+v, asking the helper %d times", ts, c.times(uris[0]))
+	}
+}
+
 // Saved shows what is kept without asking the helper.
 func TestSavedDoesntAskTheHelper(t *testing.T) {
 	db := openDB(t)
@@ -259,5 +315,40 @@ func TestStatusSignInAndOut(t *testing.T) {
 	}
 	if _, have := l.Saved(); have {
 		t.Fatal("the playlists are still known after signing out")
+	}
+}
+
+// slowClient holds the playlists' answer until the test lets it go.
+type slowClient struct {
+	*fakeClient
+	waiting, answer chan struct{}
+}
+
+func (s *slowClient) Playlists(ctx context.Context) ([]Playlist, error) {
+	s.waiting <- struct{}{}
+	<-s.answer
+	return s.fakeClient.Playlists(ctx)
+}
+
+// A list asked for before signing out and answered after it is the old
+// account's: it is neither kept nor shown.
+func TestListsAnsweredAfterSigningOutAreDropped(t *testing.T) {
+	db := openDB(t)
+	c := &slowClient{fakeClient: &fakeClient{playlists: gym, asked: map[string]int{}},
+		waiting: make(chan struct{}), answer: make(chan struct{})}
+	l, _ := library(t, c, db)
+	l.Playlists()
+	<-c.waiting
+	l.forget()
+	close(c.answer)
+	l.Close()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM spotify_cache`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("%d lists kept after signing out, %v", n, err)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if e := l.lists[playlistsKey]; e != nil && e.have {
+		t.Fatal("the old account's playlists are shown")
 	}
 }

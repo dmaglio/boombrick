@@ -88,8 +88,11 @@ func (s *Stream) at(frame int64) (string, int64) {
 	return fmt.Sprintf("/stream/%s?ms=%d&kbps=%d&level=%s", s.id, ms, s.kbps, level), frame - ms*Rate/1000
 }
 
+// SampleRate is the rate the helper decodes the track at.
 func (s *Stream) SampleRate() int { return s.rate }
-func (s *Stream) Frames() int64   { return s.frames }
+
+// Frames is the track's length in frames, as Spotify gives it.
+func (s *Stream) Frames() int64 { return s.frames }
 
 // Kbps is the quality the stream was opened at.
 func (s *Stream) Kbps() int { return s.kbps }
@@ -149,6 +152,7 @@ func (s *Stream) SeekFrame(frame int64) error {
 	return nil
 }
 
+// Close stops reading ahead; Read returns io.EOF once what is held is read.
 func (s *Stream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

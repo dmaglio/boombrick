@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ujjwal313/boombrick/internal/spotify"
 )
 
 // vorbisFixture is the Ogg Vorbis fixture, and ffmpeg's decoding of it.
@@ -144,15 +146,17 @@ func TestVorbisSeeksToTheFrame(t *testing.T) {
 			if err := s.SeekMs(ms); err != nil {
 				t.Fatalf("%s: seek to %d ms: %v", c.name, ms, err)
 			}
-			at := 2 * int(ms*trackRate/1000)
+			at := 2 * int(ms*spotify.Rate/1000)
 			want := all[at:min(at+8820, len(all))]
 			same(t, fmt.Sprintf("%s at %d ms", c.name, ms), readFrames(t, s, len(want)), want, 0)
 		}
-		if err := s.SeekMs(31000); err != nil {
-			t.Fatalf("%s: seek past the end: %v", c.name, err)
-		}
-		if n, err := s.Read(make([]float32, 64)); n != 0 || !errors.Is(err, io.EOF) {
-			t.Fatalf("%s: read past the end: %d, %v", c.name, n, err)
+		for _, ms := range []int64{31000, 3600000} {
+			if err := s.SeekMs(ms); err != nil {
+				t.Fatalf("%s: seek to %d ms, past the end: %v", c.name, ms, err)
+			}
+			if n, err := s.Read(make([]float32, 64)); n != 0 || !errors.Is(err, io.EOF) {
+				t.Fatalf("%s: read at %d ms, past the end: %d, %v", c.name, ms, n, err)
+			}
 		}
 	}
 }

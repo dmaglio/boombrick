@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 	"errors"
+	"io"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -75,6 +76,27 @@ func TestStreamsLetGoAreClosed(t *testing.T) {
 		if src.closed.Load() {
 			t.Fatal("a stream kept was closed")
 		}
+	}
+}
+
+// short is a track that has ended.
+type short struct{ silence }
+
+func (s *short) Read(p []float32) (int, error) { return 0, io.EOF }
+
+// A stream read to its end is closed when let go, not kept: by then it holds
+// the whole file.
+func TestStreamsReadToTheEndAreNotKept(t *testing.T) {
+	s := &Librespot{busy: map[string]*stream{}}
+	src := &short{}
+	st := s.adopt("a", src, 0, nil)
+	if _, err := st.Read(make([]float32, 4)); !errors.Is(err, io.EOF) {
+		t.Fatalf("read %v", err)
+	}
+	st.Release()
+	waitClosed(t, &src.silence)
+	if got := s.claim(context.Background(), "a"); got != nil {
+		t.Fatal("a stream read to its end was kept")
 	}
 }
 

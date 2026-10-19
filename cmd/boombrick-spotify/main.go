@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/spotify"
@@ -29,6 +30,9 @@ const usage = `usage: boombrick-spotify serve <data dir> <socket>
        boombrick-spotify login <data dir>`
 
 func main() {
+	// The helper runs beside Boombrick in the Brick's 1 GB; most of its heap
+	// is the downloads of the streams open.
+	debug.SetMemoryLimit(48 << 20)
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil)).With("from", "spotify")
 	var err error
 	switch {

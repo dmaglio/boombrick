@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -94,7 +95,7 @@ func (q *queue) songs() []string {
 	return out
 }
 
-func openDB(t *testing.T) *sql.DB {
+func openDB(t testing.TB) *sql.DB {
 	t.Helper()
 	s, err := store.Open(filepath.Join(t.TempDir(), "boombrick.db"))
 	if err != nil {
@@ -102,6 +103,39 @@ func openDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s.DB
+}
+
+// bare is an importer on db that matches nothing itself: the test settles
+// its songs, and flushes.
+func bare(db *sql.DB) *Importer {
+	return &Importer{o: Options{DB: db, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}, now: time.Now}
+}
+
+// written counts the songs' rows written from now on; each call says how many
+// were since the last.
+func written(t testing.TB, db *sql.DB) func() int {
+	t.Helper()
+	for _, q := range []string{
+		`CREATE TABLE writes (n INTEGER NOT NULL)`,
+		`INSERT INTO writes VALUES (0)`,
+		`CREATE TRIGGER inserted AFTER INSERT ON import_items BEGIN UPDATE writes SET n = n + 1; END`,
+		`CREATE TRIGGER updated AFTER UPDATE ON import_items BEGIN UPDATE writes SET n = n + 1; END`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return func() int {
+		t.Helper()
+		var n int
+		if err := db.QueryRow(`SELECT n FROM writes`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE writes SET n = 0`); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
 }
 
 // start makes an importer on db, asking yt, with the waits shortened.
@@ -257,6 +291,104 @@ func TestCancel(t *testing.T) {
 	j, _ := im.Job(road)
 	if got := states(j); !slices.Equal(got, []State{Skipped, Matched}) || !slices.Equal(q.removed, []string{"a"}) {
 		t.Fatalf("states %v, removed %v", got, q.removed)
+	}
+}
+
+// A pass writes only the songs that changed, and a song dropped from the
+// playlist while it was being matched isn't written back.
+func TestOnlyWhatChangedIsWritten(t *testing.T) {
+	db := openDB(t)
+	rows := written(t, db)
+	im := bare(db)
+	im.Import(road, "Road trip", []spotify.Track{sapphire, tereyPapa, stan})
+	im.flush()
+	if n := rows(); n != 3 {
+		t.Fatalf("the import wrote %d songs", n)
+	}
+	j, e := im.item(road, stan.ID)
+	im.settle(j, e, Unsure, []Candidate{{Song: ytmusic.Song{VideoID: "l", Title: "Stan"}, Score: 0.7}})
+	im.flush()
+	if n := rows(); n != 1 {
+		t.Fatalf("a song matched wrote %d", n)
+	}
+	if im.flush(); rows() != 0 {
+		t.Fatal("a pass with nothing changed wrote")
+	}
+
+	_, gone := im.item(road, tereyPapa.ID)
+	im.Import(road, "Road trip", []spotify.Track{sapphire, stan})
+	im.flush()
+	rows()
+	im.settle(j, gone, Matched, []Candidate{{Song: ytmusic.Song{VideoID: "i"}, Score: 1}})
+	if im.flush(); rows() != 0 {
+		t.Fatal("a dropped song was written")
+	}
+
+	again := bare(db)
+	if err := again.load(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := again.Job(road)
+	if !slices.Equal(states(got), []State{Waiting, Unsure}) || got.Items[1].Candidates[0].Song.VideoID != "l" {
+		t.Fatalf("read back %+v", got)
+	}
+}
+
+// Changes gives the songs that changed since a version, or all of them when
+// the playlist was imported again since.
+func TestChanges(t *testing.T) {
+	im := bare(openDB(t))
+	if _, ok := im.Changes(road, 0); ok {
+		t.Fatal("changes of a playlist never imported")
+	}
+	im.Import(road, "Road trip", []spotify.Track{sapphire, tereyPapa, stan})
+	c, _ := im.Changes(road, 0)
+	if !c.All || len(c.Items) != 3 || c.Version != im.Version() {
+		t.Fatalf("first changes %+v", c)
+	}
+	im.Skip(road, tereyPapa.ID)
+	c, _ = im.Changes(road, c.Version)
+	if c.All || !slices.Equal(c.At, []int{1}) || len(c.Items) != 1 || c.Items[0].State != Skipped {
+		t.Fatalf("after a skip %+v", c)
+	}
+	if c, _ = im.Changes(road, c.Version); c.All || len(c.Items) != 0 {
+		t.Fatalf("with nothing changed %+v", c)
+	}
+	im.Import(road, "Road trip", []spotify.Track{stan, sapphire})
+	if c, _ = im.Changes(road, c.Version); !c.All || len(c.Items) != 2 || c.Items[0].Track.ID != stan.ID {
+		t.Fatalf("imported again %+v", c)
+	}
+}
+
+// BenchmarkFlush is a pass after one song of a 2,000-song import is matched.
+func BenchmarkFlush(b *testing.B) {
+	im := bare(openDB(b))
+	ts := make([]spotify.Track, 2000)
+	for i := range ts {
+		ts[i] = stan
+		ts[i].ID = strconv.Itoa(i)
+	}
+	im.Import(road, "Big", ts)
+	j := im.find(road)
+	cands := make([]Candidate, keep)
+	for i := range cands {
+		cands[i] = Candidate{Song: ytmusic.Song{VideoID: strconv.Itoa(i), Title: "Stan", Artist: "Eminem",
+			Album: "The Marshall Mathers LP", Duration: dur(6, 44), Thumb: "https://lh3.googleusercontent.com/abcdef=w120-h120"}, Score: 0.9}
+	}
+	for _, e := range j.items {
+		im.settle(j, e, Matched, cands)
+	}
+	im.flush()
+	b.ReportAllocs()
+	i := 0
+	for b.Loop() {
+		e := j.items[i%len(j.items)]
+		im.mu.Lock()
+		e.Chosen = (e.Chosen + 1) % keep
+		im.touch(j, e)
+		im.mu.Unlock()
+		im.flush()
+		i++
 	}
 }
 

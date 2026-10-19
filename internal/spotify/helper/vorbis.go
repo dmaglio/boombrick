@@ -8,17 +8,18 @@ import (
 	"io"
 
 	"github.com/jfreymuth/vorbis"
+
+	"github.com/ujjwal313/boombrick/internal/spotify"
 )
 
-// Spotify's tracks are Ogg Vorbis, 44.1 kHz stereo, behind a page of
-// Spotify's own.
+// Spotify's tracks are Ogg Vorbis, at spotify.Rate and in stereo, behind a
+// page of Spotify's own.
 const (
-	trackRate     = 44100
 	trackChannels = 2
 	// seekBack is how far before a seek's frame its page is looked for, so
 	// the page found starts before it; stepBack how far back a seek tries
 	// again from when it still lands after it.
-	seekBack = trackRate
+	seekBack = spotify.Rate
 	stepBack = 32 << 10
 )
 
@@ -151,7 +152,7 @@ func newVorbis(r io.ReaderAt, size int64, gain float32) (*vorbisStream, error) {
 			}
 		}
 	}
-	if t.dec.SampleRate() != trackRate || t.dec.Channels() != trackChannels {
+	if t.dec.SampleRate() != spotify.Rate || t.dec.Channels() != trackChannels {
 		return nil, fmt.Errorf("vorbis: %d Hz, %d channels", t.dec.SampleRate(), t.dec.Channels())
 	}
 	// The first audio packet starts a page of its own.
@@ -161,14 +162,16 @@ func newVorbis(r io.ReaderAt, size int64, gain float32) (*vorbisStream, error) {
 	return t, nil
 }
 
-// SeekMs makes the next frame read the one at ms. It looks for the page a
-// little before it with the seek table, steps back while the page found is
-// after it, and decodes on from there, dropping the frames before it.
+// SeekMs makes the next frame read the one at ms; past the end, the next read
+// returns io.EOF. It looks for the page a little before it with the seek
+// table, steps back while the page found is after it, and decodes on from
+// there, dropping the frames before it.
 func (t *vorbisStream) SeekMs(ms int64) error {
-	want := ms * trackRate / 1000
+	want := ms * spotify.Rate / 1000
 	off := t.audio
 	if want > seekBack && t.table.ok {
-		off = max(t.audio, t.start+t.table.position(want-seekBack))
+		// Past the end, the table points past the file too.
+		off = min(max(t.audio, t.start+t.table.position(want-seekBack)), t.pages.end)
 	}
 	for {
 		t.restart(off, want)
@@ -254,9 +257,7 @@ func (t *vorbisStream) page() error {
 			continue
 		}
 		ended = true
-		if err := t.decode(t.partial); err != nil {
-			return err
-		}
+		t.decode(t.partial)
 		t.partial = t.partial[:0]
 	}
 	t.skip = dropping // the packet dropped goes on on the next page too
@@ -269,16 +270,16 @@ func (t *vorbisStream) page() error {
 	return nil
 }
 
-// decode decodes a packet onto out, levelled.
-func (t *vorbisStream) decode(packet []byte) error {
+// decode decodes a packet onto out, levelled. A damaged packet is left out,
+// as libvorbis leaves it.
+func (t *vorbisStream) decode(packet []byte) {
 	s, err := t.dec.DecodeInto(packet, t.scratch)
 	if err != nil {
-		return nil // a damaged packet is left out, as libvorbis leaves it
+		return
 	}
 	for _, v := range s {
 		t.out = append(t.out, v*t.gain)
 	}
-	return nil
 }
 
 // place sets where the frames waiting are, from the granule position at the

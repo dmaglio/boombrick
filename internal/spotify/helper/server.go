@@ -38,8 +38,9 @@ type Stream interface {
 	// Read fills p with interleaved stereo samples, returning io.EOF at the
 	// track's end, or errTaken once a newer request has the stream.
 	Read(p []float32) (int, error)
-	// Release hands the stream back; the session may keep it a while, so a
-	// seek or a replay doesn't ask Spotify for its key again.
+	// Release hands the stream back; one let go before its end may be kept a
+	// while, so a seek or a return to the track doesn't ask Spotify for its
+	// key again.
 	Release()
 }
 

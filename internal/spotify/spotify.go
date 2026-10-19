@@ -65,10 +65,8 @@ type Track struct {
 // LikedURI names Liked Songs, for Tracks.
 const LikedURI = "spotify:collection:tracks"
 
-// Kbps are the streaming qualities Spotify offers, and the one used unless
-// another is asked for.
-var Kbps = []int{96, 160, 320}
-
+// DefaultKbps is the streaming quality used unless another is asked for, of
+// the 96, 160 and 320 kbps Spotify offers.
 const DefaultKbps = 160
 
 var (

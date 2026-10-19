@@ -166,6 +166,7 @@ func (h *Helper) crashedLocked(started time.Time) {
 	h.next = time.Now().Add(h.backoff(h.crashes))
 }
 
+// Status is where the helper's session is.
 func (h *Helper) Status(ctx context.Context) (Status, error) {
 	var s Status
 	return s, h.call(ctx, http.MethodGet, "/status", &s)
@@ -177,10 +178,12 @@ func (h *Helper) Login(ctx context.Context) (Login, error) {
 	return l, h.call(ctx, http.MethodPost, "/login", &l)
 }
 
+// Logout signs out, forgetting the credentials.
 func (h *Helper) Logout(ctx context.Context) error {
 	return h.call(ctx, http.MethodPost, "/logout", nil)
 }
 
+// Playlists lists the user's playlists.
 func (h *Helper) Playlists(ctx context.Context) ([]Playlist, error) {
 	var ps []Playlist
 	return ps, h.call(ctx, http.MethodGet, "/playlists", &ps)

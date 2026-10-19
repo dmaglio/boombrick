@@ -1,12 +1,12 @@
 package helper
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -43,9 +43,10 @@ const (
 	// retryOffline is how long a session that couldn't connect waits before
 	// a request tries again.
 	retryOffline = 10 * time.Second
-	// keepFor is how long a stream handed back is kept, and keepMax how many.
+	// keepFor is how long a stream handed back before its end is kept, and
+	// keepMax how many: each holds what it has downloaded.
 	keepFor = time.Minute
-	keepMax = 3
+	keepMax = 2
 	// Listing limits: rootlist entries per request, and the most pages and
 	// tracks a list is read to.
 	rootlistPage = 500
@@ -63,6 +64,8 @@ type Librespot struct {
 	lg    librespot.Logger // log, as go-librespot takes it
 	web   *http.Client
 	store store
+	ctx   context.Context // cancelled by Close, ending a connection under way
+	stop  context.CancelFunc
 
 	mu       sync.Mutex
 	state    *librespot.AppState
@@ -72,13 +75,13 @@ type Librespot struct {
 	country  string
 	name     string            // the account's display name, once looked up
 	names    map[string]string // display names by user ID
-	attempt  int               // bumped by every sign-in and sign-out, so a stale one is dropped
+	attempt  int               // bumped by every sign-in and sign-out and by Close, so a stale one is dropped
 	cancel   context.CancelFunc
 	retry    time.Time     // when an offline session may be tried again
 	changed  chan struct{} // closed when st changes
 	sess     *session.Session
 	busy     map[string]*stream // streams being read, by key
-	kept     []*stream          // streams let go, kept for a seek or a replay
+	kept     []*stream          // streams let go early, kept for a seek or a return to the track
 	keepTick *time.Timer
 
 	// profile looks a user's display name up.
@@ -91,11 +94,14 @@ func NewLibrespot(dir string, log *slog.Logger) (*Librespot, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
+	ctx, stop := context.WithCancel(context.Background())
 	s := &Librespot{
 		log:     log,
 		lg:      logger{log},
 		web:     &http.Client{Timeout: 30 * time.Second},
 		store:   store{filepath.Join(dir, "state.json")},
+		ctx:     ctx,
+		stop:    stop,
 		st:      spotify.SignedOut,
 		changed: make(chan struct{}),
 		busy:    map[string]*stream{},
@@ -121,16 +127,20 @@ func NewLibrespot(dir string, log *slog.Logger) (*Librespot, error) {
 	return s, nil
 }
 
-// Close ends the session and any sign-in.
+// Close ends the session, any sign-in and a connection under way.
 func (s *Librespot) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.stop()
 	if s.cancel != nil {
 		s.cancel()
+		s.cancel = nil
 	}
+	s.attempt++ // a session that opens all the same is closed
 	s.dropLocked()
 }
 
+// Status is where the session is, with the account once signed in.
 func (s *Librespot) Status() spotify.Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -145,6 +155,8 @@ func (s *Librespot) Status() spotify.Status {
 	return st
 }
 
+// Login starts a device sign-in, replacing the account, and returns its code
+// once Spotify has issued it.
 func (s *Librespot) Login(ctx context.Context) (spotify.Login, error) {
 	type result struct {
 		login spotify.Login
@@ -215,6 +227,7 @@ func (s *Librespot) Login(ctx context.Context) (spotify.Login, error) {
 	}
 }
 
+// Logout ends the session and any sign-in, and forgets the credentials.
 func (s *Librespot) Logout() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -230,6 +243,8 @@ func (s *Librespot) Logout() error {
 	return s.store.Save(s.state)
 }
 
+// Playlists lists the account's playlists, folders left out, with their
+// owners' display names.
 func (s *Librespot) Playlists(ctx context.Context) ([]spotify.Playlist, error) {
 	sess, err := s.ready(ctx)
 	if err != nil {
@@ -297,6 +312,8 @@ func profileName(ctx context.Context, sess *session.Session, user string) (strin
 	return p.Name, nil
 }
 
+// Tracks lists the tracks of the playlist or collection at uri, up to
+// maxTracks.
 func (s *Librespot) Tracks(ctx context.Context, uri string) ([]spotify.Track, error) {
 	sess, err := s.ready(ctx)
 	if err != nil {
@@ -322,9 +339,9 @@ func (s *Librespot) Tracks(ctx context.Context, uri string) ([]spotify.Track, er
 		}
 	}
 	meta := make(map[string]*metadatapb.Track, len(uris))
-	for i := 0; i < len(uris); i += metaBatch {
+	for batch := range slices.Chunk(uris, metaBatch) {
 		req := &extmetadatapb.BatchedEntityRequest{}
-		for _, u := range uris[i:min(i+metaBatch, len(uris))] {
+		for _, u := range batch {
 			req.EntityRequest = append(req.EntityRequest, &extmetadatapb.EntityRequest{
 				EntityUri: u,
 				Query:     []*extmetadatapb.ExtensionQuery{{ExtensionKind: extmetadatapb.ExtensionKind_TRACK_V4}},
@@ -355,6 +372,8 @@ func (s *Librespot) Tracks(ctx context.Context, uri string) ([]spotify.Track, er
 	return out, nil
 }
 
+// Stream opens track id from ms, taking over the stream of it already open
+// at kbps and level when there is one.
 func (s *Librespot) Stream(ctx context.Context, id string, ms int64, kbps int, level bool) (Stream, error) {
 	key := fmt.Sprintf("%s/%d/%t", id, kbps, level)
 	if t := s.claim(ctx, key); t != nil {
@@ -407,13 +426,13 @@ func (s *Librespot) ready(ctx context.Context) (*session.Session, error) {
 	}
 }
 
-// connect opens the session with the stored credentials, unless a sign-in or
-// sign-out after attempt n got there first.
+// connect opens the session with the stored credentials, unless a sign-in,
+// sign-out or Close after attempt n got there first.
 func (s *Librespot) connect(n int) {
 	s.mu.Lock()
 	opts := s.options(session.StoredCredentials{Username: s.state.Credentials.Username, Data: s.state.Credentials.Data})
 	s.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 	defer cancel()
 	sess, err := session.NewSessionFromOptions(ctx, opts)
 	s.mu.Lock()
@@ -524,11 +543,12 @@ type stream struct {
 	src      source
 	duration int64 // ms
 	until    time.Time
+	ended    bool          // read to its end: it holds the whole file by now
 	taken    atomic.Bool   // a newer request wants it: reading stops
 	free     chan struct{} // closed once the request reading it lets it go
 }
 
-func (t *stream) SampleRate() int { return trackRate }
+func (t *stream) SampleRate() int { return spotify.Rate }
 func (t *stream) Duration() int64 { return t.duration }
 func (t *stream) Release()        { t.s.release(t) }
 
@@ -536,7 +556,11 @@ func (t *stream) Read(p []float32) (int, error) {
 	if t.taken.Load() {
 		return 0, errTaken
 	}
-	return t.src.Read(p)
+	n, err := t.src.Read(p)
+	if errors.Is(err, io.EOF) {
+		t.ended = true
+	}
+	return n, err
 }
 
 // closeAll closes streams let go, off the lock: closing one waits for its
@@ -599,7 +623,8 @@ func (s *Librespot) forget(t *stream) {
 }
 
 // release takes t back from its reader and, while its session lasts, keeps
-// it for keepFor, letting the oldest go beyond keepMax.
+// it for keepFor, letting the oldest go beyond keepMax. One read to its end
+// is let go: only a seek back could use it, and it holds the whole file.
 func (s *Librespot) release(t *stream) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -607,8 +632,8 @@ func (s *Librespot) release(t *stream) {
 	if s.busy[t.key] == t {
 		delete(s.busy, t.key)
 	}
-	if t.sess != s.sess {
-		go closeAll([]*stream{t}) // the session it belongs to has gone
+	if t.ended || t.sess != s.sess {
+		go closeAll([]*stream{t})
 		return
 	}
 	t.until = time.Now().Add(keepFor)
@@ -754,17 +779,17 @@ func cover(images []*metadatapb.Image) string {
 }
 
 // productType is the account's type ("premium", "free") from the access
-// point's product info.
+// point's product info, a small XML document: its first <type>.
 func productType(payload []byte) string {
-	var info struct {
-		Products []struct {
-			Type string `xml:"type"`
-		} `xml:"product"`
-	}
-	if xml.Unmarshal(payload, &info) != nil || len(info.Products) == 0 {
+	_, rest, ok := bytes.Cut(payload, []byte("<type>"))
+	if !ok {
 		return ""
 	}
-	return info.Products[0].Type
+	typ, _, ok := bytes.Cut(rest, []byte("</type>"))
+	if !ok {
+		return ""
+	}
+	return string(bytes.TrimSpace(typ))
 }
 
 // store keeps go-librespot's state, the device ID and credentials, in a file
