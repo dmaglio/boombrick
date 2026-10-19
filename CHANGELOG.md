@@ -2,6 +2,18 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.3.2]
+
+### Added
+
+- **Pak Store:** Boombrick's first release for NextUI's Pak Store. Each release now comes with `Boombrick-PakStore.zip`, the NextUI app as the store installs it, into the same folder as an install by hand, so your library and settings carry over.
+
+### Fixed
+
+- **Play in background** with a Spotify song gives the background player up to 15 seconds to sign in to Spotify, instead of 5, so a weak Wi-Fi signal no longer fails it with "Couldn’t play in the background".
+- A background player that doesn't start in time is asked to stop instead of being killed, so it lets go of the sound card and its Spotify helper. Playing in the background again no longer fails because the sound card is busy.
+- When the sound card fails, the log says so, with the programs that have it open.
+
 ## [v0.3.1]
 
 ### Changed
