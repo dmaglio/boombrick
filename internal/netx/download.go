@@ -22,15 +22,11 @@ func Download(ctx context.Context, c *http.Client, url, path, want string, limit
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", UserAgent())
-	resp, err := c.Do(req)
+	resp, err := send(c, req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return &StatusError{Code: resp.StatusCode}
-	}
 	if resp.ContentLength > limit {
 		return ErrTooLarge
 	}

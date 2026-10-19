@@ -120,9 +120,9 @@ func part(p []string, i int) string {
 }
 
 // Checker keeps a repository's latest release for a screen that shows it:
-// it asks GitHub when told to, at most every Every, and only online. The
-// screen calls it from the UI thread and never waits; Ready receives a value
-// when an answer is in.
+// it asks GitHub when told to, at most as often as it was made to, and only
+// online. The screen calls it from the UI thread and never waits; Ready
+// receives a value when an answer is in.
 type Checker struct {
 	http   *http.Client
 	base   string

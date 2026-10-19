@@ -239,6 +239,25 @@ func TestUpdaterFails(t *testing.T) {
 	}
 }
 
+// A newer release that can't be fetched leaves the one staged before it,
+// which launch.sh still installs, showing in Settings.
+func TestUpdaterKeepsTheStagedUpdateWhenTheNextFails(t *testing.T) {
+	s := newServer(t, nextUI.Asset, pak(nextUI))
+	dir := t.TempDir()
+	if err := Stage(context.Background(), s.srv.Client(), s.release("v0.5.0"), dir, nextUI, nil); err != nil {
+		t.Fatal(err)
+	}
+	u := New(s.srv.Client(), dir, nextUI, nil)
+	defer u.Close()
+	broken := s.release("v0.6.0")
+	broken.Assets[Sums] = s.srv.URL + "/missing"
+	u.Stage(broken)
+	st := waitFor(t, u, func(st Status) bool { return !st.Staging })
+	if !st.Failed || st.Staged != "0.5.0" {
+		t.Fatalf("after a failed stage: %+v", st)
+	}
+}
+
 func TestCloseStopsAStage(t *testing.T) {
 	s := newServer(t, nextUI.Asset, pak(nextUI))
 	s.stall = make(chan struct{}, 1)

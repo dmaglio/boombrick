@@ -6,16 +6,18 @@ package netx
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
-	// Used only when the system has no CA certificates.
-	_ "golang.org/x/crypto/x509roots/fallback"
+	"golang.org/x/crypto/x509roots/fallback/bundle"
 
 	"github.com/ujjwal313/boombrick/internal/version"
 )
@@ -28,15 +30,62 @@ func UserAgent() string {
 
 // NewClient returns a client that gives up connecting after 5 s and waiting
 // for a response's headers after 10 s. Callers bound whole requests with
-// their context.
+// their context. Its transport is made on the first request, when the CA
+// certificates are read.
 func NewClient() *http.Client {
+	return &http.Client{Transport: lazyTransport(sync.OnceValue(newTransport))}
+}
+
+// lazyTransport is a transport made on its first request.
+type lazyTransport func() *http.Transport
+
+func (t lazyTransport) RoundTrip(r *http.Request) (*http.Response, error) { return t().RoundTrip(r) }
+
+func newTransport() *http.Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.DialContext = (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext
 	tr.TLSHandshakeTimeout = 5 * time.Second
 	tr.ResponseHeaderTimeout = 10 * time.Second
 	tr.MaxIdleConnsPerHost = 2
 	tr.IdleConnTimeout = 30 * time.Second
-	return &http.Client{Transport: tr}
+	tr.TLSClientConfig = &tls.Config{RootCAs: roots()}
+	return tr
+}
+
+// roots is the CA certificates servers are checked against: the system's, or
+// on a device with none, as the Brick is, those compiled in. They are read
+// on the first request rather than at start, as parsing the compiled-in ones
+// takes a while and many runs make no request.
+var roots = sync.OnceValue(func() *x509.CertPool {
+	sys, err := x509.SystemCertPool()
+	return rootsFrom(sys, err, bundled)
+})
+
+// rootsFrom is sys, the system's certificates, unless reading them failed
+// or found none; then it is bundled's.
+func rootsFrom(sys *x509.CertPool, err error, bundled func() *x509.CertPool) *x509.CertPool {
+	if err == nil && !sys.Equal(x509.NewCertPool()) {
+		return sys
+	}
+	return bundled()
+}
+
+// bundled is the CA certificates compiled in, Mozilla's, with the limits some
+// of them carry.
+func bundled() *x509.CertPool {
+	pool := x509.NewCertPool()
+	for r := range bundle.Roots() {
+		c, err := x509.ParseCertificate(r.Certificate)
+		if err != nil {
+			continue
+		}
+		if r.Constraint != nil {
+			pool.AddCertWithConstraint(c, r.Constraint)
+		} else {
+			pool.AddCert(c)
+		}
+	}
+	return pool
 }
 
 // StatusError is a response other than 200 OK.
@@ -77,22 +126,13 @@ func Post(ctx context.Context, c *http.Client, url, contentType string, body []b
 	return do(c, req, limit)
 }
 
-// do sends req with Boombrick's user agent and reads the response.
+// do sends req and reads the response.
 func do(c *http.Client, req *http.Request, limit int64) ([]byte, error) {
-	req.Header.Set("User-Agent", UserAgent())
-	resp, err := c.Do(req)
+	resp, err := send(c, req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		e := &StatusError{Code: resp.StatusCode}
-		if s, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && s > 0 {
-			e.RetryAfter = time.Duration(s) * time.Second
-		}
-		io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10)) // so the connection can be reused
-		return nil, e
-	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, err
@@ -101,4 +141,24 @@ func do(c *http.Client, req *http.Request, limit int64) ([]byte, error) {
 		return nil, ErrTooLarge
 	}
 	return body, nil
+}
+
+// send sends req with Boombrick's user agent. Any status but 200 is a
+// *StatusError, and that response is read and closed here.
+func send(c *http.Client, req *http.Request) (*http.Response, error) {
+	req.Header.Set("User-Agent", UserAgent())
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		e := &StatusError{Code: resp.StatusCode}
+		if s, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && s > 0 {
+			e.RetryAfter = time.Duration(s) * time.Second
+		}
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10)) // so the connection can be reused
+		return nil, e
+	}
+	return resp, nil
 }

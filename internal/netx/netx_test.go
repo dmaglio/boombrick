@@ -3,10 +3,14 @@ package netx
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -94,6 +98,64 @@ func TestGetStopsAtTheDeadline(t *testing.T) {
 	}
 	if time.Since(start) > time.Second {
 		t.Fatalf("Get took %v to give up", time.Since(start))
+	}
+}
+
+func TestTLSChecksTheRoots(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("secure")) }))
+	defer srv.Close()
+	ctx := context.Background()
+	var unknown x509.UnknownAuthorityError
+	if _, err := Get(ctx, NewClient(), srv.URL, 100); !errors.As(err, &unknown) {
+		t.Fatalf("a server no root vouches for: %v", err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	defer func(r func() *x509.CertPool) { roots = r }(roots)
+	roots = func() *x509.CertPool { return pool }
+	if body, err := Get(ctx, NewClient(), srv.URL, 100); err != nil || string(body) != "secure" {
+		t.Fatalf("with its certificate among the roots: %q, %v", body, err)
+	}
+}
+
+func TestRootsFrom(t *testing.T) {
+	sys := bundled()
+	if sys.Equal(x509.NewCertPool()) {
+		t.Fatal("no certificates are compiled in")
+	}
+	if got := rootsFrom(sys, nil, func() *x509.CertPool { t.Fatal("the system's were passed over"); return nil }); got != sys {
+		t.Fatal("the system's certificates weren't used")
+	}
+	for _, c := range []struct {
+		name string
+		sys  *x509.CertPool
+		err  error
+	}{
+		{"none", x509.NewCertPool(), nil},
+		{"unreadable", nil, errors.New("permission denied")},
+	} {
+		if got := rootsFrom(c.sys, c.err, bundled); got == nil || !got.Equal(sys) {
+			t.Errorf("%s: the compiled-in certificates weren't used", c.name)
+		}
+	}
+}
+
+// The Brick has no CA certificates of its own: without those compiled in,
+// every lookup and download fails. The test runs itself again with the
+// system's hidden, as on the Brick.
+func TestRootsWithoutTheSystems(t *testing.T) {
+	if os.Getenv("BOOMBRICK_ROOTS_CHILD") == "1" {
+		if !roots().Equal(bundled()) {
+			t.Fatal("the compiled-in certificates weren't used")
+		}
+		return
+	}
+	none := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRootsWithoutTheSystems$")
+	cmd.Env = append(os.Environ(), "BOOMBRICK_ROOTS_CHILD=1",
+		"SSL_CERT_FILE="+filepath.Join(none, "none.pem"), "SSL_CERT_DIR="+none)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
 	}
 }
 

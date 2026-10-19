@@ -39,11 +39,17 @@ func TestRowsKeep(t *testing.T) {
 	if err != nil || len(got) != 2 || !reflect.DeepEqual(*got["v1"], a) || !reflect.DeepEqual(*got["v2"], b) {
 		t.Fatalf("loaded %+v, %v", got, err)
 	}
-	if err := deleteRow(db, "v2"); err != nil {
+	if err := saveRows(db, nil, "v2"); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := loadRows(db); len(got) != 1 {
 		t.Fatalf("%d rows after a delete", len(got))
+	}
+	if err := saveRows(db, []row{b}, "v1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := loadRows(db); len(got) != 1 || got["v2"] == nil {
+		t.Fatalf("a write and a delete together left %v", got)
 	}
 	if _, err := db.Exec(`INSERT INTO tracks (path, size, mtime, artist, album, title, number, added) VALUES
 		('/m/1.opus', 1000, 0, '', '', '', 0, 0), ('/m/2.opus', 2500, 0, '', '', '', 0, 0)`); err != nil {

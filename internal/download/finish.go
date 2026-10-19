@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -49,6 +51,11 @@ type finisher struct {
 	formats library.Formats
 	remux   func(src, dst string, t remux.Tags) error
 	log     *slog.Logger
+
+	// The album page fetched last and its ID: an album's songs often come one
+	// after another.
+	page   ytmusic.AlbumPage
+	pageID string
 }
 
 // finish files the WebM at src as song s, tagged, in the Music folder, and
@@ -60,15 +67,41 @@ type finisher struct {
 // The finisher runs on one goroutine, which is what makes picking a free name
 // here, before the remux writes it, safe.
 func (f *finisher) finish(ctx context.Context, s ytmusic.Song, src string) (path string, size int64, replaced bool, err error) {
+	// Playing a song that isn't filed yet waits for these lookups, so the
+	// lyrics are looked for while the album's page and the cover are fetched.
+	// They need the album's name, which only the page has for a song without
+	// one.
+	var words string
+	var wg sync.WaitGroup
+	lookUp := func(sg ytmusic.Song) {
+		wg.Go(func() {
+			// The service guards the finisher's goroutine, not this one: a
+			// lookup that panics leaves the song without lyrics instead.
+			defer func() {
+				if v := recover(); v != nil {
+					f.log.Error("recovered", "loop", "lyrics", "panic", v, "stack", string(debug.Stack()))
+				}
+			}()
+			words = f.words(ctx, sg)
+		})
+	}
+	named := s.Album != ""
+	if named {
+		lookUp(s)
+	}
 	s = f.complete(ctx, s)
+	if !named {
+		lookUp(s)
+	}
+	picture := f.cover(ctx, s.Thumb)
+	wg.Wait()
 	dst := place(f.music, s)
 	replaced = taken(dst) // place only picks a taken name that is the song's own
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return "", 0, false, err
 	}
 	t := remux.Tags{Title: s.Title, Artist: s.Artist, Album: s.Album, AlbumArtist: s.AlbumArtist, Track: s.Number,
-		Year: s.Year, Lyrics: f.words(ctx, s), Picture: f.cover(ctx, s.Thumb),
-		Extra: [][2]string{{youTubeIDTag, s.VideoID}}}
+		Year: s.Year, Lyrics: words, Picture: picture, Extra: [][2]string{{youTubeIDTag, s.VideoID}}}
 	if s.SpotifyID != "" {
 		t.Extra = append(t.Extra, [2]string{library.SpotifyIDTag, s.SpotifyID})
 	}
@@ -100,10 +133,7 @@ func (f *finisher) finish(ctx context.Context, s ytmusic.Song, src string) (path
 // from its album's page, and makes a song with no album a single.
 func (f *finisher) complete(ctx context.Context, s ytmusic.Song) ytmusic.Song {
 	if s.AlbumID != "" && s.Number == 0 && f.albums != nil {
-		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		a, err := f.albums.Album(ctx, s.AlbumID)
-		cancel()
-		if err == nil {
+		if a, err := f.album(ctx, s.AlbumID); err == nil {
 			for i, t := range a.Tracks {
 				if t.VideoID == s.VideoID {
 					full := a.Song(i)
@@ -120,6 +150,20 @@ func (f *finisher) complete(ctx context.Context, s ytmusic.Song) ytmusic.Song {
 	s.Album = cmp.Or(s.Album, s.Title)
 	s.AlbumArtist = cmp.Or(s.AlbumArtist, s.Artist)
 	return s
+}
+
+// album fetches the album page id, unless it was the last one fetched.
+func (f *finisher) album(ctx context.Context, id string) (ytmusic.AlbumPage, error) {
+	if id == f.pageID {
+		return f.page, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	a, err := f.albums.Album(ctx, id)
+	if err == nil {
+		f.page, f.pageID = a, id
+	}
+	return a, err
 }
 
 // cover fetches the song's picture to embed, or nil. Google's image server

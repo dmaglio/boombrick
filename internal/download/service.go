@@ -45,8 +45,7 @@ type Entry struct {
 	Progress float32 // 0 to 1, while downloading
 	Speed    float64 // bytes a second, while downloading
 	Failure  Failure
-	Bytes    int64     // a saved song's size
-	Finished time.Time // when it was saved
+	Bytes    int64 // a saved song's size
 }
 
 // Storage is the SD card's space, in bytes; Music is the library's files.
@@ -153,13 +152,14 @@ type Service struct {
 
 	mu          sync.Mutex
 	rows        map[string]*row
-	dirty       map[string]bool  // songs whose rows the calls changed or forgot, to write
-	scrap       map[string]bool  // songs removed whose partial files go; they wait for that
-	prune       bool             // forget saved songs whose files are gone, when next writing
-	live        map[string]Event // the latest progress of the song under way
-	landing     []landed         // files waiting to be finished
-	finishing   string           // the file being finished
-	finishingID string           // and its song
+	filed       map[string]string // songs saved before today, which no list shows: only their files
+	dirty       map[string]bool   // songs whose rows the calls changed or forgot, to write
+	scrap       map[string]bool   // songs removed whose partial files go; they wait for that
+	prune       bool              // forget saved songs whose files are gone, when next writing
+	live        map[string]Event  // the latest progress of the song under way
+	landing     []landed          // files waiting to be finished
+	finishing   string            // the file being finished
+	finishingID string            // and its song
 	batch       []string
 	settled     map[string]bool // the batch's songs that have landed or failed
 	stopBatch   context.CancelFunc
@@ -198,7 +198,7 @@ func New(opts Options) (*Service, error) {
 	bin := filepath.Join(opts.Data, "bin")
 	parts := filepath.Join(opts.Data, "cache", "downloads")
 	s := newService(opts, rows, NewInstaller(opts.HTTP, bin), func(program, formats string) fetcher {
-		return &Runner{Program: program, QJS: opts.QJS, Cache: filepath.Join(bin, "cache"), Parts: parts, Formats: formats}
+		return &Runner{Program: program, QJS: opts.QJS, Cache: filepath.Join(bin, "cache"), Parts: parts, Formats: formats, Log: opts.Log}
 	}, parts)
 	s.start()
 	return s, nil
@@ -210,14 +210,20 @@ func newService(opts Options, rows map[string]*row, inst installer, runner func(
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	var clock int64
-	for _, r := range rows {
+	filed := map[string]string{}
+	since := today()
+	for id, r := range rows {
 		clock = max(clock, r.added, r.priority)
+		if r.state == saved && r.finished < since {
+			filed[id] = r.path
+			delete(rows, id)
+		}
 	}
 	return &Service{opts: opts, log: opts.Log, inst: inst, runner: runner, parts: parts, space: diskSpace,
 		offlineWait: 15 * time.Second, stopWait: time.Minute, panicWait: time.Second, writeWait: 5 * time.Second,
 		ctx: ctx, cancel: cancel,
 		wake: make(chan struct{}, 1), land: make(chan struct{}, 1), flushes: make(chan struct{}, 1),
-		ready: make(chan struct{}, 1), tool: make(chan struct{}, 1), rows: rows, dirty: map[string]bool{},
+		ready: make(chan struct{}, 1), tool: make(chan struct{}, 1), rows: rows, filed: filed, dirty: map[string]bool{},
 		scrap: map[string]bool{}, live: map[string]Event{}, netFails: map[string]int{}, clock: clock, version: 1,
 		fin: &finisher{db: opts.DB, music: opts.Music, http: opts.HTTP, albums: opts.Albums, lyrics: opts.Lyrics,
 			formats: opts.Formats, remux: remux.File, log: opts.Log}}
@@ -292,6 +298,9 @@ func (s *Service) Get(songs []ytmusic.Song) {
 		return
 	}
 	for _, sg := range songs {
+		if _, ok := s.filed[sg.VideoID]; ok {
+			continue
+		}
 		r, ok := s.rows[sg.VideoID]
 		switch {
 		case !ok:
@@ -375,20 +384,22 @@ func (s *Service) Retry(videoID string, update bool) {
 func (s *Service) Remove(videoID string) {
 	s.mu.Lock()
 	r, ok := s.rows[videoID]
-	if !ok || s.closed {
+	_, filed := s.filed[videoID]
+	if !ok && !filed || s.closed {
 		s.mu.Unlock()
 		return
 	}
 	delete(s.rows, videoID)
+	delete(s.filed, videoID)
 	delete(s.live, videoID)
 	delete(s.netFails, videoID)
-	if s.stopBatch != nil && slices.Contains(s.batch, videoID) && r.state == queued && !r.landed {
-		s.stopBatch()
-	}
-	s.dirty[videoID] = true
-	if r.state != saved {
+	if ok && r.state != saved {
+		if s.stopBatch != nil && slices.Contains(s.batch, videoID) && r.state == queued && !r.landed {
+			s.stopBatch()
+		}
 		s.scrap[videoID] = true
 	}
+	s.dirty[videoID] = true
 	s.outcomes = append(s.outcomes, Outcome{VideoID: videoID, Removed: true})
 	s.queueChangedLocked()
 	s.mu.Unlock()
@@ -466,6 +477,9 @@ func (s *Service) give() { <-s.tool }
 func (s *Service) State(videoID string) (media.DownloadState, float32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.filed[videoID]; ok {
+		return media.Saved, 1
+	}
 	return s.stateLocked(s.rows[videoID])
 }
 
@@ -550,6 +564,14 @@ func (s *Service) UpdateDownloader() {
 	s.notify()
 }
 
+// Version changes whenever a download's state or the queue does; it is
+// Status().Version without building the status.
+func (s *Service) Version() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.version
+}
+
 // Paused reports whether the queue is paused.
 func (s *Service) Paused() bool {
 	s.mu.Lock()
@@ -571,7 +593,8 @@ func (s *Service) Path(videoID string) (string, bool) {
 	if r, ok := s.rows[videoID]; ok && r.state == saved {
 		return r.path, true
 	}
-	return "", false
+	path, ok := s.filed[videoID]
+	return path, ok
 }
 
 // Outcomes returns the downloads that ended since it was last called.
@@ -591,24 +614,20 @@ func (s *Service) Status() Status {
 	if s.statusOf == s.version {
 		return s.status
 	}
-	y, m, d := time.Now().Date()
-	today := time.Date(y, m, d, 0, 0, 0, 0, time.Local).UnixMilli()
+	since := today()
 	type item struct {
 		e Entry
 		r *row
 	}
 	var items []item
 	for _, r := range s.rows {
-		if r.state == saved && r.finished < today {
+		if r.state == saved && r.finished < since {
 			continue
 		}
 		e := Entry{Song: r.song, Failure: r.failure, Bytes: r.bytes}
 		e.State, e.Progress = s.stateLocked(r)
 		if e.State == media.Downloading {
 			e.Speed = s.live[r.song.VideoID].Speed
-		}
-		if r.state == saved {
-			e.Finished = time.UnixMilli(r.finished)
 		}
 		items = append(items, item{e, r})
 	}
@@ -631,6 +650,13 @@ func (s *Service) Status() Status {
 		Storage: s.storage, Version: s.version}
 	s.statusOf = s.version
 	return s.status
+}
+
+// today is when the day began, in ms: the Downloads tab lists the songs
+// saved since.
+func today() int64 {
+	y, m, d := time.Now().Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.Local).UnixMilli()
 }
 
 func (s *Service) changedLocked() { s.version++ }
@@ -707,8 +733,9 @@ func (s *Service) flush() {
 }
 
 // writeDirty writes the rows the calls changed as they are now, and deletes
-// those they forgot; one that can't be written is tried again a little later.
-// It returns the songs whose partial files go, and whether to prune.
+// those they forgot, in one transaction, which is tried again a little later
+// if it fails. It returns the songs whose partial files go, and whether to
+// prune.
 func (s *Service) writeDirty() (scrap []string, prune bool) {
 	s.write.Lock()
 	defer s.write.Unlock()
@@ -728,22 +755,13 @@ func (s *Service) writeDirty() (scrap []string, prune bool) {
 	}
 	prune, s.prune = s.prune, false
 	s.mu.Unlock()
-	var again []string
-	if err := saveRows(s.opts.DB, now); err != nil {
+	if err := saveRows(s.opts.DB, now, gone...); err != nil {
 		s.log.Warn("save downloads", "err", err)
-		for _, r := range now {
-			again = append(again, r.song.VideoID)
-		}
-	}
-	for _, id := range gone {
-		if err := deleteRow(s.opts.DB, id); err != nil {
-			s.log.Warn("forget a download", "id", id, "err", err)
-			again = append(again, id)
-		}
-	}
-	if len(again) > 0 {
 		s.mu.Lock()
-		for _, id := range again {
+		for _, r := range now {
+			s.dirty[r.song.VideoID] = true
+		}
+		for _, id := range gone {
 			s.dirty[id] = true
 		}
 		s.mu.Unlock()
@@ -794,23 +812,29 @@ func (s *Service) pruneLost() {
 		return
 	}
 	var gone []row
+	var ids []string
 	for _, r := range lost {
 		if _, err := os.Stat(r.path); !os.IsNotExist(err) {
 			continue // still there, only not indexed yet
 		}
-		if err := deleteRow(s.opts.DB, r.song.VideoID); err != nil {
-			s.log.Warn("forget a download", "id", r.song.VideoID, "err", err)
-			continue
-		}
 		gone = append(gone, r)
+		ids = append(ids, r.song.VideoID)
 	}
 	if len(gone) == 0 {
 		return
 	}
+	if err := saveRows(s.opts.DB, nil, ids...); err != nil {
+		s.log.Warn("forget downloads the library lost", "err", err)
+		return
+	}
 	s.mu.Lock()
 	for _, g := range gone {
-		if r := s.rows[g.song.VideoID]; r != nil && r.state == saved && r.path == g.path {
-			delete(s.rows, g.song.VideoID)
+		id := g.song.VideoID
+		if r := s.rows[id]; r != nil && r.state == saved && r.path == g.path {
+			delete(s.rows, id)
+		}
+		if p, ok := s.filed[id]; ok && p == g.path {
+			delete(s.filed, id)
 		}
 	}
 	s.changedLocked()

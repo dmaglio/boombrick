@@ -115,7 +115,7 @@ func TestComplete(t *testing.T) {
 	if single.Album != "Harbour Static" || single.AlbumArtist != "Vela" {
 		t.Fatalf("a song without an album: %+v", single)
 	}
-	f.albums = fakeAlbums{page: nightDrivePage, err: errors.New("offline")}
+	f = &finisher{albums: fakeAlbums{page: nightDrivePage, err: errors.New("offline")}, log: slog.New(slog.DiscardHandler)}
 	if s := f.complete(context.Background(), ytmusic.Song{VideoID: "v1", Title: "Night Drive Theory", Artist: "Lumen Coast",
 		Album: "Night Drive Theory", AlbumID: "MPREb_nd"}); s.Number != 0 || s.AlbumArtist != "Lumen Coast" {
 		t.Fatalf("a failed lookup: %+v", s)
@@ -331,6 +331,116 @@ func TestFinishPlainLyrics(t *testing.T) {
 	}
 	if tags.Lyrics != "plain" {
 		t.Fatalf("lyrics %q", tags.Lyrics)
+	}
+}
+
+// meeting is an album page and lyrics lookup that each wait, for up to 5 s,
+// for the other to start: one after the other, the first fails.
+type meeting struct {
+	albums, lyrics chan struct{}
+	album          string // the album the lyrics were asked for
+}
+
+func (m *meeting) met(c chan struct{}) bool {
+	select {
+	case <-c:
+		return true
+	case <-time.After(5 * time.Second):
+		return false
+	}
+}
+
+func (m *meeting) Album(ctx context.Context, id string) (ytmusic.AlbumPage, error) {
+	close(m.albums)
+	if !m.met(m.lyrics) {
+		return ytmusic.AlbumPage{}, errors.New("the lyrics weren't looked for meanwhile")
+	}
+	return nightDrivePage, nil
+}
+
+func (m *meeting) Get(ctx context.Context, t lyrics.Track) (lyrics.Result, error) {
+	close(m.lyrics)
+	m.album = t.Album
+	if !m.met(m.albums) {
+		return lyrics.Result{}, errors.New("the album page wasn't fetched meanwhile")
+	}
+	return lyrics.Result{Synced: "[00:01.00]Overpass"}, nil
+}
+
+func TestFinishLooksUpTheLyricsAlongsideTheAlbum(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	var tags remux.Tags
+	f, _, src := testFinisher(t, srv, &tags)
+	m := &meeting{albums: make(chan struct{}), lyrics: make(chan struct{})}
+	f.albums, f.lyrics = m, m
+	s := ytmusic.Song{VideoID: "v3", Title: "Overpass", Artist: "Lumen Coast & Vela", Album: "Night Drive Theory",
+		AlbumID: "MPREb_nd", Duration: 200 * time.Second}
+	if _, _, _, err := f.finish(context.Background(), s, src); err != nil {
+		t.Fatal(err)
+	}
+	if tags.Track != 3 || tags.Lyrics != "[00:01.00]Overpass" || m.album != "Night Drive Theory" {
+		t.Fatalf("tags %+v; the lyrics asked for album %q", tags, m.album)
+	}
+}
+
+// askedLyrics notes the album it was asked for.
+type askedLyrics struct{ album string }
+
+func (a *askedLyrics) Get(ctx context.Context, t lyrics.Track) (lyrics.Result, error) {
+	a.album = t.Album
+	return lyrics.Result{}, lyrics.ErrNotFound
+}
+
+func TestFinishAsksForTheLyricsWithTheAlbumPagesName(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	var tags remux.Tags
+	f, _, src := testFinisher(t, srv, &tags)
+	asked := &askedLyrics{}
+	f.albums, f.lyrics = fakeAlbums{page: nightDrivePage}, asked
+	s := ytmusic.Song{VideoID: "v3", Title: "Overpass", Artist: "Lumen Coast & Vela", AlbumID: "MPREb_nd"}
+	if _, _, _, err := f.finish(context.Background(), s, src); err != nil {
+		t.Fatal(err)
+	}
+	if asked.album != "Night Drive Theory" {
+		t.Fatalf("the lyrics were asked for album %q", asked.album)
+	}
+	asked.album = ""
+	os.WriteFile(src, []byte("webm"), 0o644)
+	f.albums = nil
+	if _, _, _, err := f.finish(context.Background(), ytmusic.Song{VideoID: "s1", Title: "Harbour Static", Artist: "Vela"}, src); err != nil {
+		t.Fatal(err)
+	}
+	if asked.album != "Harbour Static" {
+		t.Fatalf("a single's lyrics were asked for album %q", asked.album)
+	}
+}
+
+// countedAlbums counts the pages fetched.
+type countedAlbums struct {
+	fakeAlbums
+	n int
+}
+
+func (c *countedAlbums) Album(ctx context.Context, id string) (ytmusic.AlbumPage, error) {
+	c.n++
+	return c.fakeAlbums.Album(ctx, id)
+}
+
+func TestCompleteFetchesAnAlbumOnceForItsSongs(t *testing.T) {
+	albums := &countedAlbums{fakeAlbums: fakeAlbums{page: nightDrivePage}}
+	f := &finisher{albums: albums, log: slog.New(slog.DiscardHandler)}
+	for _, id := range []string{"v1", "v3"} {
+		f.complete(context.Background(), ytmusic.Song{VideoID: id, Title: "t", AlbumID: "MPREb_nd"})
+	}
+	if s := f.complete(context.Background(), ytmusic.Song{VideoID: "v3", AlbumID: "MPREb_nd"}); albums.n != 1 || s.Number != 3 {
+		t.Fatalf("%d fetches; track %d", albums.n, s.Number)
+	}
+	f.complete(context.Background(), ytmusic.Song{VideoID: "x1", AlbumID: "MPREb_other"})
+	f.complete(context.Background(), ytmusic.Song{VideoID: "x2", AlbumID: "MPREb_other"})
+	if albums.n != 3 {
+		t.Fatalf("%d fetches; an album that failed should be asked for again", albums.n)
 	}
 }
 

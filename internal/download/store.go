@@ -55,9 +55,10 @@ func loadRows(db *sql.DB) (map[string]*row, error) {
 	return rows, rs.Err()
 }
 
-// saveRows writes rows, new or changed, in one transaction.
-func saveRows(db *sql.DB, rows []row) error {
-	if len(rows) == 0 {
+// saveRows writes rows, new or changed, and deletes those of the songs gone,
+// in one transaction.
+func saveRows(db *sql.DB, rows []row, gone ...string) error {
+	if len(rows) == 0 && len(gone) == 0 {
 		return nil
 	}
 	tx, err := db.Begin()
@@ -84,6 +85,16 @@ func saveRows(db *sql.DB, rows []row) error {
 			return err
 		}
 	}
+	del, err := tx.Prepare(`DELETE FROM downloads WHERE video_id = ?`)
+	if err != nil {
+		return err
+	}
+	defer del.Close()
+	for _, id := range gone {
+		if _, err := del.Exec(id); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -105,11 +116,6 @@ func unindexed(db *sql.DB) ([]row, error) {
 		out = append(out, r)
 	}
 	return out, rs.Err()
-}
-
-func deleteRow(db *sql.DB, videoID string) error {
-	_, err := db.Exec(`DELETE FROM downloads WHERE video_id = ?`, videoID)
-	return err
 }
 
 // musicBytes is the size of the library's files, for the Downloads tab's

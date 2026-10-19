@@ -235,11 +235,9 @@ func (u *Updater) stage(r release.Release) {
 	err := Stage(ctx, u.http, r, u.dir, u.pak, u.progress)
 	u.mu.Lock()
 	u.st.Staging = false
-	if err != nil {
-		u.st.Failed = true
-	} else {
-		u.st.Staged = r.Version()
-	}
+	u.st.Failed = err != nil
+	// A stage that failed early leaves the update staged before it in place.
+	u.st.Staged, _ = Staged(u.dir)
 	u.mu.Unlock()
 	switch {
 	case err == nil:

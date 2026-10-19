@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -22,13 +21,13 @@ import (
 
 // Runner runs yt-dlp.
 type Runner struct {
-	Program string   // yt-dlp
-	Args    []string // put before yt-dlp's own
-	Env     []string // added to yt-dlp's environment
-	QJS     string   // QuickJS, yt-dlp's JavaScript runtime; "" leaves yt-dlp to find one
-	Cache   string   // yt-dlp's cache, kept between runs
-	Parts   string   // where files are downloaded to
-	Formats string   // which formats, in order of preference
+	Program string       // yt-dlp
+	Env     []string     // added to yt-dlp's environment
+	QJS     string       // QuickJS, yt-dlp's JavaScript runtime; "" leaves yt-dlp to find one
+	Cache   string       // yt-dlp's cache, kept between runs
+	Parts   string       // where files are downloaded to
+	Formats string       // which formats, in order of preference
+	Log     *slog.Logger // nil discards
 }
 
 // Event is something yt-dlp reported about one song: progress, the file
@@ -58,7 +57,7 @@ const maxLine = 1 << 20
 
 // args is the command line for a batch listed in the file batch.
 func (r *Runner) args(batch string) []string {
-	args := append(slices.Clone(r.Args), "--ignore-config", "--no-playlist", "-f", r.Formats)
+	args := []string{"--ignore-config", "--no-playlist", "-f", r.Formats}
 	if r.QJS != "" {
 		args = append(args, "--js-runtimes", "quickjs:"+r.QJS)
 	}
@@ -188,7 +187,9 @@ func (r *Runner) Run(ctx context.Context, ids []string, event func(Event)) error
 	})
 	if rerr != nil {
 		// Let yt-dlp finish writing rather than break its pipe.
-		slog.Warn("read yt-dlp's output", "err", rerr)
+		if r.Log != nil {
+			r.Log.Warn("read yt-dlp's output", "err", rerr)
+		}
 		io.Copy(io.Discard, pr)
 	}
 	pr.Close()
@@ -291,8 +292,8 @@ func number(s string) int64 {
 // own search can't be read. The results are songs: videos with their
 // channel as the artist.
 func (r *Runner) Search(ctx context.Context, query string) ([]ytmusic.Item, error) {
-	args := append(slices.Clone(r.Args), "--ignore-config", "--flat-playlist", "--no-warnings",
-		"--print", "%(id)s\t%(duration)s\t%(channel)s\t%(title)s", "ytsearch10:"+query)
+	args := []string{"--ignore-config", "--flat-playlist", "--no-warnings",
+		"--print", "%(id)s\t%(duration)s\t%(channel)s\t%(title)s", "ytsearch10:" + query}
 	out, err := r.command(ctx, args).Output()
 	if ctx.Err() != nil {
 		return nil, ctx.Err()

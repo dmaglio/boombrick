@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDownload(t *testing.T) {
@@ -48,6 +50,48 @@ func TestDownload(t *testing.T) {
 	}
 	if err := Download(context.Background(), srv.Client(), srv.URL, path, want, 512<<10, nil); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("over the limit: %v", err)
+	}
+}
+
+// trackedBody is a response body that notes whether it was read to its end
+// and closed.
+type trackedBody struct {
+	io.Reader
+	read, closed bool
+}
+
+func (b *trackedBody) Read(p []byte) (int, error) {
+	n, err := b.Reader.Read(p)
+	b.read = b.read || err == io.EOF
+	return n, err
+}
+
+func (b *trackedBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+type roundTripper func(*http.Request) (*http.Response, error)
+
+func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestDownloadReportsTheStatus(t *testing.T) {
+	body := &trackedBody{Reader: strings.NewReader("busy")}
+	c := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Retry-After": {"7"}},
+			Body: body, Request: r}, nil
+	})}
+	path := filepath.Join(t.TempDir(), "file")
+	err := Download(context.Background(), c, "https://example.com/file", path, strings.Repeat("0", 64), 1<<20, nil)
+	var se *StatusError
+	if !errors.As(err, &se) || se.Code != 503 || se.RetryAfter != 7*time.Second {
+		t.Fatalf("503 gave %v", err)
+	}
+	if !body.read || !body.closed {
+		t.Fatal("the body wasn't read to its end and closed, so the connection can't be reused")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("a file was made for an error")
 	}
 }
 

@@ -570,6 +570,42 @@ func TestStatus(t *testing.T) {
 	}
 }
 
+// Songs saved before today are on no list, so only their files are kept. They
+// still answer State and Path, are left be by Get, and can be removed.
+func TestOlderSavedSongsKeepOnlyTheirFiles(t *testing.T) {
+	e := newEnv(t)
+	e.s.Close()
+	saveRows(e.db, []row{
+		{song: song("old", "Old", 1), state: saved, path: "/m/old.opus", finished: time.Now().Add(-36 * time.Hour).UnixMilli()},
+		{song: song("new", "New", 2), state: saved, path: "/m/new.opus", finished: time.Now().UnixMilli()},
+	})
+	e.start(t)
+	e.s.mu.Lock()
+	_, full := e.s.rows["old"]
+	e.s.mu.Unlock()
+	if full {
+		t.Fatal("an older saved song is kept in full")
+	}
+	e.s.Get([]ytmusic.Song{song("old", "Old", 1)})
+	if st, _ := e.s.State("old"); st != media.Saved {
+		t.Fatalf("asked for again, it is %v", st)
+	}
+	if p, ok := e.s.Path("old"); !ok || p != "/m/old.opus" {
+		t.Fatalf("Path = %q, %v", p, ok)
+	}
+	if en := e.s.Status().Entries; len(en) != 1 || en[0].Song.VideoID != "new" {
+		t.Fatalf("entries %+v", en)
+	}
+	e.s.Remove("old")
+	if st, _ := e.s.State("old"); st != media.Available {
+		t.Fatalf("removed, yet %v", st)
+	}
+	if o := e.s.Outcomes(); len(o) != 1 || o[0] != (Outcome{VideoID: "old", Removed: true}) {
+		t.Fatalf("outcomes %+v", o)
+	}
+	eventually(t, "its row deleted", func() bool { rows, _ := loadRows(e.db); return rows["old"] == nil && rows["new"] != nil })
+}
+
 // slowInstall makes the first install wait until the returned func is called,
 // and returns a channel that says when it has begun.
 func (e *env) slowInstall() (begun <-chan struct{}, release func()) {
