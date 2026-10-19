@@ -28,6 +28,13 @@ func TestOpenAppliesMigrationsOnce(t *testing.T) {
 	if mode != "wal" {
 		t.Fatalf("journal_mode = %q, want wal", mode)
 	}
+	var pages int
+	if err := s.DB.QueryRow(`PRAGMA cache_size`).Scan(&pages); err != nil {
+		t.Fatal(err)
+	}
+	if pages != -512 {
+		t.Fatalf("cache_size = %d, want -512", pages)
+	}
 
 	if _, err := s.DB.Exec(`INSERT INTO settings (key, value) VALUES ('k', 'v')`); err != nil {
 		t.Fatal(err)

@@ -524,8 +524,12 @@ func TestFilesBySpotifyID(t *testing.T) {
 	if _, ok, _ := FileOf(db, ""); ok {
 		t.Fatal("no ID found a file")
 	}
-	ids, err := SpotifyIDs(db)
-	if err != nil || len(ids) != 1 || !ids["4Q0qVhFQa7j6jRKzo3HDmP"] {
-		t.Fatalf("SpotifyIDs = %v, %v", ids, err)
+	var id, parent, unused int
+	var plan string
+	if err := db.QueryRow(`EXPLAIN QUERY PLAN `+fileOfQuery, "x").Scan(&id, &parent, &unused, &plan); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan, "tracks_spotify") {
+		t.Fatalf("FileOf's plan is %q, not a search of tracks_spotify", plan)
 	}
 }

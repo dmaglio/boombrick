@@ -14,8 +14,10 @@ type Store struct {
 }
 
 // Open opens or creates the database at path and brings its schema up to date.
+// Each connection keeps 512 KiB of pages rather than SQLite's 2 MiB: the
+// cache is C memory, outside Go's memory limit.
 func Open(path string) (*Store, error) {
-	dsn := path + "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on&_synchronous=NORMAL"
+	dsn := path + "?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_cache_size=-512"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, err

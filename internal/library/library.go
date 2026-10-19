@@ -5,6 +5,7 @@ package library
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -260,35 +261,21 @@ func describe(root, path string, f Formats) Track {
 	return t
 }
 
+// fileOfQuery finds a track by its Spotify ID. SQLite uses the partial index
+// tracks_spotify only when the query repeats the index's condition.
+const fileOfQuery = `SELECT path FROM tracks WHERE spotify_id = ? AND spotify_id != '' LIMIT 1`
+
 // FileOf is the path of the library's file of Spotify song id, as an import
 // downloaded it; ok is false when there is none.
 func FileOf(db *sql.DB, id string) (path string, ok bool, err error) {
 	if id == "" {
 		return "", false, nil
 	}
-	err = db.QueryRow(`SELECT path FROM tracks WHERE spotify_id = ? LIMIT 1`, id).Scan(&path)
-	if err == sql.ErrNoRows {
+	err = db.QueryRow(fileOfQuery, id).Scan(&path)
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
 	return path, err == nil, err
-}
-
-// SpotifyIDs are the Spotify songs the library has files of.
-func SpotifyIDs(db *sql.DB) (map[string]bool, error) {
-	rows, err := db.Query(`SELECT spotify_id FROM tracks WHERE spotify_id != ''`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	ids := map[string]bool{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids[id] = true
-	}
-	return ids, rows.Err()
 }
 
 func nullable(v float64, ok bool) any {
@@ -394,7 +381,7 @@ const variousArtists = "Various Artists"
 // shared artist, or "Various Artists", and its tracks' AlbumArtist is set to
 // match so every part of the app keys the album the same way.
 func Albums(db *sql.DB) ([]Album, error) {
-	rows, err := db.Query(`SELECT id, path, artist, album_artist, album, title, disc, number, year, gain, peak, album_gain, album_peak,
+	rows, err := db.Query(`SELECT path, artist, album_artist, album, title, disc, number, year, gain, peak, album_gain, album_peak,
 			duration_ms, added, mtime, spotify_id
 		FROM tracks ORDER BY disc, number, title`)
 	if err != nil {
@@ -486,7 +473,7 @@ func AlbumDir(path string) string {
 func scanTrack(rows *sql.Rows) (t Track, added, mtime int64, err error) {
 	var gain, peak, albumGain, albumPeak sql.NullFloat64
 	var ms int64
-	if err := rows.Scan(&t.ID, &t.Path, &t.Artist, &t.AlbumArtist, &t.Album, &t.Title, &t.Disc, &t.Number,
+	if err := rows.Scan(&t.Path, &t.Artist, &t.AlbumArtist, &t.Album, &t.Title, &t.Disc, &t.Number,
 		&t.Year, &gain, &peak, &albumGain, &albumPeak, &ms, &added, &mtime, &t.SpotifyID); err != nil {
 		return Track{}, 0, 0, err
 	}

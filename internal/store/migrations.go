@@ -138,6 +138,10 @@ var migrations = []string{
 	`ALTER TABLE playback_state ADD COLUMN playing INTEGER NOT NULL DEFAULT 0;
 	ALTER TABLE playback_state ADD COLUMN sleep_mode INTEGER NOT NULL DEFAULT 0;
 	ALTER TABLE playback_state ADD COLUMN sleep_at INTEGER NOT NULL DEFAULT 0`,
+	// An import looks songs up in the downloads by Spotify ID. No query
+	// reads tracks by artist and album.
+	`CREATE INDEX downloads_spotify ON downloads (spotify_id) WHERE spotify_id != '';
+	DROP INDEX tracks_album`,
 }
 
 func migrate(db *sql.DB) error {
