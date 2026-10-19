@@ -51,6 +51,16 @@ func (s *saves) handOver(f func() error) error {
 	return err
 }
 
+// handOverWait is how long a hand-over waits for the background player to
+// play what st is on. A Spotify song waits longer: the player signs in to
+// Spotify itself first, which on a weak Wi-Fi signal takes seconds.
+func handOverWait(st player.State) time.Duration {
+	if st.Track.Streamed() {
+		return 15 * time.Second
+	}
+	return 5 * time.Second
+}
+
 // place is where playback is, to the second, with the rest of what a save
 // records that can change without the queue's version.
 type place struct {

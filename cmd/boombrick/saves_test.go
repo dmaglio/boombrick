@@ -98,3 +98,16 @@ func TestKeepSaving(t *testing.T) {
 		<-done
 	})
 }
+
+// A Spotify song gives the background player time to sign in to Spotify
+// itself before it plays; a file plays at once.
+func TestHandOverWait(t *testing.T) {
+	file := player.State{Track: player.Track{Path: "/m/a.flac"}}
+	stream := player.State{Track: player.Track{SpotifyID: "4Q0qVhFQa7j6jRKzo3HDmP"}}
+	if got := handOverWait(file); got != 5*time.Second {
+		t.Errorf("a file waits %v, want 5s", got)
+	}
+	if got := handOverWait(stream); got != 15*time.Second {
+		t.Errorf("a Spotify song waits %v, want 15s", got)
+	}
+}

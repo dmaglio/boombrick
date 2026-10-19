@@ -14,6 +14,8 @@ import (
 //	hold      takes the lock, says it plays, and stops on SIGTERM
 //	stubborn  the same, but ignores SIGTERM
 //	silent    takes the lock and never says it plays
+//	slow      the same, but on SIGTERM writes the lock's path plus ".stopped" and stops
+//	deaf      the same as silent, but ignores SIGTERM
 //	starter   starts a holder, then exits at once
 //	nopid     takes the lock without writing its ID, says it plays, and stops on SIGTERM
 func TestMain(m *testing.M) {
@@ -30,6 +32,8 @@ func TestMain(m *testing.M) {
 			os.Exit(2)
 		}
 		time.Sleep(time.Minute)
+	case "slow", "deaf":
+		slow(lock, os.Getenv("BACKGROUND_TEST") == "deaf")
 	case "nopid":
 		nopid(lock)
 	case "starter":
@@ -55,6 +59,27 @@ func hold(lock string, stubborn bool) {
 	ready()
 	select {
 	case <-stop:
+	case <-time.After(time.Minute):
+	}
+	l.Release()
+}
+
+// slow takes the lock and never says it plays, like a player still signing in
+// to Spotify. Asked to stop, it notes that it did, unless it is deaf.
+func slow(lock string, deaf bool) {
+	l, err := Acquire(lock)
+	if err != nil {
+		os.Exit(2)
+	}
+	stop := make(chan os.Signal, 1)
+	if deaf {
+		signal.Ignore(syscall.SIGTERM)
+	} else {
+		signal.Notify(stop, syscall.SIGTERM)
+	}
+	select {
+	case <-stop:
+		os.WriteFile(lock+".stopped", nil, 0o644)
 	case <-time.After(time.Minute):
 	}
 	l.Release()

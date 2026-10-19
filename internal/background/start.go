@@ -15,10 +15,16 @@ import (
 // readyEnv names the descriptor on which a background player says it plays.
 const readyEnv = "BOOMBRICK_READY_FD"
 
+// stopWait is how long a player that didn't say it plays is given to stop
+// when asked, before it is killed.
+var stopWait = 3 * time.Second
+
 // Start starts exe with args and env, detached in a session of its own so it
 // outlives its starter, and waits up to wait for it to say it plays. One that
-// doesn't by then, or dies first, is killed, and Start fails. A nil env is
-// this process's own; env itself is never written to.
+// doesn't by then is asked to stop, as Stop asks, so that it lets go of the
+// sound card and of its Spotify helper, and is killed if it hasn't gone
+// within stopWait; Start fails once it has gone, or when it dies first. A nil
+// env is this process's own; env itself is never written to.
 func Start(exe string, args, env []string, wait time.Duration) (int, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -57,8 +63,7 @@ func Start(exe string, args, env []string, wait time.Duration) (int, error) {
 		err = errors.New("background: the player didn't say it plays in time")
 	}
 	if err != nil {
-		cmd.Process.Kill()
-		werr := cmd.Wait()
+		werr := stop(cmd)
 		if err == io.EOF {
 			err = errors.New("background: the player quit before it played")
 			if werr != nil {
@@ -72,6 +77,23 @@ func Start(exe string, args, env []string, wait time.Duration) (int, error) {
 	// after starting one, and init reaps it then.
 	cmd.Process.Release()
 	return pid, nil
+}
+
+// stop asks the player cmd started to stop, kills it if it hasn't within
+// stopWait, and returns how it ended.
+func stop(cmd *exec.Cmd) error {
+	cmd.Process.Signal(syscall.SIGTERM)
+	ended := make(chan error, 1)
+	go func() { ended <- cmd.Wait() }()
+	t := time.NewTimer(stopWait)
+	defer t.Stop()
+	select {
+	case err := <-ended:
+		return err
+	case <-t.C:
+		cmd.Process.Kill()
+		return <-ended
+	}
 }
 
 // Readier returns what tells the Boombrick that started this background

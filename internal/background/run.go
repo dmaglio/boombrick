@@ -55,6 +55,9 @@ type Options struct {
 	// StallLimit is how long a stream may load or stay stalled before the music
 	// counts as stopped, as when the Wi-Fi is gone; tests shorten it.
 	StallLimit time.Duration
+	// SoundUsers lists the programs that have the sound card open, for the
+	// log when it fails; nil lists none.
+	SoundUsers func() []string
 }
 
 // Run plays the queue its player has restored until ctx ends, as Boombrick
@@ -120,6 +123,9 @@ func Run(ctx context.Context, o Options) error {
 				silent += every
 			}
 			if hushed = true; silent >= quiet {
+				if st.Err != nil {
+					o.soundFailed(st.Err)
+				}
 				return o.stopped(ready)
 			}
 		}
@@ -158,6 +164,16 @@ func (o Options) stopped(played bool) error {
 		os.Remove(o.StayAwake)
 	}
 	return o.Handover(resume.Handover{})
+}
+
+// soundFailed logs the sound card's error, with what has the card open: on
+// the Brick it is often another program holding it.
+func (o Options) soundFailed(err error) {
+	var users []string
+	if o.SoundUsers != nil {
+		users = o.SoundUsers()
+	}
+	o.Log.Warn("the sound card failed", "err", err, "open_by", users)
 }
 
 func (o Options) save() {

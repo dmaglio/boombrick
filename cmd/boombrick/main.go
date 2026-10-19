@@ -367,7 +367,7 @@ func run(started time.Time) error {
 			}
 			return gate.handOver(func() error {
 				return background.HandOver(p, gate.now, func(h resume.Handover) error { return resume.SaveHandover(db.DB, h) },
-					exe, os.Environ(), 5*time.Second)
+					exe, os.Environ(), handOverWait(p.State()))
 			})
 		},
 	}

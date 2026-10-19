@@ -91,6 +91,39 @@ func TestStartGivesUpOnASilentPlayer(t *testing.T) {
 	waitFree(t, path)
 }
 
+// One still starting when the wait is over is asked to stop, as Stop asks, so
+// that it lets go of the sound card and its Spotify helper: Start returns once
+// it has gone.
+func TestStartStopsASlowPlayerGently(t *testing.T) {
+	path := lockPath(t)
+	if _, err := Start(os.Args[0], nil, childEnv("slow", path), 300*time.Millisecond); err == nil {
+		t.Fatal("Start returned for a player that never played")
+	}
+	if _, err := os.Stat(path + ".stopped"); err != nil {
+		t.Fatal("the player was killed without being asked to stop")
+	}
+	if _, held, _ := Holder(path); held {
+		t.Fatal("Start returned before the player had gone")
+	}
+}
+
+// One that doesn't stop when asked is killed after stopWait.
+func TestStartKillsASlowPlayerThatWontStop(t *testing.T) {
+	defer func(d time.Duration) { stopWait = d }(stopWait)
+	stopWait = 200 * time.Millisecond
+	path := lockPath(t)
+	began := time.Now()
+	if _, err := Start(os.Args[0], nil, childEnv("deaf", path), 300*time.Millisecond); err == nil {
+		t.Fatal("Start returned for a player that never played")
+	}
+	if took := time.Since(began); took > 3*time.Second {
+		t.Fatalf("Start took %v to give up", took)
+	}
+	if _, held, _ := Holder(path); held {
+		t.Fatal("Start returned before the player had gone")
+	}
+}
+
 // One that ignores SIGTERM is killed once the wait is over.
 func TestStopKillsAStubbornPlayer(t *testing.T) {
 	path := lockPath(t)

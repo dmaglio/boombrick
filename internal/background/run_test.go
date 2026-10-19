@@ -1,11 +1,14 @@
 package background
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -454,4 +457,24 @@ func TestCuedAndLoadingIsStopped(t *testing.T) {
 	if !slices.Equal(r.handovers, []resume.Handover{{}}) {
 		t.Fatalf("hand-overs %+v", r.handovers)
 	}
+}
+
+// When the sound card fails, as when something else holds it, the log says
+// so, and who holds it, before Run stops.
+func TestAFailedSoundCardIsLogged(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		busy := player.State{Queued: true, Count: 2, Err: errors.New("Device or resource busy")}
+		p := &fakePlayer{states: []player.State{busy}}
+		r := &record{}
+		o := options(p, r)
+		var log bytes.Buffer
+		o.Log = slog.New(slog.NewTextHandler(&log, nil))
+		o.SoundUsers = func() []string { return []string{"812 boombrick-spotify serve"} }
+		if err := Run(context.Background(), o); err != nil {
+			t.Fatal(err)
+		}
+		if s := log.String(); !strings.Contains(s, "Device or resource busy") || !strings.Contains(s, "812 boombrick-spotify serve") {
+			t.Fatalf("the log says %q", s)
+		}
+	})
 }

@@ -105,6 +105,7 @@ func runBackground() error {
 		Every:      time.Second,
 		SaveEvery:  5 * time.Second,
 		StallLimit: 2 * time.Minute,
+		SoundUsers: func() []string { return platform.SoundUsers("/proc") },
 	})
 	log.Info("background play ended", "err", err)
 	return err
