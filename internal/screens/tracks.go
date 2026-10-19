@@ -36,6 +36,21 @@ func Clock(d time.Duration) string {
 	return fmt.Sprintf("%d:%02d", s/60, s%60)
 }
 
+// ClockText is a Clock shown every frame, formatted again only when the
+// second it shows changes. The zero ClockText is ready to use.
+type ClockText struct {
+	sec  int
+	text string
+}
+
+// Of is Clock(d).
+func (c *ClockText) Of(d time.Duration) string {
+	if s := int(d / time.Second); s != c.sec || c.text == "" {
+		c.sec, c.text = s, Clock(d)
+	}
+	return c.text
+}
+
 // SongsAndTime describes a list of n songs lasting d: "12 songs · 46 min",
 // "40 songs · 2 h 5 min", or just the count when the length is unknown.
 func SongsAndTime(n int, d time.Duration) string {

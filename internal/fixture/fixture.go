@@ -1,6 +1,5 @@
-// Package fixture holds the sample content shown in the design files. The
-// desktop build shows it until real data is wired in, and screenshot tests use
-// it so frames can be compared with the design.
+// Package fixture holds Home's row types and the sample content the screen
+// tests draw.
 package fixture
 
 import (

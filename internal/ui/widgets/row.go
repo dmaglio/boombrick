@@ -7,7 +7,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/text"
 )
 
-// RowHeight is a list row's height, within the design's 76-84.
+// RowHeight is a list row's height.
 const RowHeight = 80
 
 // RowRadius is a list row's corner radius, for its focus treatment.
@@ -36,7 +36,7 @@ const (
 	noteSize = 20
 )
 
-var rowNumbers = text.Style{Face: text.Lora, Size: 22, Tabular: true}
+var rowNumbers = text.Style{Face: text.Figtree, Size: 22, Tabular: true}
 
 // ListRow draws r across box with focus strength k: rows keep their size and
 // gain the accent tint and ring. RowGlow, with RowRadius, draws the glow.

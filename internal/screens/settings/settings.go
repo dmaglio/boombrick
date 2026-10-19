@@ -95,11 +95,11 @@ const (
 )
 
 var (
-	labelText  = text.Style{Face: text.Lora, Size: 28}
-	aboutText  = text.Style{Face: text.Lora, Size: 22}
-	optionText = text.Style{Face: text.Lora, Size: 28, Tabular: true}
-	detailText = text.Style{Face: text.Lora, Size: 20}
-	footText   = text.Style{Face: text.Lora, Size: 20, Tabular: true}
+	labelText  = text.Style{Face: text.Figtree, Size: 28}
+	aboutText  = text.Style{Face: text.Figtree, Size: 22}
+	optionText = text.Style{Face: text.Figtree, Size: 28, Tabular: true}
+	detailText = text.Style{Face: text.Figtree, Size: 20}
+	footText   = text.Style{Face: text.Figtree, Size: 20, Tabular: true}
 )
 
 // choice is one option of a setting with options.
@@ -130,6 +130,8 @@ type Screen struct {
 	open    int // the row expanded into its options, or -1
 	scroll  anim.Value
 	rows    [rowCount]widgets.Setting
+	stream  int // Streaming quality's choice, as last read
+	quality int // and Download quality's
 	sleeps  []choice
 	sleep   player.Sleep // the timer as its row last showed it
 	sleptAt time.Time    // and when
@@ -191,6 +193,18 @@ func (s *Screen) reset() {
 	}
 	s.k[s.focus].Set(1)
 	s.scroll.Set(0)
+	s.readPrefs()
+}
+
+// readPrefs reads the settings kept in Prefs into the rows that show them.
+// Only this screen changes them, so they are read when it opens and when it
+// changes one rather than every frame.
+func (s *Screen) readPrefs() {
+	s.stream, s.quality = s.streamIndex(), s.qualityIndex()
+	s.rows[rowStream].Value = streams[s.stream].label
+	s.rows[rowQuality].Value = qualities[s.quality].label
+	s.rows[rowLevelling].Value = onOff(s.opts.Prefs.Bool(keys.VolumeLevelling))
+	s.rows[rowPrefer].Value = onOff(s.opts.Prefs.Bool(keys.PreferDownloaded))
 }
 
 // shown reports whether an item is shown: Storage only with something to
@@ -285,8 +299,10 @@ func (s *Screen) act(now time.Time) bool {
 		on := !s.opts.Prefs.Bool(keys.VolumeLevelling)
 		s.opts.Prefs.SetBool(keys.VolumeLevelling, on)
 		s.opts.Player.SetLevelling(on)
+		s.readPrefs()
 	case rowPrefer:
 		s.opts.Prefs.SetBool(keys.PreferDownloaded, !s.opts.Prefs.Bool(keys.PreferDownloaded))
+		s.readPrefs()
 	case pillTool:
 		if s.toolFor.d.Updating {
 			return false
@@ -309,17 +325,19 @@ func (s *Screen) act(now time.Time) bool {
 func (s *Screen) choose(step int) bool {
 	switch s.open {
 	case rowStream:
-		i := s.streamIndex() + step
+		i := s.stream + step
 		if i < 0 || i >= len(streams) {
 			return false
 		}
 		s.opts.Prefs.Set(keys.StreamingKbps, streams[i].value)
+		s.readPrefs()
 	case rowQuality:
-		i := s.qualityIndex() + step
+		i := s.quality + step
 		if i < 0 || i >= len(qualities) {
 			return false
 		}
 		s.opts.Prefs.Set(keys.DownloadQuality, qualities[i].value)
+		s.readPrefs()
 	case rowSleep:
 		i := s.sleepIndex() + step
 		if i < 0 || i >= len(player.SleepModes) {
@@ -533,10 +551,8 @@ func (s *Screen) follow(top, bot float32, view gfx.Rect, now time.Time) {
 }
 
 // refresh writes the rows' values again when what they show has changed.
+// Those of the settings in Prefs are written as the screen changes them.
 func (s *Screen) refresh(now time.Time) {
-	s.rows[rowStream].Value = streams[s.streamIndex()].label
-	q := qualities[s.qualityIndex()].label
-	s.rows[rowQuality].Value = q
 	if s.opts.Card != nil {
 		total, free, music := s.opts.Card()
 		if c := [3]int64{total, free, music}; c != s.card || s.rows[rowStorage].Value == "" {
@@ -559,8 +575,6 @@ func (s *Screen) refresh(now time.Time) {
 		s.rows[rowSleep].Value = screens.SleepValue(sl, now)
 		s.rows[rowSleep].Active = sl.Mode != player.SleepOff
 	}
-	s.rows[rowLevelling].Value = onOff(s.opts.Prefs.Bool(keys.VolumeLevelling))
-	s.rows[rowPrefer].Value = onOff(s.opts.Prefs.Bool(keys.PreferDownloaded))
 	s.refreshCards(now)
 }
 
@@ -617,9 +631,9 @@ func latest(r Releases) string {
 func (s *Screen) options(row int) (choices []choice, chosen int, about string, cols int) {
 	switch row {
 	case rowStream:
-		return streams, s.streamIndex(), "Spotify, over Wi-Fi or hotspot", 3
+		return streams, s.stream, "Spotify, over Wi-Fi or hotspot", 3
 	case rowQuality:
-		return qualities, s.qualityIndex(), "YouTube Music downloads", 2
+		return qualities, s.quality, "YouTube Music downloads", 2
 	}
 	return s.sleeps, s.sleepIndex(), "Fades out, then pauses", 4
 }

@@ -17,9 +17,6 @@ const (
 // Ease maps linear progress in [0, 1] to eased progress.
 type Ease func(t float64) float64
 
-// Linear applies no easing.
-func Linear(t float64) float64 { return t }
-
 // EaseOutCubic starts fast and settles.
 func EaseOutCubic(t float64) float64 {
 	t = 1 - t

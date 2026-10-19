@@ -80,17 +80,23 @@ func groundKey(kind Background, acc theme.Accent) string {
 // the context's images.
 func GroundKey(kind Background, acc theme.Accent) string {
 	if kind == StateGround {
-		return "bg:state" // drawn in the fallback colour whatever the accent
+		return ui.GroundPrefix + "state" // drawn in the fallback colour whatever the accent
 	}
-	return fmt.Sprintf("bg:%d:%v:%.1f", kind, acc.Glow, acc.Hue)
+	return fmt.Sprintf("%s%d:%v:%.1f", ui.GroundPrefix, kind, acc.Glow, acc.Hue)
 }
 
-// GroundImage renders kind's gradient for acc at device size; FlatGround has
-// none. A gradient takes tens of milliseconds to render on the device, too
-// long for the UI thread when the album colour changes, so it may be rendered
-// on another goroutine and handed to the context's PutImage under GroundKey.
+// groundDown is how much smaller than the screen a gradient is rendered. The
+// gradients are smooth enough that drawn scaled up, with linear filtering,
+// they look the same, at a sixteenth of the memory and time.
+const groundDown = 4
+
+// GroundImage renders kind's gradient for acc at a quarter of the device's
+// width and height, for DrawBackground to scale up; FlatGround has none. A
+// gradient still takes milliseconds to render on the device, long for the UI
+// thread when the album colour changes, so it may be rendered on another
+// goroutine and handed to the context's PutImage under GroundKey.
 func GroundImage(kind Background, acc theme.Accent) *image.NRGBA {
-	const w, h = theme.DeviceW, theme.DeviceH
+	const w, h = theme.DeviceW / groundDown, theme.DeviceH / groundDown
 	ground := theme.OklabOf(theme.Ground)
 	switch kind {
 	case NowPlayingGround:

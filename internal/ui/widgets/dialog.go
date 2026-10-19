@@ -40,8 +40,8 @@ const (
 )
 
 var (
-	dialogTitle = text.Style{Face: text.CormorantSemiBold, Size: 42}
-	dialogBody  = text.Style{Face: text.Lora, Size: 26}
+	dialogTitle = text.Style{Face: text.OutfitSemiBold, Size: 42}
+	dialogBody  = text.Style{Face: text.Figtree, Size: 26}
 )
 
 // DrawDialog draws d over a scrim. shown, from 0 to 1, fades it in and grows

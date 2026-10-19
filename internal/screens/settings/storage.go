@@ -16,7 +16,7 @@ import (
 // What the Storage page lists, under the card.
 var cacheNames = [...]string{"Art cache", "Lyrics", "Partial downloads", "Downloader"}
 
-var valueText = text.Style{Face: text.Lora, Size: 22, Tabular: true}
+var valueText = text.Style{Face: text.Figtree, Size: 22, Tabular: true}
 
 // cacheRowH is the height of the page's rows: lower than Settings' rows, which
 // take focus, so that the card, the four rows and the pill fit above the hints.

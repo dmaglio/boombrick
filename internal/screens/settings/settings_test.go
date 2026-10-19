@@ -174,6 +174,38 @@ func TestVolumeLevelling(t *testing.T) {
 	}
 }
 
+// readCounter counts reads of the settings.
+type readCounter struct {
+	prefs
+	reads int
+}
+
+func (r *readCounter) String(k string) string { r.reads++; return r.prefs.String(k) }
+func (r *readCounter) Bool(k string) bool     { r.reads++; return r.prefs.Bool(k) }
+
+// The settings are read when the screen opens and when it changes one, not
+// every frame.
+func TestSettingsAreReadOnChange(t *testing.T) {
+	r := &readCounter{prefs: prefs{}}
+	s := New(Options{Prefs: r, Player: &fakePlayer{}, Version: "0.4.0", Device: "TrimUI Brick", Toast: func(string) {}})
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	u.BeginFrame(t0)
+	s.Draw(u)
+	reads := r.reads
+	s.Draw(u)
+	s.Draw(u)
+	if r.reads != reads {
+		t.Fatalf("two frames read the settings %d times", r.reads-reads)
+	}
+	s.Handle(press(input.Down), t0) // the sleep timer
+	s.Handle(press(input.Down), t0) // volume levelling
+	s.Handle(press(input.A), t0)
+	s.Draw(u)
+	if v := s.rows[rowLevelling].Value; v != "Off" {
+		t.Fatalf("switched off, volume levelling says %q", v)
+	}
+}
+
 func TestNoStorageRowWithoutSpace(t *testing.T) {
 	e := newEnv(false)
 	e.s.Handle(press(input.Down), t0)

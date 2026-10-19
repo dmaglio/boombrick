@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/media"
@@ -64,6 +65,7 @@ type Context struct {
 	fits     map[fitKey]string
 	masks    *LRU[raster.Shape, *gfx.Texture]
 	images   *LRU[string, *gfx.Texture]
+	grounds  *LRU[string, *gfx.Texture] // images under GroundPrefix, by count
 	icons    map[iconKey]*gfx.Texture
 	covers   *LRU[coverKey, *gfx.Texture]
 	glows    *LRU[glowKey, glowEntry]
@@ -105,6 +107,7 @@ type textKey struct {
 type textEntry struct {
 	tex   *gfx.Texture
 	width float32 // advance in design pixels
+	top   float32 // how far the texture starts above the line box, in design pixels
 }
 
 type fitKey struct {
@@ -156,6 +159,17 @@ const (
 	maxFits     = 4096
 )
 
+// GroundPrefix starts the keys of screen backgrounds. Image and PutImage keep
+// them apart from other images, the last maxGrounds of them: a background is
+// rendered for every album's colours, and in the shared cache they would push
+// out the images drawn over them.
+const GroundPrefix = "bg:"
+
+// maxGrounds is more than a frame draws: the tabs' and Now Playing's grounds
+// in both colours of a change, as a screen slides in over a tab, and the
+// state screens' ground.
+const maxGrounds = 6
+
 // failWait is how long a texture that couldn't be uploaded isn't made again:
 // making it every frame would only fail again, at the frame's cost. At most
 // maxFailed failures are remembered.
@@ -182,6 +196,7 @@ func NewContext(c *gfx.Canvas, fonts *text.Engine, scale float32) *Context {
 		fits:       map[fitKey]string{},
 		masks:      NewLRU[raster.Shape, *gfx.Texture](maskBudget, texSize, texFree),
 		images:     NewLRU[string, *gfx.Texture](imageBudget, texSize, texFree),
+		grounds:    NewLRU[string, *gfx.Texture](maxGrounds, func(*gfx.Texture) int { return 1 }, texFree),
 		icons:      map[iconKey]*gfx.Texture{},
 		covers:     NewLRU[coverKey, *gfx.Texture](coverBudget, texSize, texFree),
 		fadeFrom:   map[coverKey]time.Time{},
@@ -295,13 +310,13 @@ func (u *Context) text(c *TextCache, s string, st text.Style) (textEntry, bool) 
 	}
 	ds := u.device(st)
 	line := u.Fonts.Shape(s, ds)
-	img, _ := u.Fonts.Rasterize(line, ds)
+	img, pad := u.Fonts.Rasterize(line, ds)
 	u.made++
 	tex, err := u.upload(k, img)
 	if err != nil {
 		return textEntry{}, false
 	}
-	e := textEntry{tex: tex, width: float32(line.Width) / u.Scale}
+	e := textEntry{tex: tex, width: float32(line.Width) / u.Scale, top: float32(pad.Y) / u.Scale}
 	c.lru.Put(k, e)
 	return e, true
 }
@@ -321,7 +336,7 @@ func (u *Context) TextIn(c *TextCache, s string, st text.Style, x, y float32, co
 		return 0
 	}
 	pad := float32(text.Pad(u.device(st))) / u.Scale
-	dst := gfx.Rect{X: x - pad, Y: y, W: float32(e.tex.W) / u.Scale, H: float32(e.tex.H) / u.Scale}
+	dst := gfx.Rect{X: x - pad, Y: y - e.top, W: float32(e.tex.W) / u.Scale, H: float32(e.tex.H) / u.Scale}
 	u.Canvas.Draw(e.tex, u.Apply(dst), u.tint(col))
 	return e.width
 }
@@ -444,7 +459,8 @@ func (u *Context) Shape(s raster.Shape, box gfx.Rect, col color.NRGBA) {
 // Image draws the cached image named key into dst, building it on first use.
 // A nil result from build is retried on the next call.
 func (u *Context) Image(key string, build func() *image.NRGBA, dst gfx.Rect, col color.NRGBA) {
-	t, ok := u.images.Get(key)
+	c := u.imagesFor(key)
+	t, ok := c.Get(key)
 	if !ok {
 		if u.failedLately(key) {
 			return
@@ -457,7 +473,7 @@ func (u *Context) Image(key string, build func() *image.NRGBA, dst gfx.Rect, col
 		if t, err = u.upload(key, img); err != nil {
 			return
 		}
-		u.images.Put(key, t)
+		c.Put(key, t)
 	}
 	u.Canvas.Draw(t, u.Apply(dst), u.tint(col))
 }
@@ -470,7 +486,15 @@ func (u *Context) PutImage(key string, img *image.NRGBA) {
 	if err != nil {
 		return // Image builds it when it is drawn
 	}
-	u.images.Put(key, t)
+	u.imagesFor(key).Put(key, t)
+}
+
+// imagesFor is the cache the image under key is kept in.
+func (u *Context) imagesFor(key string) *LRU[string, *gfx.Texture] {
+	if strings.HasPrefix(key, GroundPrefix) {
+		return u.grounds
+	}
+	return u.images
 }
 
 // BeginFrame starts a frame drawn at now.
@@ -628,7 +652,7 @@ func (u *Context) glow(s string, st text.Style, blur float32) (glowEntry, bool) 
 		if err != nil {
 			return glowEntry{}, false
 		}
-		e = glowEntry{tex: tex, left: pad + m, top: m}
+		e = glowEntry{tex: tex, left: pad.X + m, top: pad.Y + m}
 		u.glows.Put(k, e)
 	}
 	return e, true

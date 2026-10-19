@@ -41,20 +41,28 @@ type Home struct {
 	rows     []fixture.Row
 	row, col int
 	scroll   anim.Value
-	offsets  []anim.Value           // each row's sideways scroll
-	focus    map[[2]int]*anim.Value // per-item focus strength, 0 to 1
-	tops     []float64              // each row's heading, from the top of the content
-	set      bool                   // rows have been given, even if there are none
-	reading  bool                   // the first scan is running with nothing indexed yet
-	musicDir string                 // shown on the empty state
+	offsets  []anim.Value // each row's sideways scroll
+	focus    []focusValue // the focused item's and those still fading out
+	tops     []float64    // each row's heading, from the top of the content
+	set      bool         // rows have been given, even if there are none
+	reading  bool         // the first scan is running with nothing indexed yet
+	musicDir string       // shown on the empty state
 	rescan   func()
-	state    widgets.Wrapped // the empty or reading state's description, wrapped
+	state    widgets.Wrapped              // the empty or reading state's description, wrapped
+	hintBars map[itemHints][]widgets.Hint // made as each is first shown
+}
+
+// focusValue is an item's focus strength, 0 to 1.
+type focusValue struct {
+	row, col int
+	k        anim.Value
 }
 
 // New creates the screen with focus on the first item. With no rows it shows
 // only the chrome until SetRows.
 func New(rows []fixture.Row) *Home {
-	h := &Home{rows: rows, set: len(rows) > 0, offsets: make([]anim.Value, len(rows)), focus: map[[2]int]*anim.Value{}}
+	h := &Home{rows: rows, set: len(rows) > 0, offsets: make([]anim.Value, len(rows)),
+		hintBars: map[itemHints][]widgets.Hint{}}
 	h.value(0, 0).Set(1)
 	return h
 }
@@ -87,7 +95,7 @@ func (h *Home) SetRows(rows []fixture.Row) {
 	h.rows = slices.DeleteFunc(slices.Clone(rows), func(r fixture.Row) bool { return len(r.Items) == 0 })
 	h.set = true
 	h.tops = nil
-	clear(h.focus)
+	h.focus = h.focus[:0]
 	if len(h.rows) == 0 {
 		h.row, h.col = 0, 0
 		h.offsets = nil
@@ -226,14 +234,26 @@ func source(a *library.Album) media.Source {
 	return screens.SourceOf(a.Tracks[0].Path)
 }
 
+// value is the focus strength of the item at row, col, at 0 the first time.
+// The pointer is good until value is next called.
 func (h *Home) value(row, col int) *anim.Value {
-	k := [2]int{row, col}
-	v, ok := h.focus[k]
-	if !ok {
-		v = &anim.Value{}
-		h.focus[k] = v
+	for i := range h.focus {
+		if f := &h.focus[i]; f.row == row && f.col == col {
+			return &f.k
+		}
 	}
-	return v
+	h.focus = append(h.focus, focusValue{row: row, col: col})
+	return &h.focus[len(h.focus)-1].k
+}
+
+// strength is the focus strength of the item at row, col at now.
+func (h *Home) strength(row, col int, now time.Time) float32 {
+	for i := range h.focus {
+		if f := &h.focus[i]; f.row == row && f.col == col {
+			return float32(f.k.At(now))
+		}
+	}
+	return 0
 }
 
 // layout measures the rows once text metrics are available.
@@ -333,6 +353,8 @@ func (h *Home) Handle(ev input.Event, now time.Time) bool {
 	if row == h.row && col == h.col {
 		return false
 	}
+	// Items that have faded out are forgotten.
+	h.focus = slices.DeleteFunc(h.focus, func(f focusValue) bool { return f.k.Target() == 0 && f.k.Done(now) })
 	h.value(h.row, h.col).To(0, now, anim.Focus, anim.EaseOutCubic)
 	h.row, h.col = row, col
 	h.value(row, col).To(1, now, anim.Focus, anim.EaseOutCubic)
@@ -353,8 +375,8 @@ func (h *Home) Animating(now time.Time) bool {
 			return true
 		}
 	}
-	for _, v := range h.focus {
-		if !v.Done(now) {
+	for i := range h.focus {
+		if !h.focus[i].k.Done(now) {
 			return true
 		}
 	}
@@ -373,32 +395,39 @@ func (h *Home) Draw(u *ui.Context) {
 
 	u.PushClip(gfx.Rect{X: 0, Y: contentTop, W: theme.ScreenW, H: contentBot - contentTop})
 	base := float32(contentTop+padTop) - float32(h.scroll.At(now))
-	var focused func()
-	for ri, r := range h.rows {
+	headH, cardH := u.LineHeight(text.Heading), widgets.CardHeight(u, cardSize)
+	var fx, fy, fsize float32 // where the focused item goes
+	for ri := range h.rows {
+		r := &h.rows[ri]
 		top := base + float32(h.tops[ri])
-		drawHeading(u, r, top)
-		itemsTop := top + u.LineHeight(text.Heading) + headingGap
-		s, g := itemSize(r)
+		itemsTop := top + headH + headingGap
+		itemH := float32(tileSize)
+		if r.Cards {
+			itemH = cardH
+		}
+		// A row out of view draws only its items with focus, whose glows
+		// reach into view.
+		shown := top < contentBot && itemsTop+itemH > contentTop
+		if shown {
+			drawHeading(u, r, top)
+		}
+		s, g := itemSize(*r)
 		size, gap := float32(s), float32(g)
 		shift := float32(h.offsets[ri].At(now))
-		for ci, it := range r.Items {
+		for ci := range r.Items {
 			x := side + float32(ci)*(size+gap) - shift
-			k := float32(h.value(ri, ci).At(now))
-			draw := func() {
-				widgets.CardGlow(u, x, itemsTop, size, k)
-				widgets.Card(u, widgets.CardItem{Title: it.Title, Subtitle: it.Subtitle, Art: it.Art, Source: it.Source,
-					Badge: r.Continue, Progress: it.Progress}, x, itemsTop, size, k, r.Cards)
-			}
 			if ri == h.row && ci == h.col {
-				focused = draw // drawn last so its ring and glow sit on top
+				fx, fy, fsize = x, itemsTop, size // drawn last so its ring and glow sit on top
 				continue
 			}
-			draw()
+			k := h.strength(ri, ci, now)
+			if k == 0 && (!shown || x+size < 0 || x > theme.ScreenW) {
+				continue
+			}
+			drawItem(u, r, ci, x, itemsTop, size, k)
 		}
 	}
-	if focused != nil {
-		focused()
-	}
+	drawItem(u, &h.rows[h.row], h.col, fx, fy, fsize, h.strength(h.row, h.col, now))
 	u.PopClip()
 
 	widgets.StatusBar(u)
@@ -424,41 +453,71 @@ func (h *Home) drawEmpty(u *ui.Context) {
 	widgets.HintBar(u, h.hints())
 }
 
-func drawHeading(u *ui.Context, r fixture.Row, top float32) {
+func drawHeading(u *ui.Context, r *fixture.Row, top float32) {
 	u.Text(r.Title, text.Heading, side, top, theme.Paper)
 	baseline := top + u.Ascent(text.Heading)
 	w := u.TextWidth(r.Meta, text.Meta)
 	u.Text(r.Meta, text.Meta, theme.ScreenW-side-w, u.Baseline(text.Meta, baseline), theme.Ink3)
 }
 
-func (h *Home) hints() []widgets.Hint {
-	if len(h.rows) == 0 {
-		if h.set {
-			return []widgets.Hint{{Key: "Y", Label: "Rescan SD card"}, {Key: "L1/R1", Label: "Tabs"}}
-		}
-		return []widgets.Hint{{Key: "L1/R1", Label: "Tabs"}}
+// drawItem draws row r's item ci with its art's top-left at (x, y), size
+// wide, at focus strength k.
+func drawItem(u *ui.Context, r *fixture.Row, ci int, x, y, size, k float32) {
+	it := &r.Items[ci]
+	widgets.CardGlow(u, x, y, size, k)
+	widgets.Card(u, widgets.CardItem{Title: it.Title, Subtitle: it.Subtitle, Art: it.Art, Source: it.Source,
+		Badge: r.Continue, Progress: it.Progress}, x, y, size, k, r.Cards)
+}
+
+// The hint bars that don't depend on the focused item, and those for sample
+// content, which has nothing to play.
+var (
+	tabHints      = []widgets.Hint{{Key: "L1/R1", Label: "Tabs"}}
+	rescanHints   = []widgets.Hint{{Key: "Y", Label: "Rescan SD card"}, {Key: "L1/R1", Label: "Tabs"}}
+	playlistHints = []widgets.Hint{
+		{Key: "A", Label: "Open"}, {Key: "X", Label: "Import"},
+		{Key: "Y", Label: "Add to queue"}, {Key: "L1/R1", Label: "Tabs"},
 	}
-	if it := h.rows[h.row].Items[h.col]; it.Play != nil {
-		hints := []widgets.Hint{{Key: "A", Label: "Play"}}
-		if h.rows[h.row].Spotify {
-			hints[0].Label = "Open" // a playlist's page
-		}
-		if it.Import != nil {
-			hints = append(hints, widgets.Hint{Key: "X", Label: "Import"})
-		}
-		if it.Queue != nil {
-			hints = append(hints, widgets.Hint{Key: "Y", Label: "Add to queue"})
-		}
-		return append(hints, widgets.Hint{Key: "L1/R1", Label: "Tabs"})
-	}
-	if h.rows[h.row].Spotify {
-		return []widgets.Hint{
-			{Key: "A", Label: "Open"}, {Key: "X", Label: "Import"},
-			{Key: "Y", Label: "Add to queue"}, {Key: "L1/R1", Label: "Tabs"},
-		}
-	}
-	return []widgets.Hint{
+	sampleHints = []widgets.Hint{
 		{Key: "A", Label: "Play"}, {Key: "B", Label: "Back"}, {Key: "X", Label: "Download"},
 		{Key: "Y", Label: "Add to queue"}, {Key: "L1/R1", Label: "Tabs"},
 	}
+)
+
+// itemHints is what a playable item's hint bar depends on: whether A opens it,
+// as a Spotify playlist's page, and whether X imports it and Y queues it.
+type itemHints struct{ open, imp, queue bool }
+
+func (h *Home) hints() []widgets.Hint {
+	if len(h.rows) == 0 {
+		if h.set {
+			return rescanHints
+		}
+		return tabHints
+	}
+	r := &h.rows[h.row]
+	it := &r.Items[h.col]
+	if it.Play == nil {
+		if r.Spotify {
+			return playlistHints
+		}
+		return sampleHints
+	}
+	k := itemHints{open: r.Spotify, imp: it.Import != nil, queue: it.Queue != nil}
+	if hints, ok := h.hintBars[k]; ok {
+		return hints
+	}
+	hints := []widgets.Hint{{Key: "A", Label: "Play"}}
+	if k.open {
+		hints[0].Label = "Open"
+	}
+	if k.imp {
+		hints = append(hints, widgets.Hint{Key: "X", Label: "Import"})
+	}
+	if k.queue {
+		hints = append(hints, widgets.Hint{Key: "Y", Label: "Add to queue"})
+	}
+	hints = append(hints, widgets.Hint{Key: "L1/R1", Label: "Tabs"})
+	h.hintBars[k] = hints
+	return hints
 }

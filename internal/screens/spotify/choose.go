@@ -30,9 +30,9 @@ const (
 )
 
 var (
-	stepsText = text.Style{Face: text.CormorantSemiBold, Size: 26}
-	footText  = text.Style{Face: text.Lora, Size: 24, Tabular: true}
-	freeText  = text.Style{Face: text.Lora, Size: 22, Tabular: true}
+	stepsText = text.Style{Face: text.OutfitSemiBold, Size: 26}
+	footText  = text.Style{Face: text.Figtree, Size: 24, Tabular: true}
+	freeText  = text.Style{Face: text.Figtree, Size: 22, Tabular: true}
 )
 
 // importSteps are the import's steps, as its pages show them.
@@ -77,15 +77,30 @@ type Choose struct {
 	list   views.Grid
 	rows   []widgets.Row
 	arts   []widgets.ArtSpec
-	k      []anim.Value // the checkboxes' fill
-	msg    widgets.Wrapped
-	foot   [2]string // the footer's lines, written when the choice changes
-	footOf string    // what they were written for
+	k      []anim.Value       // the checkboxes' fill
+	counts map[string]counted // the chosen playlists' songs as last counted, by URI
+	foot   [2]string          // the footer's lines, written when the choice's tally changes
+	footOf tally              // the tally they were written for
+}
+
+// tally is what playlists come to: how many, their songs, and about how long
+// those play.
+type tally struct {
+	lists, songs int
+	length       time.Duration
+}
+
+// counted is a playlist's tally, made from its songs once they are known and
+// estimated from its count until then; known is how many songs it was made
+// from, -1 for none.
+type counted struct {
+	tally
+	known int
 }
 
 // NewChoose opens the page with nothing chosen.
 func NewChoose(e *Env) *Choose {
-	return &Choose{e: e, chosen: map[string]bool{},
+	return &Choose{e: e, chosen: map[string]bool{}, counts: map[string]counted{},
 		list: views.Grid{Cols: 1, CellW: theme.ScreenW - 2*screens.Side, CellH: widgets.RowHeight, Pad: screens.Pad}}
 }
 
@@ -95,14 +110,16 @@ func (c *Choose) Claims(b input.Button) bool { return b == input.Start }
 // refresh takes the playlists as they now stand.
 func (c *Choose) refresh() {
 	pls, _, _ := c.e.Src.Playlists()
-	all := append([]spotify.Playlist{liked()}, pls...)
+	first := liked()
 	if ts, ok, _ := c.e.Src.Tracks(spotify.LikedURI); ok {
-		all[0].Count = len(ts)
+		first.Count = len(ts)
 	}
-	if slices.Equal(all, c.pls) {
+	if len(c.pls) == len(pls)+1 && c.pls[0] == first && slices.Equal(c.pls[1:], pls) {
 		return
 	}
+	all := append([]spotify.Playlist{first}, pls...)
 	c.pls = all
+	clear(c.counts)
 	c.rows = make([]widgets.Row, len(all))
 	c.arts = make([]widgets.ArtSpec, len(all))
 	c.k = make([]anim.Value, len(all))
@@ -228,40 +245,52 @@ func drawCheck(u *ui.Context, x, y, k float32) {
 // drawFoot draws, above a hairline, how many playlists and songs are chosen,
 // and about how much room they take of what is free.
 func (c *Choose) drawFoot(u *ui.Context, y float32) {
-	key := ""
-	n, songsN := 0, 0
-	var length time.Duration
+	var sum tally
 	for _, p := range c.pls {
-		if !c.chosen[p.URI] {
-			continue
-		}
-		n++
-		key += p.URI + " "
-		if ts, ok, _ := c.e.Src.Tracks(p.URI); ok {
-			songsN += len(ts)
-			for _, t := range ts {
-				length += time.Duration(t.Duration) * time.Millisecond
-			}
-		} else {
-			songsN += p.Count
-			length += time.Duration(p.Count) * songLength
+		if c.chosen[p.URI] {
+			t := c.count(p)
+			sum.lists += t.lists
+			sum.songs += t.songs
+			sum.length += t.length
 		}
 	}
-	if key != c.footOf || c.foot[0] == "" {
-		c.footOf = key
-		pl := strconv.Itoa(n) + " playlists"
-		if n == 1 {
+	if sum != c.footOf || c.foot[0] == "" {
+		c.footOf = sum
+		pl := strconv.Itoa(sum.lists) + " playlists"
+		if sum.lists == 1 {
 			pl = "1 playlist"
 		}
-		c.foot[0] = pl + " · " + songs(songsN)
+		c.foot[0] = pl + " · " + songs(sum.songs)
 		c.foot[1] = ""
 		if c.e.Estimate != nil {
 			perHour, free := c.e.Estimate()
-			c.foot[1] = "About " + screens.Size(int64(length.Hours()*perHour*(1<<20))) + " · " + screens.Size(free) + " free"
+			c.foot[1] = "About " + screens.Size(int64(sum.length.Hours()*perHour*(1<<20))) + " · " + screens.Size(free) + " free"
 		}
 	}
 	u.Fill(gfx.Rect{X: screens.Side, Y: y, W: theme.ScreenW - 2*screens.Side, H: 1}, theme.PaperA(0.12))
 	y += 16
 	u.Text(c.foot[0], footText, screens.Side, y, theme.Paper)
 	u.Text(c.foot[1], freeText, screens.Side, y+u.LineHeight(footText), theme.Ink2)
+}
+
+// count is what p comes to, counted again only when how many of its songs
+// are known changes.
+func (c *Choose) count(p spotify.Playlist) tally {
+	ts, ok, _ := c.e.Src.Tracks(p.URI)
+	known := -1
+	if ok {
+		known = len(ts)
+	}
+	if n, had := c.counts[p.URI]; had && n.known == known {
+		return n.tally
+	}
+	n := counted{tally: tally{lists: 1, songs: p.Count, length: time.Duration(p.Count) * songLength}, known: known}
+	if ok {
+		n.songs, n.length = len(ts), 0
+		for _, t := range ts {
+			n.length += time.Duration(t.Duration) * time.Millisecond
+		}
+	}
+	c.counts[p.URI] = n
+	return n.tally
 }

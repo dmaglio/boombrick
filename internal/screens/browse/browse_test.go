@@ -232,6 +232,49 @@ func TestLibraryFilters(t *testing.T) {
 	}
 }
 
+// Frames drawn again allocate nothing: rows' lines and art, counts and hint
+// bars are made once.
+func TestFramesDrawnAgainAllocateNothing(t *testing.T) {
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	u.Status = fixture.Status()
+	u.Now = t0
+	ix := sampleIndex()
+	draw := func(name string, s screens.Screen) {
+		t.Helper()
+		s.Draw(u)
+		if n := testing.AllocsPerRun(10, func() { s.Draw(u) }); n != 0 {
+			t.Errorf("%s: a frame allocates %v times", name, n)
+		}
+	}
+	l := New(&fakeNav{}, &fakePlayer{playing: ix.Songs[1].Path}, "/m", nil)
+	l.SetIndex(ix)
+	for f := range filterCount {
+		l.filter = f
+		draw(filterNames[f], l)
+	}
+	draw("an artist's page", NewArtistPage(&fakeNav{}, &fakePlayer{}, ix.Artists[0]))
+	draw("an album's page", NewAlbumPage(&fakeNav{}, &fakePlayer{}, ix.Albums[0]))
+}
+
+// A new index's rows are made afresh.
+func TestNewIndexRowsAreMadeAfresh(t *testing.T) {
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	l := New(&fakeNav{}, &fakePlayer{}, "/m", nil)
+	l.SetIndex(sampleIndex())
+	l.filter = songsFilter
+	l.Draw(u)
+	l.SetIndex(library.NewIndex([]library.Album{{Artist: "Marisol Vega", Title: "Salt & Static", Tracks: []library.Track{
+		{Path: "/m/s/1.flac", Title: "Low Tide Radio", Artist: "Marisol Vega", Album: "Salt & Static", Duration: 222 * time.Second},
+	}}}))
+	l.Draw(u)
+	if r := l.rows[songsFilter][0]; r.subtitle != "Marisol Vega · Salt & Static" || r.duration != "3:42" {
+		t.Fatalf("the first song's row: %q, %q", r.subtitle, r.duration)
+	}
+	if l.counts != [filterCount]string{"1", "1", "1"} {
+		t.Fatalf("counts %q", l.counts)
+	}
+}
+
 func TestEmptyLibrary(t *testing.T) {
 	scans := 0
 	nav := &fakeNav{}

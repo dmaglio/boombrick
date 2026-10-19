@@ -306,3 +306,21 @@ func TestQueueScrolled(t *testing.T) {
 		t.Fatalf("a scrolled row shows above the list at %v", p)
 	}
 }
+
+// Frames drawn again allocate nothing, with a row lifted or not: the rows,
+// the panel's lines and the hint bars are made once.
+func TestFramesDrawnAgainAllocateNothing(t *testing.T) {
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	u.Status = fixture.Status()
+	u.Now = t0
+	q := New(sample())
+	for _, lifted := range []bool{false, true} {
+		if lifted {
+			q.Handle(press(input.X), t0)
+		}
+		q.Draw(u)
+		if n := testing.AllocsPerRun(10, func() { q.Draw(u) }); n != 0 {
+			t.Errorf("lifted %v: a frame allocates %v times", lifted, n)
+		}
+	}
+}

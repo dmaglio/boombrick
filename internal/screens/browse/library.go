@@ -37,9 +37,18 @@ type Library struct {
 	ix       *library.Index
 	filter   int
 	views    [filterCount]views.Grid
+	counts   [filterCount]string    // the filters' counts
+	rows     [filterCount][]listRow // the artists' and songs' rows, made as they first show
 	laidOut  bool
 	reading  bool            // the first scan is running with nothing indexed yet
 	state    widgets.Wrapped // the empty or reading state's description, wrapped
+}
+
+// listRow is what an artist's or a song's row shows that takes making.
+type listRow struct {
+	art      widgets.ArtSpec
+	subtitle string
+	duration string // a song's length, or ""
 }
 
 // New creates the tab. It shows nothing but its chrome until SetIndex.
@@ -58,6 +67,9 @@ func New(nav screens.Nav, p Player, musicDir string, rescan func()) *Library {
 func (l *Library) SetIndex(ix *library.Index) {
 	old := l.ix
 	l.ix = ix
+	l.counts = [filterCount]string{screens.Count(len(ix.Albums)), screens.Count(len(ix.Artists)), screens.Count(len(ix.Songs))}
+	l.rows[artistsFilter] = make([]listRow, len(ix.Artists))
+	l.rows[songsFilter] = make([]listRow, len(ix.Songs))
 	if old == nil {
 		l.views[albumsFilter].SetCount(len(ix.Albums))
 		l.views[artistsFilter].SetCount(len(ix.Artists))
@@ -159,9 +171,12 @@ func (l *Library) tracksAt(i int) []player.Track {
 	case albumsFilter:
 		return screens.Tracks(l.ix.Albums[i].Tracks)
 	case artistsFilter:
-		var ts []player.Track
-		for _, a := range l.ix.Artists[i].Albums {
-			ts = append(ts, screens.Tracks(a.Tracks)...)
+		ar := l.ix.Artists[i]
+		ts := make([]player.Track, 0, ar.Songs)
+		for _, a := range ar.Albums {
+			for j := range a.Tracks {
+				ts = append(ts, screens.TrackOf(&a.Tracks[j]))
+			}
 		}
 		return ts
 	}
@@ -197,31 +212,45 @@ func (l *Library) Draw(u *ui.Context) {
 
 // drawFilters draws L2, the three filters with their counts, and R2.
 func (l *Library) drawFilters(u *ui.Context) {
-	counts := []string{screens.Count(len(l.ix.Albums)), screens.Count(len(l.ix.Artists)), screens.Count(len(l.ix.Songs))}
-	widgets.Filters(u, filterNames[:], counts, l.filter, side, contentTop)
+	widgets.Filters(u, filterNames[:], l.counts[:], l.filter, side, contentTop)
+}
+
+// row is item i's row in the artists or songs, made the first time it shows
+// rather than every frame.
+func (l *Library) row(i int) *listRow {
+	r := &l.rows[l.filter][i]
+	if r.subtitle != "" {
+		return r
+	}
+	if l.filter == artistsFilter {
+		ar := l.ix.Artists[i]
+		r.art, r.subtitle = screens.ArtistArt(ar), artistLine(len(ar.Albums), ar.Songs)
+		return r
+	}
+	s := l.ix.Songs[i]
+	r.art, r.subtitle = screens.SongArt(s), s.Artist+" · "+s.Album
+	if s.Duration > 0 {
+		r.duration = screens.Clock(s.Duration)
+	}
+	return r
 }
 
 func (l *Library) drawView(u *ui.Context) {
 	g := &l.views[l.filter]
 	if l.filter == albumsFilter {
-		drawAlbums(u, g, l.ix.Albums, listTop, func(a *library.Album) string { return a.Artist })
+		drawAlbums(u, g, l.ix.Albums, listTop, func(i int) string { return l.ix.Albums[i].Artist })
 		return
 	}
 	playing := l.p.State().Track.Path
 	u.PushClip(screens.GlowArea)
 	g.Draw(u.Now, side, listTop, func(i int, x, y, k float32) {
-		var r widgets.Row
+		lr := l.row(i)
+		r := widgets.Row{Art: &lr.art, Subtitle: lr.subtitle, Duration: lr.duration}
 		if l.filter == artistsFilter {
-			ar := l.ix.Artists[i]
-			art := screens.ArtistArt(ar)
-			r = widgets.Row{Art: &art, Round: true, Title: ar.Name, Subtitle: artistLine(len(ar.Albums), ar.Songs)}
+			r.Title, r.Round = l.ix.Artists[i].Name, true
 		} else {
 			s := l.ix.Songs[i]
-			art := screens.SongArt(s)
-			r = widgets.Row{Art: &art, Title: s.Title, Subtitle: s.Artist + " · " + s.Album, Playing: s.Path == playing}
-			if s.Duration > 0 {
-				r.Duration = screens.Clock(s.Duration)
-			}
+			r.Title, r.Playing = s.Title, s.Path == playing
 		}
 		box := gfx.Rect{X: x, Y: y, W: g.CellW, H: widgets.RowHeight}
 		widgets.RowGlow(u, box, widgets.RowRadius, k)
@@ -232,17 +261,25 @@ func (l *Library) drawView(u *ui.Context) {
 	u.PopClip()
 }
 
+// The tab's hint bars: before the first index, for an empty library, and
+// with albums or artists, or songs, shown.
+var (
+	tabHints    = []widgets.Hint{{Key: "L1/R1", Label: "Tabs"}}
+	rescanHints = []widgets.Hint{{Key: "Y", Label: "Rescan SD card"}, {Key: "L1/R1", Label: "Tabs"}}
+	openHints   = []widgets.Hint{{Key: "A", Label: "Open"}, {Key: "Y", Label: "Add to queue"},
+		{Key: "L2/R2", Label: "Filter"}, {Key: "L1/R1", Label: "Tabs"}}
+	songHints = []widgets.Hint{{Key: "A", Label: "Play"}, {Key: "Y", Label: "Add to queue"},
+		{Key: "L2/R2", Label: "Filter"}, {Key: "L1/R1", Label: "Tabs"}}
+)
+
 func (l *Library) hints() []widgets.Hint {
 	switch {
 	case l.ix == nil:
-		return []widgets.Hint{{Key: "L1/R1", Label: "Tabs"}}
+		return tabHints
 	case l.empty():
-		return []widgets.Hint{{Key: "Y", Label: "Rescan SD card"}, {Key: "L1/R1", Label: "Tabs"}}
+		return rescanHints
+	case l.filter == songsFilter:
+		return songHints
 	}
-	open := "Open"
-	if l.filter == songsFilter {
-		open = "Play"
-	}
-	return []widgets.Hint{{Key: "A", Label: open}, {Key: "Y", Label: "Add to queue"}, {Key: "L2/R2", Label: "Filter"},
-		{Key: "L1/R1", Label: "Tabs"}}
+	return openHints
 }

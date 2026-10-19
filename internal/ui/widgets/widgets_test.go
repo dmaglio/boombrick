@@ -43,7 +43,7 @@ func TestChromeSheet(t *testing.T) {
 		Art(u, spec, 140, 12, gfx.Rect{X: 32 + float32(i)*156, Y: 190, W: 140, H: 140})
 	}
 
-	Logo(u, 40, 32, 380, theme.Paper, theme.Gold)
+	LogoMark(u, 40, 32, 380, theme.Gold)
 
 	card := gfx.Rect{X: 600, Y: 360, W: 170, H: 170}
 	u.PushScale(card.X+card.W/2, card.Y, 1.06)
@@ -233,6 +233,31 @@ func TestSpecForRemembers(t *testing.T) {
 	SpecFor("Copper Season")
 	if n := testing.AllocsPerRun(100, func() { SpecFor("Copper Season") }); n != 0 {
 		t.Fatalf("SpecFor allocates %v times per call for a name it has seen", n)
+	}
+}
+
+// The status bar, a placeholder and the mark drawn again allocate nothing:
+// their texts and image keys are made once, not every frame.
+func TestChromeDrawnAgainAllocatesNothing(t *testing.T) {
+	if raceEnabled {
+		t.Skip("allocations aren't counted under the race detector")
+	}
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	u.Status = designStatus
+	spec := ArtSpec{Hue: 60, Variant: 2, Glyph: "C"}
+	draw := func() {
+		StatusBar(u)
+		Art(u, spec, 140, 12, gfx.Rect{W: 140, H: 140})
+		LogoMark(u, 24, 0, 0, theme.Gold)
+	}
+	draw()
+	if n := testing.AllocsPerRun(20, draw); n != 0 {
+		t.Fatalf("drawn again, they allocate %v times", n)
+	}
+	u.Status.Battery = 5
+	StatusBar(u)
+	if batteryText.text != "5%" {
+		t.Fatalf("at 5 %% the battery says %q", batteryText.text)
 	}
 }
 

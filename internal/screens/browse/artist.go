@@ -18,13 +18,23 @@ type ArtistPage struct {
 	nav    screens.Nav
 	p      Player
 	artist *library.Artist
+	meta   string   // the heading's album and song counts
+	subs   []string // the cards' second lines
 	grid   views.Grid
 	top    float32 // the grid's top, once the heading is measured
 }
 
 // NewArtistPage opens artist ar.
 func NewArtistPage(nav screens.Nav, p Player, ar *library.Artist) *ArtistPage {
-	pg := &ArtistPage{nav: nav, p: p, artist: ar, grid: screens.AlbumGrid()}
+	pg := &ArtistPage{nav: nav, p: p, artist: ar, grid: screens.AlbumGrid(),
+		meta: artistLine(len(ar.Albums), ar.Songs), subs: make([]string, len(ar.Albums))}
+	for i, a := range ar.Albums {
+		if a.Year > 0 {
+			pg.subs[i] = strconv.Itoa(a.Year)
+		} else {
+			pg.subs[i] = screens.SongsAndTime(len(a.Tracks), 0)
+		}
+	}
 	pg.grid.SetCount(len(ar.Albums))
 	return pg
 }
@@ -59,14 +69,8 @@ func (pg *ArtistPage) Draw(u *ui.Context) {
 		screens.LayoutGrid(u, &pg.grid, contentBot-pg.top)
 	}
 	widgets.DrawBackground(u, widgets.TabGround)
-	ar := pg.artist
-	screens.Heading(u, ar.Name, artistLine(len(ar.Albums), ar.Songs), albumTop)
-	drawAlbums(u, &pg.grid, ar.Albums, pg.top, func(a *library.Album) string {
-		if a.Year > 0 {
-			return strconv.Itoa(a.Year)
-		}
-		return screens.SongsAndTime(len(a.Tracks), 0)
-	})
+	screens.Heading(u, pg.artist.Name, pg.meta, albumTop)
+	drawAlbums(u, &pg.grid, pg.artist.Albums, pg.top, func(i int) string { return pg.subs[i] })
 	widgets.StatusBar(u)
 	widgets.Tabs(u, 1)
 	widgets.HintBar(u, pg.hints())
@@ -75,19 +79,19 @@ func (pg *ArtistPage) Draw(u *ui.Context) {
 // drawAlbums draws the album grid from top down to the hint bar, with sub
 // giving each card's second line. Cards are clipped at top, so scrolled ones
 // don't show over what is above; the focused card's glow fades out over it.
-func drawAlbums(u *ui.Context, g *views.Grid, albums []*library.Album, top float32, sub func(*library.Album) string) {
+func drawAlbums(u *ui.Context, g *views.Grid, albums []*library.Album, top float32, sub func(i int) string) {
 	u.PushClip(screens.GlowArea)
 	g.Draw(u.Now, gridX, top, func(i int, x, y, k float32) {
 		a := albums[i]
 		widgets.CardGlow(u, x, y, gridArt, k)
 		u.PushClip(screens.Below(top))
-		widgets.Card(u, widgets.CardItem{Title: a.Title, Subtitle: sub(a), Art: screens.AlbumArt(a)}, x, y, gridArt, k, true)
+		widgets.Card(u, widgets.CardItem{Title: a.Title, Subtitle: sub(i), Art: screens.AlbumArt(a)}, x, y, gridArt, k, true)
 		u.PopClip()
 	})
 	u.PopClip()
 }
 
-func (pg *ArtistPage) hints() []widgets.Hint {
-	return []widgets.Hint{{Key: "A", Label: "Open"}, {Key: "Y", Label: "Add to queue"}, {Key: "B", Label: "Back"},
-		{Key: "L1/R1", Label: "Tabs"}}
-}
+var artistHints = []widgets.Hint{{Key: "A", Label: "Open"}, {Key: "Y", Label: "Add to queue"}, {Key: "B", Label: "Back"},
+	{Key: "L1/R1", Label: "Tabs"}}
+
+func (pg *ArtistPage) hints() []widgets.Hint { return artistHints }

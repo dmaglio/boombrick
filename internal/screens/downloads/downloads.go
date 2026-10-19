@@ -43,9 +43,9 @@ const (
 )
 
 var (
-	headText   = text.Style{Face: text.Lora, Size: 20}
-	titleText  = text.Style{Face: text.Lora, Size: 24}
-	statusText = text.Style{Face: text.Lora, Size: 20}
+	headText   = text.Style{Face: text.Figtree, Size: 20}
+	titleText  = text.Style{Face: text.Figtree, Size: 24}
+	statusText = text.Style{Face: text.Figtree, Size: 20}
 )
 
 // line is a row of the list: a section's heading, the downloader being

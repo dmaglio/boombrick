@@ -7,9 +7,11 @@ import (
 
 var t0 = time.Unix(0, 0)
 
+func linear(t float64) float64 { return t }
+
 func TestValueAnimates(t *testing.T) {
 	var v Value
-	v.To(10, t0, 100*time.Millisecond, Linear)
+	v.To(10, t0, 100*time.Millisecond, linear)
 	if got := v.At(t0.Add(50 * time.Millisecond)); got != 5 {
 		t.Errorf("halfway = %v, want 5", got)
 	}
@@ -23,8 +25,8 @@ func TestValueAnimates(t *testing.T) {
 
 func TestRetargetStartsFromCurrentValue(t *testing.T) {
 	var v Value
-	v.To(10, t0, 100*time.Millisecond, Linear)
-	v.To(0, t0.Add(50*time.Millisecond), 100*time.Millisecond, Linear)
+	v.To(10, t0, 100*time.Millisecond, linear)
+	v.To(0, t0.Add(50*time.Millisecond), 100*time.Millisecond, linear)
 	if got := v.At(t0.Add(50 * time.Millisecond)); got != 5 {
 		t.Errorf("after retarget = %v, want 5", got)
 	}
@@ -53,7 +55,7 @@ func TestShiftMovesAValueWithoutRestartingIt(t *testing.T) {
 	t0 := time.Unix(0, 0)
 	var v Value
 	v.Set(10)
-	v.To(20, t0, 100*time.Millisecond, Linear)
+	v.To(20, t0, 100*time.Millisecond, linear)
 	v.Shift(5)
 	if got := v.At(t0.Add(50 * time.Millisecond)); got != 20 {
 		t.Fatalf("halfway after a shift of 5 = %v, want 20", got)

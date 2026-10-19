@@ -6,8 +6,8 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 )
 
-// Offscreen is a canvas drawn by SDL's software renderer into memory. Tests
-// and screenshot tooling use it; it needs no window or GPU.
+// Offscreen is a canvas drawn by SDL's software renderer into memory, for
+// tests; it needs no window or GPU.
 type Offscreen struct {
 	*Canvas
 	surface *sdl.Surface

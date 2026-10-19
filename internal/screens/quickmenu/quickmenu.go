@@ -47,7 +47,7 @@ const (
 	padSide = 20 // the rows' own padding brings their text in to the title's 40
 )
 
-var title = text.Style{Face: text.CormorantSemiBold, Size: 42}
+var title = text.Style{Face: text.OutfitSemiBold, Size: 42}
 
 // Menu is the quick menu. It is drawn over the rest and takes all input
 // while it is open.

@@ -203,7 +203,7 @@ func openItem(sh *shared, it ytmusic.Item) bool {
 	case ytmusic.AlbumItem:
 		sh.nav.Push(newAlbumPage(sh, it))
 	case ytmusic.ArtistItem:
-		sh.nav.Push(NewArtistPage(sh.nav, sh.src, sh.dl, it))
+		sh.nav.Push(newArtistPage(sh, it))
 	default:
 		return false
 	}

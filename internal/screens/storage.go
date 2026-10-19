@@ -16,8 +16,8 @@ import (
 const StorageCardHeight = 112
 
 var (
-	cardTitle  = text.Style{Face: text.Lora, Size: 26}
-	cardLegend = text.Style{Face: text.Lora, Size: 20}
+	cardTitle  = text.Style{Face: text.Figtree, Size: 26}
+	cardLegend = text.Style{Face: text.Figtree, Size: 20}
 )
 
 // StorageCard is the SD card's space as the Downloads tab and the Storage

@@ -10,7 +10,9 @@ import (
 // Importer imports playlists. *importer.Importer is one.
 type Importer interface {
 	Import(uri, name string, tracks []spotify.Track)
-	Job(uri string) (importer.Job, bool)
+	// Changes is what changed of an import after a version, so that the
+	// screens make again only the rows of the songs that did.
+	Changes(uri string, since uint64) (importer.Changes, bool)
 	Err() error
 	Use(uri, id string, c int)
 	Skip(uri, id string)
@@ -25,6 +27,8 @@ type Queue interface {
 	Paused() bool
 	SetPaused(on bool)
 	Note() string
+	// Version changes whenever a download's state or the queue does.
+	Version() uint64
 }
 
 // Env is what the Spotify screens work with, shared by them all.

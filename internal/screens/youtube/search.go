@@ -31,7 +31,7 @@ const (
 	maxQuery    = 80 // runes
 )
 
-var labelText = text.Style{Face: text.Lora, Size: 20}
+var labelText = text.Style{Face: text.Figtree, Size: 20}
 
 // Search is the YouTube tab's first screen: typing a query on the keyboard
 // while the top results come in beside it.

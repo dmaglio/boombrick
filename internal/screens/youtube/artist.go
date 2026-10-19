@@ -24,9 +24,7 @@ var pageHints = []widgets.Hint{{Key: "A", Label: "Open"}, {Key: "B", Label: "Bac
 // ArtistPage shows a YouTube Music artist's albums, singles and EPs in the
 // grid the Library's artist page uses. A opens one.
 type ArtistPage struct {
-	nav  screens.Nav
-	src  Source
-	dl   Downloads
+	*shared
 	item ytmusic.Item // the result it opened from
 	page ytmusic.ArtistPage
 	have bool
@@ -41,7 +39,13 @@ type ArtistPage struct {
 
 // NewArtistPage opens the artist result it.
 func NewArtistPage(nav screens.Nav, src Source, dl Downloads, it ytmusic.Item) *ArtistPage {
-	return &ArtistPage{nav: nav, src: src, dl: dl, item: it, name: it.Title, grid: screens.AlbumGrid()}
+	return newArtistPage(&shared{nav: nav, src: src, dl: dl}, it)
+}
+
+// newArtistPage opens the artist result it, sharing sh with the screen that
+// opened it.
+func newArtistPage(sh *shared, it ytmusic.Item) *ArtistPage {
+	return &ArtistPage{shared: sh, item: it, name: it.Title, grid: screens.AlbumGrid()}
 }
 
 func (pg *ArtistPage) load() ytmusic.State {
@@ -81,7 +85,7 @@ func (pg *ArtistPage) Handle(ev input.Event, now time.Time) bool {
 		return false
 	}
 	if ev.Kind == input.Press && ev.Button == input.A && pg.grid.Count() > 0 {
-		pg.nav.Push(NewAlbumPage(pg.nav, pg.src, pg.dl, pg.page.Albums[pg.grid.Focus()]))
+		pg.nav.Push(newAlbumPage(pg.shared, pg.page.Albums[pg.grid.Focus()]))
 		return true
 	}
 	return pg.grid.Move(ev.Button, now)
@@ -92,6 +96,7 @@ func (pg *ArtistPage) Animating(now time.Time) bool { return pg.grid.Animating(n
 
 // Draw renders the frame.
 func (pg *ArtistPage) Draw(u *ui.Context) {
+	pg.pollAlbums()
 	st := pg.load()
 	if pg.top == 0 {
 		pg.top = screens.PageTop + u.LineHeight(text.Heading)

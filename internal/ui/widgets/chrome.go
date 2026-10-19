@@ -2,9 +2,9 @@
 package widgets
 
 import (
-	"fmt"
 	"image/color"
 	"math"
+	"strconv"
 
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
@@ -27,6 +27,13 @@ var TabNames = [...]string{"Home", "Library", "Spotify", "YouTube", "Downloads"}
 // status bar.
 const maxDeviceName = 220
 
+// batteryText is the battery's level as the status bar last showed it, so
+// that a frame formats it only when it changes. Only the UI thread draws.
+var batteryText struct {
+	level int
+	text  string
+}
+
 // StatusBar draws u.Status across the top of the screen. A negative Battery
 // means there is none to show.
 func StatusBar(u *ui.Context) {
@@ -34,44 +41,31 @@ func StatusBar(u *ui.Context) {
 	const h = StatusHeight
 	ty := u.CenterY(text.ChromeTnum, 0, h)
 
-	// The right-hand items are measured first: they end 28 px from the edge,
-	// and the track title gets whatever space is left of them.
-	type item struct {
-		w    float32
-		draw func(x float32)
+	// The right-hand items, 22 px apart, are measured first: they end 28 px
+	// from the edge, and the track title gets whatever space is left of them.
+	// The Wi-Fi icon is always there.
+	wifiW := float32(24)
+	if !s.Online {
+		wifiW = 22
 	}
-	var items []item
-	if s.Online {
-		items = append(items, item{24, func(x float32) {
-			u.Icon("wifi", 24, 2, false, x, (h-24)/2, theme.Paper)
-		}})
-	} else {
-		// The icon alone: a Brick kept off Wi-Fi would show a word all the
-		// time, and the screens that need the network say so themselves.
-		items = append(items, item{22, func(x float32) {
-			u.Icon("wifioff", 22, 2, false, x, (h-22)/2, theme.GoldSoft)
-		}})
-	}
+	total := wifiW
+	var name string
+	var nameW float32
 	if s.Bluetooth != "" {
 		// A long device name is cut short, so the track title keeps its room.
-		name := u.Fit(s.Bluetooth, text.Chrome, maxDeviceName)
-		items = append(items, item{28 + u.TextWidth(name, text.Chrome), func(x float32) {
-			u.Icon("headphones", 22, 2, false, x, (h-22)/2, theme.Paper)
-			u.Text(name, text.Chrome, x+28, ty, theme.Paper)
-		}})
+		name = u.Fit(s.Bluetooth, text.Chrome, maxDeviceName)
+		nameW = 28 + u.TextWidth(name, text.Chrome)
+		total += 22 + nameW
 	}
+	var pct string
+	var pw float32
 	if s.Battery >= 0 {
-		pct := fmt.Sprintf("%d%%", s.Battery)
-		pw := u.TextWidth(pct, text.ChromeTnum)
-		items = append(items, item{pw + 8 + 40, func(x float32) {
-			u.Text(pct, text.ChromeTnum, x, ty, theme.Paper)
-			Battery(u, x+pw+8, (h-18)/2, s.Battery)
-		}})
-	}
-
-	total := float32(22 * (len(items) - 1))
-	for _, it := range items {
-		total += it.w
+		if batteryText.text == "" || batteryText.level != s.Battery {
+			batteryText.level, batteryText.text = s.Battery, strconv.Itoa(s.Battery)+"%"
+		}
+		pct = batteryText.text
+		pw = u.TextWidth(pct, text.ChromeTnum)
+		total += 22 + pw + 8 + 40
 	}
 	right := float32(theme.ScreenW) - 28 - total
 
@@ -85,9 +79,22 @@ func StatusBar(u *ui.Context) {
 	}
 
 	x = right
-	for _, it := range items {
-		it.draw(x)
-		x += it.w + 22
+	if s.Online {
+		u.Icon("wifi", 24, 2, false, x, (h-24)/2, theme.Paper)
+	} else {
+		// The icon alone: a Brick kept off Wi-Fi would show a word all the
+		// time, and the screens that need the network say so themselves.
+		u.Icon("wifioff", 22, 2, false, x, (h-22)/2, theme.GoldSoft)
+	}
+	x += wifiW + 22
+	if s.Bluetooth != "" {
+		u.Icon("headphones", 22, 2, false, x, (h-22)/2, theme.Paper)
+		u.Text(name, text.Chrome, x+28, ty, theme.Paper)
+		x += nameW + 22
+	}
+	if s.Battery >= 0 {
+		u.Text(pct, text.ChromeTnum, x, ty, theme.Paper)
+		Battery(u, x+pw+8, (h-18)/2, s.Battery)
 	}
 }
 
@@ -134,9 +141,9 @@ type GlyphStyle struct {
 
 // Glyph styles.
 var (
-	HintRound = GlyphStyle{Height: 34, Text: text.Style{Face: text.LoraSemiBold, Size: 19}}
-	HintPill  = GlyphStyle{Height: 34, Pad: 10, Radius: 9, Text: text.Style{Face: text.LoraSemiBold, Size: 17}}
-	TabPill   = GlyphStyle{Height: 30, Pad: 9, Radius: 9, Text: text.Style{Face: text.LoraSemiBold, Size: 16}}
+	HintRound = GlyphStyle{Height: 34, Text: text.Style{Face: text.FigtreeSemiBold, Size: 19}}
+	HintPill  = GlyphStyle{Height: 34, Pad: 10, Radius: 9, Text: text.Style{Face: text.FigtreeSemiBold, Size: 17}}
+	TabPill   = GlyphStyle{Height: 30, Pad: 9, Radius: 9, Text: text.Style{Face: text.FigtreeSemiBold, Size: 16}}
 )
 
 // arrowIcons draws arrow hints with icons, which the bundled fonts don't cover.

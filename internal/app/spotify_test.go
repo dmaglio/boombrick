@@ -97,9 +97,11 @@ func TestOpenDownloads(t *testing.T) {
 type noImports struct{}
 
 func (noImports) Import(uri, name string, tracks []spotify.Track) {}
-func (noImports) Job(uri string) (importer.Job, bool)             { return importer.Job{}, false }
-func (noImports) Err() error                                      { return nil }
-func (noImports) Use(uri, id string, c int)                       {}
-func (noImports) Skip(uri, id string)                             {}
-func (noImports) Cancel(uri string)                               {}
-func (noImports) Version() uint64                                 { return 0 }
+func (noImports) Changes(uri string, since uint64) (importer.Changes, bool) {
+	return importer.Changes{}, false
+}
+func (noImports) Err() error                { return nil }
+func (noImports) Use(uri, id string, c int) {}
+func (noImports) Skip(uri, id string)       {}
+func (noImports) Cancel(uri string)         {}
+func (noImports) Version() uint64           { return 0 }

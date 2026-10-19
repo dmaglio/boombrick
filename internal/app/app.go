@@ -57,9 +57,14 @@ type Options struct {
 	Rescan   func()
 	Scanned  <-chan ScanUpdate
 	Saved    <-chan struct{}
-	// Status reads the battery and network for the status bar; the app calls
-	// it on a goroutine every 10 s from start-up.
+	// Status reads the battery, network and Bluetooth for the status bar; the
+	// app calls it on a goroutine every 10 s from start-up while the screen is
+	// on, and as it comes back on.
 	Status func() platform.Status
+	// Volume watches the device volume for the volume pill. The app tells it
+	// of every button pressed, as NextUI's volume keys may be one, and pauses
+	// it while the screen is off. Without it no pill shows.
+	Volume Volume
 	// Covers supplies album art and the playing album's colour. Without it
 	// the screens show placeholders and the accent stays gold.
 	Covers Covers
@@ -139,6 +144,13 @@ type Backlight interface {
 	On() error
 }
 
+// Volume is what the app tells the volume watcher, which tells the app of a
+// change through VolumeChanged. *platform.VolumeWatcher is one.
+type Volume interface {
+	Pressed()
+	Pause(paused bool)
+}
+
 // transport is what the buttons heard with the screen off do to the music.
 // *player.Player is one.
 type transport interface {
@@ -190,7 +202,6 @@ type App struct {
 	ui         *ui.Context
 	mapper     input.Mapper
 	repeat     *input.Repeater
-	held       map[input.Button]bool
 	home       *home.Home
 	nowPlaying *nowplaying.NowPlaying
 	music      transport // the player, for the buttons heard with the screen off
@@ -202,16 +213,13 @@ type App struct {
 	dirty      bool
 	fade       accentFade
 	grounds    *grounds     // a new accent's backgrounds, rendered before its fade starts
+	accentDue  bool         // what plays changed with the screen off: its accent is due when it is on
 	arts       atomic.Bool  // art finished since poll last looked
-	words      atomic.Bool  // lyrics found since poll last looked
-	found      atomic.Bool  // YouTube Music answered since poll last looked
+	redraw     atomic.Bool  // lyrics, YouTube Music's answers, Settings' meter or releases, or an import have news to draw
 	downloaded atomic.Bool  // the download queue changed since poll last looked
 	landed     atomic.Bool  // and downloads landed, to show in the library
 	skipped    atomic.Bool  // and a queued song was dropped, its download failed
-	measured   atomic.Bool  // the cache meter has news for the Storage page
-	released   atomic.Bool  // a release was found, or an update moved on, for Settings
 	spotified  atomic.Bool  // the Spotify library has news
-	imported   atomic.Bool  // an import moved on
 	handFailed atomic.Bool  // handing the music over failed, for poll to say
 	handing    atomic.Bool  // the music is being handed over: input waits
 	volume     atomic.Int32 // a volume level to show, plus one; 0 for none
@@ -237,6 +245,7 @@ type App struct {
 	scanChanged, scanDone, saves atomic.Bool
 
 	statuses chan platform.Status // the latest status reading, for poll
+	lit      chan bool            // whether the screen is on, for the status reader
 	waits    chan player.Track    // the track playback has begun to wait on, for followDownloads
 	stop     chan struct{}        // closed by Close to end the status reader and followDownloads
 	reader   sync.WaitGroup       // which Close waits for
@@ -275,7 +284,7 @@ func New(opts Options) (*App, error) {
 	}
 	r.SetLogicalSize(theme.DeviceW, theme.DeviceH)
 	sdl.ShowCursor(sdl.DISABLE)
-	for i := 0; i < sdl.NumJoysticks(); i++ {
+	for i := range sdl.NumJoysticks() {
 		sdl.JoystickOpen(i)
 	}
 
@@ -297,11 +306,11 @@ func New(opts Options) (*App, error) {
 		renderer:   r,
 		ui:         u,
 		repeat:     input.NewRepeater(),
-		held:       map[input.Button]bool{},
 		home:       home.New(nil),
 		nowPlaying: nowplaying.New(opts.Player),
 		queue:      queue.New(opts.Player),
 		statuses:   make(chan platform.Status, 1),
+		lit:        make(chan bool, 1),
 		waits:      make(chan player.Track, 1),
 		stop:       make(chan struct{}),
 		fade:       newAccentFade(theme.Fallback()),
@@ -314,11 +323,7 @@ func New(opts Options) (*App, error) {
 		a.music = opts.Player
 	}
 	if opts.Status != nil {
-		a.reader.Add(1)
-		go func() {
-			defer a.reader.Done()
-			watchStatus(opts.Status, statusEvery, a.statuses, a.wake, a.stop)
-		}()
+		a.reader.Go(func() { watchStatus(opts.Status, statusEvery, a.statuses, a.wake, a.lit, a.stop) })
 	}
 	a.home.SetEmpty(opts.MusicDir, func() { a.rescan(); a.Toast(screens.Scanning) })
 	a.library = browse.New(a, opts.Player, opts.MusicDir, a.rescan)
@@ -337,12 +342,7 @@ func New(opts Options) (*App, error) {
 		}()
 	}
 	if opts.Saved != nil {
-		go func() {
-			for range opts.Saved {
-				a.saves.Store(true)
-				a.wake()
-			}
-		}()
+		a.forward(opts.Saved, &a.saves)
 	}
 	if opts.Covers != nil || opts.Thumbs != nil {
 		c := allCovers{web: opts.Thumbs}
@@ -364,15 +364,11 @@ func New(opts Options) (*App, error) {
 		acts = ytActions{dl: opts.Downloads, p: opts.Player, toast: a.Toast}
 		dlTab = downloadsscreen.New(a, opts.Downloads)
 		a.nowPlaying.SetDownloads(opts.Downloads.State, opts.Downloads.Note)
-		a.reader.Add(1)
-		go func() {
-			defer a.reader.Done()
-			a.followDownloads(opts.Downloads, opts.Player)
-		}()
+		a.reader.Go(func() { a.followDownloads(opts.Downloads, opts.Player) })
 	}
 	if opts.YouTube != nil {
 		ytTab = youtube.NewSearch(a, opts.YouTube, acts)
-		a.forward(opts.YouTube.Ready(), &a.found)
+		a.forward(opts.YouTube.Ready(), &a.redraw)
 	}
 	var spTab screens.Screen = &screens.Placeholder{Tab: spotifyTab, Title: "Spotify"}
 	if opts.Spotify != nil {
@@ -392,7 +388,7 @@ func New(opts Options) (*App, error) {
 	}
 	addOverlays(a.shell, a.nowPlaying, a.queue, func() bool { return a.last.Queued }, opts.Player, opts.Lyrics)
 	if opts.Lyrics != nil {
-		a.forward(opts.Lyrics.Ready(), &a.words)
+		a.forward(opts.Lyrics.Ready(), &a.redraw)
 	}
 	a.shell.menu = a.quickMenu()
 	return a, nil
@@ -411,22 +407,22 @@ func (a *App) quickMenu() *quickmenu.Menu {
 			Version: a.opts.Version, Device: a.opts.Device, Quit: func() { a.quit = true }}
 		if a.opts.Space != nil {
 			o.Space = a.opts.Space
-			a.forward(a.opts.Space.Ready(), &a.measured)
+			a.forward(a.opts.Space.Ready(), &a.redraw)
 		}
 		if a.opts.Downloads != nil {
 			o.Downloader = a.opts.Downloads
 		}
 		if a.opts.ToolReleases != nil {
 			o.ToolReleases = a.opts.ToolReleases
-			a.forward(a.opts.ToolReleases.Ready(), &a.released)
+			a.forward(a.opts.ToolReleases.Ready(), &a.redraw)
 		}
 		if a.opts.Releases != nil {
 			o.Releases = a.opts.Releases
-			a.forward(a.opts.Releases.Ready(), &a.released)
+			a.forward(a.opts.Releases.Ready(), &a.redraw)
 		}
 		if a.opts.Updater != nil {
 			o.Updater = a.opts.Updater
-			a.forward(a.opts.Updater.Ready(), &a.released)
+			a.forward(a.opts.Updater.Ready(), &a.redraw)
 		}
 		if a.opts.Spotify != nil {
 			o.Spotify = a.opts.Spotify
@@ -612,13 +608,7 @@ func (a *App) poll() {
 		}
 	}
 	art := a.arts.Swap(false)
-	if art {
-		a.dirty = true
-	}
-	if a.words.Swap(false) {
-		a.dirty = true
-	}
-	if a.found.Swap(false) {
+	if a.redraw.Swap(false) || art {
 		a.dirty = true
 	}
 	// The Downloads tab, the YouTube screens' circles and Now Playing's
@@ -637,9 +627,6 @@ func (a *App) poll() {
 	}
 	if a.spotified.Swap(false) {
 		a.spotifyNews()
-	}
-	if a.imported.Swap(false) {
-		a.dirty = true
 	}
 	a.backgroundNews()
 	if st.Waiting && a.opts.Downloads != nil && (!l.Waiting || st.Track.VideoID != l.Track.VideoID) {
@@ -662,12 +649,6 @@ func (a *App) poll() {
 	if p := tickFor(a.shell.overlay()); a.shell.open >= 0 && st.Elapsed/p != l.Elapsed/p {
 		a.dirty = true
 	}
-	if a.measured.Swap(false) {
-		a.dirty = true
-	}
-	if a.released.Swap(false) {
-		a.dirty = true
-	}
 	// A sleep timer's time left, in the quick menu or Settings, moves on
 	// whether or not music plays.
 	if due, ok := a.shell.due(a.drawnAt); ok && !time.Now().Before(due) {
@@ -683,17 +664,23 @@ func (a *App) prefetch(st player.State) {
 		return
 	}
 	ts := []lrc.Track{screens.PlayingLyricsTrack(st)}
-	if q, pos := a.opts.Player.Queue(nil); pos+1 < len(q) {
-		ts = append(ts, screens.LyricsTrack(q[pos+1]))
+	if t, ok := a.opts.Player.Upcoming(); ok {
+		ts = append(ts, screens.LyricsTrack(t))
 	}
 	a.opts.Lyrics.Prefetch(ts...)
 }
 
 // followAccent keeps the accent with what is playing: when check is set it
 // works out st's accent and asks for its backgrounds if it is new, and once
-// they are rendered it puts them in the context and starts the fade.
+// they are rendered it puts them in the context and starts the fade. With the
+// screen off none of it shows, so it waits for the screen to come back on.
 func (a *App) followAccent(st player.State, check bool, now time.Time) {
-	if check {
+	if a.dark {
+		a.accentDue = a.accentDue || check
+		return
+	}
+	if check || a.accentDue {
+		a.accentDue = false
 		if acc, ok := accentFor(a.colours(), st); ok {
 			a.grounds.ask(acc)
 		}
@@ -854,12 +841,12 @@ func (a *App) event(ev sdl.Event) {
 		a.quit = true
 	case *sdl.KeyboardEvent:
 		if e.Type == sdl.KEYDOWN && e.Repeat == 0 {
-			a.shell.chord() // even a key Boombrick doesn't use, as NextUI's volume keys may be
+			a.pressed()
 		}
 		evs = a.mapper.Key(int(e.Keysym.Scancode), e.Type == sdl.KEYDOWN, e.Repeat != 0)
 	case *sdl.JoyButtonEvent:
 		if e.State == sdl.PRESSED {
-			a.shell.chord()
+			a.pressed()
 		}
 		evs = a.mapper.JoyButton(e.Button, e.State == sdl.PRESSED)
 	case *sdl.JoyHatEvent:
@@ -876,14 +863,22 @@ func (a *App) event(ev sdl.Event) {
 	}
 }
 
+// pressed hears each button that goes down, before it is mapped: even one
+// Boombrick doesn't use, as NextUI's volume keys may be, makes a chord of
+// Menu, and has the volume read at once.
+func (a *App) pressed() {
+	a.shell.chord()
+	if a.opts.Volume != nil {
+		a.opts.Volume.Pressed()
+	}
+}
+
 func (a *App) dispatch(e input.Event) {
 	now := time.Now()
 	switch e.Kind {
 	case input.Press:
-		a.held[e.Button] = true
 		a.repeat.Press(e.Button, now)
 	case input.Release:
-		delete(a.held, e.Button)
 		a.repeat.Release(e.Button)
 	}
 	if e.Button == input.Power {
@@ -945,12 +940,24 @@ func (a *App) power(e input.Event, now time.Time) {
 }
 
 // setDark turns the screen off or back on. Off, the backlight goes off where
-// there is one, nothing is drawn and only Power is heard; music plays on.
+// there is one, nothing is drawn and only Power is heard; music plays on. The
+// status bar's readings and the volume, which only show, wait for it to come
+// back on.
 func (a *App) setDark(dark bool) {
 	if dark == a.dark {
 		return
 	}
 	a.dark, a.dirty = dark, true
+	if a.lit != nil {
+		select {
+		case <-a.lit:
+		default:
+		}
+		a.lit <- !dark // the only sender, so there is room now
+	}
+	if a.opts.Volume != nil {
+		a.opts.Volume.Pause(dark)
+	}
 	if !dark {
 		a.opts.Log.Info("screen on")
 		a.lightUp()

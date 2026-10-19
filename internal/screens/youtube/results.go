@@ -31,8 +31,8 @@ const (
 )
 
 var (
-	queryText  = text.Style{Face: text.Lora, Size: 26}
-	statusText = text.Style{Face: text.Lora, Size: 20}
+	queryText  = text.Style{Face: text.Figtree, Size: 26}
+	statusText = text.Style{Face: text.Figtree, Size: 20}
 )
 
 // Results shows what a search found, under each filter in turn.

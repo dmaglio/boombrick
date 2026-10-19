@@ -36,10 +36,12 @@ type fakeSource struct {
 	ly    lrc.Lyrics
 	state lrc.State
 	asked lrc.Track
+	asks  int
 }
 
 func (f *fakeSource) Lyrics(t lrc.Track) (lrc.Lyrics, lrc.State) {
 	f.asked = t
+	f.asks++
 	return f.ly, f.state
 }
 
@@ -80,11 +82,14 @@ func TestSyncedGolden(t *testing.T) {
 }
 
 // A line the footer would cut in half is left out: just above the footer the
-// synced screen looks the same as one with no lyrics.
+// synced screen looks the same as one with no lyrics. A line that fits ends
+// in its line box's descent, clear of the footer's top.
 func TestNoLineIsCutByTheFooter(t *testing.T) {
-	synced := render(t, New(playing(19200*time.Millisecond), &fakeSource{ly: lrc.Parse(song), state: lrc.Found}, func() {}))
-	bare := render(t, New(playing(19200*time.Millisecond), &fakeSource{state: lrc.None}, func() {}))
-	for y := 685; y < 704; y++ {
+	synced := render(t, New(playing(16*time.Second), &fakeSource{ly: lrc.Parse(song), state: lrc.Found}, func() {}))
+	bare := render(t, New(playing(16*time.Second), &fakeSource{state: lrc.None}, func() {}))
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	top := int((float32(theme.ScreenH-footPad) - u.LineHeight(timeStyle)) * theme.Scale)
+	for y := top - 4; y < top; y++ {
 		for x := 0; x < theme.DeviceW; x++ {
 			if synced.NRGBAAt(x, y) != bare.NRGBAAt(x, y) {
 				t.Fatalf("lyric text at (%d, %d) just above the footer", x, y)
@@ -136,18 +141,27 @@ func TestNewLyricsReplaceTheOldWhateverTheirShape(t *testing.T) {
 	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
 	u.BeginFrame(t0)
 	s.Draw(u)
-	if got := s.rows[2][0].text; got != "Every station said your name" {
+	if got := lineText(s, 2); got != "Every station said your name" {
 		t.Fatalf("first lyrics: %q", got)
 	}
 	src.ly = lrc.Parse(strings.Replace(song, "Every ", "Never ", 1))
 	u.BeginFrame(t0.Add(time.Second))
 	s.Draw(u)
-	if got := s.rows[2][0].text; got != "Never station said your name" {
+	if got := lineText(s, 2); got != "Never station said your name" {
 		t.Fatalf("lyrics handed back with the same count and state: %q", got)
 	}
 	if s.Animating(t0.Add(time.Second)) {
 		t.Fatal("new lyrics started with a rise")
 	}
+}
+
+// lineText is line i as the screen wrapped it, its rows joined back up.
+func lineText(s *Screen, i int) string {
+	var parts []string
+	for _, r := range s.rows[i] {
+		parts = append(parts, r.text)
+	}
+	return strings.Join(parts, " ")
 }
 
 func TestPlainGolden(t *testing.T) {
@@ -365,11 +379,51 @@ func TestNextSpotifySongResetsTheScreen(t *testing.T) {
 	}
 	p.st.Track.SpotifyID = "two"
 	src.ly, src.state = lrc.Lyrics{}, lrc.Looking
-	s.refresh(p.st)
+	s.refresh(p.st, t0)
 	if len(s.rows) != 0 || s.line != -1 {
 		t.Fatalf("the next song kept the last one's screen: rows %d line %d", len(s.rows), s.line)
 	}
 	if s.key != "spotify:two" {
 		t.Fatalf("key %q", s.key)
+	}
+}
+
+// The source is asked about a new track at once, and then every askEvery,
+// not on every frame of a line filling in.
+func TestTheSourceIsAskedSparingly(t *testing.T) {
+	p := playing(19 * time.Second)
+	src := &fakeSource{ly: lrc.Parse(song), state: lrc.Found}
+	s := New(p, src, func() {})
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	at := t0
+	for range 30 {
+		u.BeginFrame(at)
+		s.Draw(u)
+		at = at.Add(time.Second / 30)
+	}
+	if want := int(time.Second / askEvery); src.asks != want {
+		t.Fatalf("asked %d times in a second of frames, want %d", src.asks, want)
+	}
+	p.st.Track.Path = "/m/2.flac"
+	asks := src.asks
+	u.BeginFrame(at)
+	s.Draw(u)
+	if src.asks != asks+1 || src.asked.Path != "/m/2.flac" {
+		t.Fatal("the next track wasn't asked about at once")
+	}
+}
+
+// A frame of synced lyrics drawn again allocates nothing.
+func TestFramesDrawnAgainAllocateNothing(t *testing.T) {
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	uitest.WithCovers(u)
+	u.Status = fixture.Status()
+	s := New(playing(19200*time.Millisecond), &fakeSource{ly: lrc.Parse(song), state: lrc.Found}, func() {})
+	for i := range 10 { // the art fades in and what comes next is made ahead
+		u.BeginFrame(t0.Add(time.Duration(i) * time.Second))
+		s.Draw(u)
+	}
+	if n := testing.AllocsPerRun(10, func() { s.Draw(u) }); n != 0 {
+		t.Fatalf("a frame allocates %v times", n)
 	}
 }

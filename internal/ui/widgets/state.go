@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	stateTitle  = text.Style{Face: text.CormorantSemiBold, Size: 48}
+	stateTitle  = text.Style{Face: text.OutfitSemiBold, Size: 48}
 	stateBody   = text.Body
 	stateDetail = text.Meta
 )

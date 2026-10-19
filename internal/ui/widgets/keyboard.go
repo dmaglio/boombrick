@@ -13,13 +13,10 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/text"
 )
 
-// The keyboard is fitted to the canvas: the
-// design's 56 px keys need 522 px of height and the canvas has 414 between
-// the tabs and the hint bar, so keys are 44 with 8 between them, the field 46
-// high and the text Lora 24.
+// The keyboard fits the 414 px between the tabs and the hint bar: keys are
+// 44 px with 8 between them, the field 46 high and the text Figtree 24.
 const (
 	KeyboardW = 7*keySize + 6*keyGap
-	KeyboardH = fieldH + fieldGap + 7*keySize + 6*keyGap
 
 	keySize   = 44
 	keyGap    = 8
@@ -31,8 +28,8 @@ const (
 )
 
 var (
-	keyText   = text.Style{Face: text.Lora, Size: 24}
-	fieldText = text.Style{Face: text.Lora, Size: 24}
+	keyText   = text.Style{Face: text.Figtree, Size: 24}
+	fieldText = text.Style{Face: text.Figtree, Size: 24}
 )
 
 // keyRows are the character keys.

@@ -14,8 +14,8 @@ const FiltersHeight = 56
 // The filter row: Heading at 28 with an optional
 // tabular count in ink3; the chosen filter sits on a tinted pill.
 var (
-	filterText = text.Style{Face: text.CormorantSemiBold, Size: 28}
-	countText  = text.Style{Face: text.Lora, Size: 20, Tabular: true}
+	filterText = text.Style{Face: text.OutfitSemiBold, Size: 28}
+	countText  = text.Style{Face: text.Figtree, Size: 20, Tabular: true}
 )
 
 const (

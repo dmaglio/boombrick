@@ -4,7 +4,6 @@ package icons
 import (
 	"fmt"
 	"image"
-	"sort"
 	"strings"
 
 	"github.com/ujjwal313/boombrick/internal/ui/raster"
@@ -33,14 +32,4 @@ func Rasterize(name string, size int, strokeWidth float64, filled bool) (*image.
 	}
 	b.WriteString(`</svg>`)
 	return raster.SVG(b.String(), size, size)
-}
-
-// Names lists every icon in alphabetical order.
-func Names() []string {
-	names := make([]string, 0, len(paths))
-	for n := range paths {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
 }

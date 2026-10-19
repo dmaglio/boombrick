@@ -31,6 +31,8 @@ type Source interface {
 	Login()
 	// LoginErr is why the last sign-in failed, until the next one starts.
 	LoginErr() error
+	// Version changes whenever what the calls return does.
+	Version() uint64
 }
 
 // Player plays and queues a playlist's songs, and says which is playing.

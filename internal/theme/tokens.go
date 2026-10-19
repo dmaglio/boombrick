@@ -13,7 +13,6 @@ var (
 	Ink4      = Hex("#605d5d")
 	Gold      = Hex("#e1ad66")
 	GoldSoft  = Hex("#facb8d")
-	GoldDeep  = Hex("#7d5411")
 
 	Scrim     = color.NRGBA{R: 10, G: 9, B: 8, A: 153} // 60 %
 	HintBarBG = color.NRGBA{R: 10, G: 9, B: 8, A: 140} // 55 %
@@ -22,7 +21,6 @@ var (
 
 	Success      = OKLCH{L: 0.82, C: 0.12, H: 150}.NRGBA(1)
 	Danger       = OKLCH{L: 0.78, C: 0.11, H: 25}.NRGBA(1)
-	Online       = OKLCH{L: 0.80, C: 0.12, H: 150}.NRGBA(1)
 	FallbackGlow = OKLCH{L: 0.30, C: 0.04, H: 75}.NRGBA(1)
 )
 

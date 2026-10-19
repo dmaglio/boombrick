@@ -27,6 +27,22 @@ func TestFormatting(t *testing.T) {
 	}
 }
 
+func TestClockText(t *testing.T) {
+	var c ClockText
+	if got := c.Of(0); got != "0:00" {
+		t.Fatalf("the zero ClockText at 0: %q", got)
+	}
+	if got := c.Of(93*time.Second + 400*time.Millisecond); got != "1:33" {
+		t.Fatalf("at 1:33.4: %q", got)
+	}
+	if n := testing.AllocsPerRun(20, func() { c.Of(93*time.Second + 900*time.Millisecond) }); n != 0 {
+		t.Fatalf("the same second allocates %v times", n)
+	}
+	if got := c.Of(94 * time.Second); got != "1:34" {
+		t.Fatalf("at 1:34: %q", got)
+	}
+}
+
 func TestTrackOf(t *testing.T) {
 	lt := library.Track{Path: "/m/x.flac", Title: "Rust", Artist: "Odalys", Album: "Copper Season",
 		Gain: -6.5, Peak: 0.9, HasGain: true, Duration: time.Minute}

@@ -30,7 +30,7 @@ func (c Oklab) OKLCH() OKLCH {
 }
 
 // NRGBA converts to 8-bit sRGB with opacity alpha (0-1). Out-of-gamut
-// channels are clipped, which is how browsers rendered the design files.
+// channels are clipped, as browsers clip them.
 func (c Oklab) NRGBA(alpha float64) color.NRGBA {
 	l := cube(c.L + 0.3963377774*c.A + 0.2158037573*c.B)
 	m := cube(c.L - 0.1055613458*c.A - 0.0638541728*c.B)

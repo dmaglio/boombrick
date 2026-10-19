@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -211,6 +212,26 @@ func TestImageDrawsWhatWasPut(t *testing.T) {
 	if c := off.Image().NRGBAAt(4, 4); c != (color.NRGBA{R: 200, B: 200, A: 255}) {
 		t.Fatalf("drew %v", c)
 	}
+}
+
+// Backgrounds keep to a cache of their own, of the last few: one for album
+// after album pushes no other image out.
+func TestGroundsKeepToTheirOwnCache(t *testing.T) {
+	u, _ := newContext(t, 1)
+	u.PutImage("qr", image.NewNRGBA(image.Rect(0, 0, 8, 8)))
+	ground := image.NewNRGBA(image.Rect(0, 0, theme.DeviceW, theme.DeviceH))
+	n := imageBudget/len(ground.Pix) + 1 // more than the shared cache holds
+	for i := range n {
+		u.PutImage(GroundPrefix+strconv.Itoa(i), ground)
+	}
+	u.Image(GroundPrefix+"built", func() *image.NRGBA { return ground }, gfx.Rect{W: 8, H: 8}, theme.Paper)
+	if u.grounds.Len() != maxGrounds || u.images.Len() != 1 {
+		t.Fatalf("%d grounds kept and %d other images, want %d and 1", u.grounds.Len(), u.images.Len(), maxGrounds)
+	}
+	u.Image("qr", func() *image.NRGBA {
+		t.Fatal("the grounds pushed an image out")
+		return nil
+	}, gfx.Rect{W: 8, H: 8}, theme.Paper)
 }
 
 // backdrops hands out a backdrop for any album, or says there is none.

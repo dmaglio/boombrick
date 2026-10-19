@@ -9,7 +9,7 @@ It includes or links the following third-party components:
   SDL2                         zlib License          https://libsdl.org
   go-sdl2                      BSD-3-Clause          https://github.com/veandco/go-sdl2
   go-text typesetting, render  BSD-3-Clause/Unlicense https://github.com/go-text
-  oksvg, rasterx               BSD-3-Clause          https://github.com/srwiley
+  oksvg (modified), rasterx    BSD-3-Clause          https://github.com/srwiley
   golang.org/x/image           BSD-3-Clause          https://golang.org/x/image
   golang.org/x/net             BSD-3-Clause          https://golang.org/x/net
   golang.org/x/text            BSD-3-Clause          https://golang.org/x/text
@@ -17,8 +17,9 @@ It includes or links the following third-party components:
                                Its CA certificate list is Mozilla NSS data (certdata.txt), MPL-2.0
   go-sqlite3                   MIT                   https://github.com/mattn/go-sqlite3
   SQLite                       Public domain         https://sqlite.org
-  Cormorant Garamond           SIL OFL 1.1           Christian Thalmann
-  Lora                         SIL OFL 1.1           Cyreal
+  Outfit                       SIL OFL 1.1           https://github.com/Outfitio/Outfit-Fonts
+  Figtree                      SIL OFL 1.1           https://github.com/erikdkennedy/figtree
+  Noto Sans                    SIL OFL 1.1           https://github.com/notofonts/latin-greek-cyrillic
   Lucide icons                 ISC, MIT (Feather)    https://lucide.dev
   dr_mp3, dr_flac              Public domain/MIT-0   https://github.com/mackron/dr_libs (dfe837763100)
   opusfile                     BSD-3-Clause          https://opus-codec.org (v0.12)

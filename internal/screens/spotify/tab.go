@@ -1,6 +1,7 @@
 package spotify
 
 import (
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -29,9 +30,8 @@ const (
 )
 
 var (
-	nameText    = text.Style{Face: text.Lora, Size: 22}
-	premiumText = text.Style{Face: text.Lora, Size: 20}
-	cardTitle   = text.Style{Face: text.CormorantSemiBold, Size: 30}
+	nameText    = text.Style{Face: text.Figtree, Size: 22}
+	premiumText = text.Style{Face: text.Figtree, Size: 20}
 )
 
 // The tab's hints, kept so that no frame builds them.
@@ -56,6 +56,15 @@ type Tab struct {
 	msg   widgets.Wrapped
 	body  widgets.Wrapped // the sign-in card's line
 	off   widgets.Wrapped // the offline state's line
+
+	// The library as last asked: again once it has changed, and a second on,
+	// as asking is what has it ask the helper again for the status and for
+	// lists that are old or failed.
+	version      uint64
+	asked        time.Time
+	st           spotify.Status
+	err, listErr error
+	initial      string // the account's, in its circle
 
 	// What the frame drawn last showed, for Handle: signed out, the status
 	// not to be had, offline with no playlists kept, the playlists not to be
@@ -93,43 +102,49 @@ func (t *Tab) setRows(pls []spotify.Playlist, liked int) {
 	t.list.SetCountFocus(len(t.rows), min(focus, len(t.rows)-1))
 }
 
-// refresh takes the library as it now stands.
-func (t *Tab) refresh() (spotify.Status, error, error) {
+// refresh takes the library as it now stands, asking it again when it has
+// changed or a second on.
+func (t *Tab) refresh(now time.Time) {
+	if v := t.e.Src.Version(); v != t.version || now.Sub(t.asked) >= time.Second {
+		t.version, t.asked = v, now
+		t.ask()
+	}
+	// Offline with nothing kept to browse, the tab says it is offline. With
+	// playlists kept, they are still shown.
+	t.offline = !t.signedOut && !t.failed && t.st.State != "" && len(t.pls) == 0 &&
+		(t.st.State == spotify.Offline || !t.e.online())
+}
+
+// ask asks the library for the status, the playlists and Liked Songs' count,
+// making the rows again when they have changed.
+func (t *Tab) ask() {
 	st, err := t.e.Src.Status()
+	t.st, t.err, t.listErr = st, err, nil
 	t.signedOut = err == nil && (st.State == spotify.SignedOut || st.State == spotify.SigningIn)
 	t.failed = err != nil && st.State == ""
-	t.offline = false
+	name := st.Name
+	if name == "" {
+		name = st.User
+	}
+	t.initial = ""
+	if r, _ := utf8.DecodeRuneInString(name); r != utf8.RuneError {
+		t.initial = strings.ToUpper(string(r))
+	}
 	if t.signedOut || t.failed || st.State == "" {
-		return st, err, nil
+		return
 	}
 	pls, have, perr := t.e.Src.Playlists()
 	liked := -1
 	if ts, ok, _ := t.e.Src.Tracks(spotify.LikedURI); ok {
 		liked = len(ts)
 	}
-	if !samePlaylists(pls, t.pls) || liked != t.liked {
+	if !slices.Equal(pls, t.pls) || liked != t.liked {
 		t.setRows(pls, liked)
 	}
 	t.listFailed, t.empty = !have && perr != nil, have && len(pls) == 0
-	if have {
-		perr = nil
+	if !have {
+		t.listErr = perr
 	}
-	// Offline with nothing kept to browse, the tab says it is offline. With
-	// playlists kept, they are still shown.
-	t.offline = len(pls) == 0 && (st.State == spotify.Offline || !t.e.online())
-	return st, err, perr
-}
-
-func samePlaylists(a, b []spotify.Playlist) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // Handle opens the focused row's page with A, or the sign-in when signed
@@ -141,7 +156,7 @@ func (t *Tab) Handle(ev input.Event, now time.Time) bool {
 	switch {
 	case t.failed:
 		if ev.Kind == input.Press && ev.Button == input.A {
-			t.e.Src.Retry()
+			t.retry()
 			return true
 		}
 		return false
@@ -165,7 +180,7 @@ func (t *Tab) Handle(ev input.Event, now time.Time) bool {
 			return true
 		case input.X:
 			if t.listFailed {
-				t.e.Src.Retry()
+				t.retry()
 				return true
 			}
 			return false
@@ -180,12 +195,19 @@ func (t *Tab) Handle(ev input.Event, now time.Time) bool {
 	return t.list.Move(ev.Button, now)
 }
 
+// retry has the library ask again for what failed, from the next frame.
+func (t *Tab) retry() {
+	t.e.Src.Retry()
+	t.asked = time.Time{}
+}
+
 // Animating reports whether the list is moving.
 func (t *Tab) Animating(now time.Time) bool { return t.list.Animating(now) }
 
 // Draw renders the frame.
 func (t *Tab) Draw(u *ui.Context) {
-	st, err, listErr := t.refresh()
+	t.refresh(u.Now)
+	st, err, listErr := t.st, t.err, t.listErr
 	if t.offline {
 		widgets.DrawBackground(u, widgets.StateGround)
 		widgets.OfflineState(u, &t.off, "Spotify needs Wi-Fi or a hotspot — your downloads still play.")
@@ -289,9 +311,8 @@ func (t *Tab) drawAccount(u *ui.Context, st spotify.Status) {
 	cx := x - 12 - chip
 	u.Shape(raster.Shape{W: chip, H: chip, Radius: chip / 2, Kind: raster.Fill}, gfx.Rect{X: cx, Y: headTop, W: chip, H: chip},
 		u.Accent.Color)
-	if r, _ := utf8.DecodeRuneInString(name); r != utf8.RuneError {
-		initial := strings.ToUpper(string(r))
-		u.Text(initial, nameText, cx+(chip-u.TextWidth(initial, nameText))/2, u.CenterY(nameText, headTop, chip), theme.Ground)
+	if t.initial != "" {
+		u.Text(t.initial, nameText, cx+(chip-u.TextWidth(t.initial, nameText))/2, u.CenterY(nameText, headTop, chip), theme.Ground)
 	}
 	y := float32(headTop)
 	if premium == "" {

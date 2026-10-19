@@ -44,11 +44,11 @@ const (
 // lyricsPill is the focus index of the Lyrics pill, under the controls.
 const lyricsPill = controlCount
 
-// The Lyrics pill: 48 high with a
-// 1.5 px border, holding a Y glyph, the lyrics icon and "Lyrics".
+// The Lyrics pill: 48 high with a 1.5 px border, holding a Y glyph, the
+// lyrics icon and "Lyrics".
 const lyricsH = 48
 
-var lyricsText = text.Style{Face: text.Lora, Size: 22}
+var lyricsText = text.Style{Face: text.Figtree, Size: 22}
 
 // controlOffset is each control's centre relative to the column's centre, in
 // design pixels. Fixed offsets keep prev and next clear of the 108 px
@@ -69,12 +69,12 @@ const (
 )
 
 var (
-	titleStyle  = text.Style{Face: text.CormorantSemiBold, Size: 52}
-	artistStyle = text.Style{Face: text.Lora, Size: 30}
-	albumStyle  = text.Style{Face: text.LoraItalic, Size: 24}
-	timeStyle   = text.Style{Face: text.Lora, Size: 22, Tabular: true}
-	formatStyle = text.Style{Face: text.Lora, Size: 20}
-	oneStyle    = text.Style{Face: text.LoraSemiBold, Size: 15}
+	titleStyle  = text.Style{Face: text.OutfitSemiBold, Size: 52}
+	artistStyle = text.Style{Face: text.Figtree, Size: 30}
+	albumStyle  = text.Style{Face: text.FigtreeItalic, Size: 24}
+	timeStyle   = text.Style{Face: text.Figtree, Size: 22, Tabular: true}
+	formatStyle = text.Style{Face: text.Figtree, Size: 20}
+	oneStyle    = text.Style{Face: text.FigtreeSemiBold, Size: 15}
 )
 
 // NowPlaying shows the current track and its transport controls.
@@ -85,6 +85,19 @@ type NowPlaying struct {
 	lyrics    func()                                              // opens the Lyrics screen; nil: no pill
 	downloads func(videoID string) (media.DownloadState, float32) // how far a song waited on has got; nil: none
 	note      func() string                                       // why the queue waits, or ""; nil: none
+
+	// What the frames show, made again only when it changes.
+	elapsed, length screens.ClockText
+	format          string
+	formatOf        formatKey
+	hintBar         []widgets.Hint
+	hintLabel       string // A's label in hintBar
+}
+
+// formatKey is what formatLine depends on.
+type formatKey struct {
+	kbps, rate int
+	format     string
 }
 
 // New creates the screen with focus on play/pause.
@@ -95,7 +108,7 @@ func New(p Player) *NowPlaying {
 }
 
 // SetLyrics gives the screen its Lyrics pill and Y button, which call open.
-func (n *NowPlaying) SetLyrics(open func()) { n.lyrics = open }
+func (n *NowPlaying) SetLyrics(open func()) { n.lyrics, n.hintBar = open, nil }
 
 // SetDownloads lets the screen show how far a song it waits on has got, and
 // with note, which may be nil, why one queued isn't downloading.
@@ -143,7 +156,7 @@ func (n *NowPlaying) progress(s player.State) (float32, string, string) {
 	if s.Loading {
 		var length string // unknown: none
 		if s.Track.Duration > 0 {
-			length = clock(s.Track.Duration)
+			length = n.length.Of(s.Track.Duration)
 		}
 		return 0, "Loading", length
 	}
@@ -152,11 +165,11 @@ func (n *NowPlaying) progress(s player.State) (float32, string, string) {
 		if s.Duration > 0 {
 			f = min(max(float32(s.Elapsed)/float32(s.Duration), 0), 1)
 		}
-		left := clock(s.Elapsed)
-		if s.Stalled {
-			left = "Connection lost"
+		left := "Connection lost"
+		if !s.Stalled {
+			left = n.elapsed.Of(s.Elapsed)
 		}
-		return f, left, clock(s.Duration)
+		return f, left, n.length.Of(s.Duration)
 	}
 	st, p := media.Queued, float32(0)
 	if n.downloads != nil {
@@ -178,7 +191,7 @@ func (n *NowPlaying) progress(s player.State) (float32, string, string) {
 	}
 	var length string // unknown: none
 	if s.Track.Duration > 0 {
-		length = clock(s.Track.Duration)
+		length = n.length.Of(s.Track.Duration)
 	}
 	return f, left, length
 }
@@ -303,7 +316,10 @@ func (n *NowPlaying) Draw(u *ui.Context) {
 	y := top + (bottom-top-h)/2
 
 	bw := widgets.Badge(u, source(s.Track), x, y, false)
-	u.Text(formatLine(s), formatStyle, x+bw+12, u.CenterY(formatStyle, y, 32), theme.Ink3)
+	if k := (formatKey{s.Kbps, s.Rate, s.Format}); k != n.formatOf {
+		n.format, n.formatOf = formatLine(s), k
+	}
+	u.Text(n.format, formatStyle, x+bw+12, u.CenterY(formatStyle, y, 32), theme.Ink3)
 	y += 32 + groupGap
 	u.Text(u.Fit(s.Track.Title, titleStyle, w), titleStyle, x, y, theme.Paper)
 	y += titleH
@@ -351,11 +367,6 @@ func drawProgress(u *ui.Context, f float32, left, right string, x, y, w float32)
 	ty := y + knob + 8
 	u.Text(left, timeStyle, x, ty, theme.Ink2)
 	u.Text(right, timeStyle, x+w-u.TextWidth(right, timeStyle), ty, theme.Ink2)
-}
-
-func clock(d time.Duration) string {
-	sec := int(d / time.Second)
-	return fmt.Sprintf("%d:%02d", sec/60, sec%60)
 }
 
 // drawControls spreads the five controls across the column, each focusable
@@ -436,9 +447,13 @@ func (n *NowPlaying) hints(s player.State) []widgets.Hint {
 			label = "Play"
 		}
 	}
+	if n.hintBar != nil && label == n.hintLabel {
+		return n.hintBar
+	}
 	hints := []widgets.Hint{{Key: "A", Label: label}, {Key: "B", Label: "Back"}}
 	if n.lyrics != nil {
 		hints = append(hints, widgets.Hint{Key: "Y", Label: "Lyrics"})
 	}
-	return append(hints, widgets.Hint{Key: "L1/R1", Label: "Track"})
+	n.hintBar, n.hintLabel = append(hints, widgets.Hint{Key: "L1/R1", Label: "Track"}), label
+	return n.hintBar
 }

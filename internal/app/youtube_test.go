@@ -171,6 +171,7 @@ func (q *liveQueue) Get([]ytmusic.Song)                          {}
 func (q *liveQueue) Path(string) (string, bool)                  { return "", false }
 func (q *liveQueue) Paused() bool                                { return false }
 func (q *liveQueue) Note() string                                { return "" }
+func (q *liveQueue) Version() uint64                             { return 0 }
 func (q *liveQueue) Downloader() download.Downloader             { return download.Downloader{} }
 func (q *liveQueue) UpdateDownloader()                           {}
 func (q *liveQueue) Ready() <-chan struct{}                      { return q.ready }

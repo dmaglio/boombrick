@@ -176,6 +176,31 @@ func TestAnAlbumPageCarriesOnTheResultsDownloads(t *testing.T) {
 	}
 }
 
+// So does an artist's page, and an album page opened from that.
+func TestAnArtistPageCarriesOnTheResultsDownloads(t *testing.T) {
+	src := &fakeSource{results: map[string][]ytmusic.Item{"night drive All": nightResults}, albums: map[string]ytmusic.AlbumPage{}}
+	nav, dl := &fakeNav{}, &recorder{}
+	r := NewResults(nav, src, dl, "night drive")
+	render(t, r, t0)
+	r.Handle(press(input.X), t0) // Night Drive Theory, whose page hasn't come
+	for r.views[r.filter].Focus() < 2 {
+		r.Handle(press(input.Down), t0)
+	}
+	r.Handle(press(input.A), t0) // the artist's page opens
+	pg, ok := nav.pushed[0].(*ArtistPage)
+	if !ok {
+		t.Fatalf("opened %T, want the artist's page", nav.pushed[0])
+	}
+	if pg.shared != r.shared {
+		t.Fatal("the artist's page doesn't share the results' downloads")
+	}
+	src.albums["MPREb_nd"] = nightDrive
+	render(t, pg, t0)
+	if len(dl.got) != 1 || len(dl.got[0]) != 5 {
+		t.Fatalf("got %q", dl.got)
+	}
+}
+
 // An album whose page can't come is given up with a toast.
 func TestDownloadingAnAlbumThatCantLoad(t *testing.T) {
 	src := &fakeSource{results: map[string][]ytmusic.Item{"night drive All": nightResults}}

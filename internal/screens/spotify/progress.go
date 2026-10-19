@@ -29,10 +29,10 @@ const (
 )
 
 var (
-	counterText = text.Style{Face: text.Lora, Size: 56, Tabular: true} // Cormorant's old-style 1 reads as I
-	ofText      = text.Style{Face: text.Lora, Size: 26}
-	lineText    = text.Style{Face: text.Lora, Size: 22, Tabular: true}
-	statusText  = text.Style{Face: text.Lora, Size: 20, Tabular: true}
+	counterText = text.Display.Tnum()
+	ofText      = text.Style{Face: text.Figtree, Size: 26}
+	lineText    = text.Style{Face: text.Figtree, Size: 22, Tabular: true}
+	statusText  = text.Style{Face: text.Figtree, Size: 20, Tabular: true}
 )
 
 var (
@@ -46,20 +46,38 @@ var (
 type Progress struct {
 	e       *Env
 	pls     []spotify.Playlist
-	version uint64
-	songs   []ytmusic.Song // the songs downloading, in the playlists' order
-	labels  []string       // their rows' "Title — Artist"
+	version uint64     // the importer's, when the songs were last brought up to date
+	jobs    []followed // by playlist
+	rows    []place    // the songs downloading, in the playlists' order
 	list    views.Grid
 	art     widgets.ArtSpec
 	msg     widgets.Wrapped
+	// The songs saved, and how many songs' worth are downloaded, counted
+	// again when the queue or the songs change.
+	queue   uint64 // the queue's version when they were counted
+	recount bool
+	saved   int
+	done    float32
 	counted [2]int // saved and all, as last drawn
 	counter string
 	of      string
 }
 
+// followed is an import as the page follows it: for each of its songs, the
+// download chosen, with no VideoID unless the song is matched or accepted,
+// and its row's "Title — Artist".
+type followed struct {
+	version uint64 // the importer's, when they were last brought up to date
+	songs   []ytmusic.Song
+	labels  []string
+}
+
+// place is a row's song: the playlist's, and where it is in its import.
+type place struct{ job, song int }
+
 // NewProgress follows the downloads of pls' imports.
 func NewProgress(e *Env, pls []spotify.Playlist) *Progress {
-	p := &Progress{e: e, pls: pls,
+	p := &Progress{e: e, pls: pls, jobs: make([]followed, len(pls)), recount: true,
 		list: views.Grid{Cols: 1, CellW: theme.ScreenW - 2*screens.Side, CellH: progressRow, Pad: screens.Pad}}
 	if len(pls) > 0 {
 		p.art = art(pls[0].Name, pls[0].Cover)
@@ -74,29 +92,84 @@ func NewProgress(e *Env, pls []spotify.Playlist) *Progress {
 // ShowsDownloads says the page follows the download queue.
 func (p *Progress) ShowsDownloads() bool { return true }
 
-// refresh takes the songs to follow when an import has changed.
+// refresh brings the songs followed up to date when an import has changed,
+// making again only what changed.
 func (p *Progress) refresh() {
 	v := p.e.Import.Version()
 	if v == p.version {
 		return
 	}
 	p.version = v
-	p.songs, p.labels = p.songs[:0], p.labels[:0]
-	for _, pl := range p.pls {
-		job, ok := p.e.Import.Job(pl.URI)
+	changed := false
+	for k, pl := range p.pls {
+		f := &p.jobs[k]
+		c, ok := p.e.Import.Changes(pl.URI, f.version)
 		if !ok {
 			continue
 		}
-		for _, it := range job.Items {
-			if it.State != importer.Matched && it.State != importer.Accepted {
-				continue
+		f.version = c.Version
+		if c.All {
+			f.songs, f.labels = make([]ytmusic.Song, len(c.Items)), make([]string, len(c.Items))
+			for i, it := range c.Items {
+				f.set(i, it)
 			}
-			s := it.Candidates[it.Chosen].Song
-			p.songs = append(p.songs, s)
-			p.labels = append(p.labels, it.Track.Title+" — "+s.Artist)
+			changed = true
+		}
+		for n, i := range c.At {
+			changed = f.set(i, c.Items[n]) || changed
 		}
 	}
-	p.list.SetCountFocus(len(p.songs), min(p.list.Focus(), max(len(p.songs)-1, 0)))
+	if !changed {
+		return
+	}
+	p.rows = p.rows[:0]
+	for k, f := range p.jobs {
+		for i, s := range f.songs {
+			if s.VideoID != "" {
+				p.rows = append(p.rows, place{k, i})
+			}
+		}
+	}
+	p.list.SetCountFocus(len(p.rows), min(p.list.Focus(), max(len(p.rows)-1, 0)))
+	p.recount = true
+}
+
+// set takes song i of the import as it now stands, and reports whether its
+// download changed.
+func (f *followed) set(i int, it importer.Item) bool {
+	var s ytmusic.Song
+	if it.State == importer.Matched || it.State == importer.Accepted {
+		s = it.Candidates[it.Chosen].Song
+	}
+	if s == f.songs[i] {
+		return false
+	}
+	f.songs[i], f.labels[i] = s, ""
+	if s.VideoID != "" {
+		f.labels[i] = it.Track.Title + " — " + s.Artist
+	}
+	return true
+}
+
+// count counts the songs saved, and how many songs' worth are downloaded,
+// when the queue or the songs have changed since they were last counted.
+func (p *Progress) count() {
+	v := p.e.Queue.Version()
+	if v == p.queue && !p.recount {
+		return
+	}
+	p.queue, p.recount = v, false
+	p.saved, p.done = 0, 0
+	for _, r := range p.rows {
+		st, f := p.e.Queue.State(p.jobs[r.job].songs[r.song].VideoID)
+		switch st {
+		case media.Saved:
+			p.saved++
+			p.done++
+		case media.Downloading:
+			p.done += f
+		}
+	}
 }
 
 // Handle pauses or resumes the download queue with Y, and cancels the
@@ -134,6 +207,7 @@ func (p *Progress) Animating(now time.Time) bool { return p.list.Animating(now) 
 // Draw renders the frame.
 func (p *Progress) Draw(u *ui.Context) {
 	p.refresh()
+	p.count()
 	widgets.DrawBackground(u, widgets.FlatGround)
 	widgets.StatusBar(u)
 	title := "Downloading"
@@ -141,19 +215,9 @@ func (p *Progress) Draw(u *ui.Context) {
 		title = p.pls[0].Name
 	}
 	top := importHeader(u, title, 2)
-	saved, done := 0, float32(0)
-	for _, s := range p.songs {
-		st, f := p.e.Queue.State(s.VideoID)
-		switch st {
-		case media.Saved:
-			saved++
-			done++
-		case media.Downloading:
-			done += f
-		}
-	}
-	if c := [2]int{saved, len(p.songs)}; c != p.counted || p.counter == "" {
-		p.counted, p.counter, p.of = c, strconv.Itoa(saved), "of "+songs(len(p.songs))
+	saved, done, all := p.saved, p.done, len(p.rows)
+	if c := [2]int{saved, all}; c != p.counted || p.counter == "" {
+		p.counted, p.counter, p.of = c, strconv.Itoa(saved), "of "+songs(all)
 	}
 	x := float32(screens.Side)
 	widgets.Art(u, p.art, summaryArt, widgets.CardRadius, gfx.Rect{X: x, Y: top, W: summaryArt, H: summaryArt})
@@ -164,8 +228,8 @@ func (p *Progress) Draw(u *ui.Context) {
 	bw := theme.ScreenW - screens.Side - sx
 	bar := raster.Shape{W: int(bw), H: barH, Radius: barH / 2, Kind: raster.Fill}
 	u.Shape(bar, gfx.Rect{X: sx, Y: by, W: bw, H: barH}, theme.PaperA(0.18))
-	if len(p.songs) > 0 && done > 0 {
-		u.PushClip(gfx.Rect{X: sx, Y: by, W: bw * done / float32(len(p.songs)), H: barH})
+	if all > 0 && done > 0 {
+		u.PushClip(gfx.Rect{X: sx, Y: by, W: bw * done / float32(all), H: barH})
 		u.Shape(bar, gfx.Rect{X: sx, Y: by, W: bw, H: barH}, u.Accent.Color)
 		u.PopClip()
 	}
@@ -173,14 +237,14 @@ func (p *Progress) Draw(u *ui.Context) {
 	switch {
 	case p.e.Queue.Paused():
 		line = "Paused"
-	case saved == len(p.songs) && len(p.songs) > 0:
+	case saved == all && all > 0:
 		line = "Done"
 	case p.e.Queue.Note() != "":
 		line = p.e.Queue.Note()
 	}
 	u.Text(line, lineText, sx, by+barH+12, theme.Ink2)
 	top += summaryArt + 20
-	if len(p.songs) == 0 {
+	if all == 0 {
 		message(u, &p.msg, "No songs to download yet.", gfx.Rect{X: screens.Side, Y: top, W: theme.ScreenW - 2*screens.Side,
 			H: screens.ContentBot - top})
 	} else {
@@ -197,24 +261,38 @@ func (p *Progress) drawRows(u *ui.Context, top float32) {
 	p.list.ViewH = screens.ContentBot - top
 	u.PushClip(gfx.Rect{X: 0, Y: top, W: theme.ScreenW, H: screens.ContentBot - top})
 	p.list.Draw(u.Now, screens.Side, top, func(i int, x, y, k float32) {
-		s := p.songs[i]
-		st, f := p.e.Queue.State(s.VideoID)
-		widgets.DownloadCircle(u, st, f, stateSize, x, y+(progressRow-stateSize)/2)
-		status := downloadText(st, f)
+		r := p.rows[i]
+		f := &p.jobs[r.job]
+		st, done := p.e.Queue.State(f.songs[r.song].VideoID)
+		widgets.DownloadCircle(u, st, done, stateSize, x, y+(progressRow-stateSize)/2)
+		status := downloadText(st, done)
 		sw := u.TextWidth(status, statusText)
 		u.Text(status, statusText, x+p.list.CellW-sw, u.CenterY(statusText, y, progressRow), theme.Ink2)
 		tx := x + stateSize + 16
-		u.Text(u.Fit(p.labels[i], matchTitle, p.list.CellW-stateSize-16-sw-16), matchTitle, tx, u.CenterY(matchTitle, y, progressRow), theme.Paper)
+		u.Text(u.Fit(f.labels[r.song], matchTitle, p.list.CellW-stateSize-16-sw-16), matchTitle, tx, u.CenterY(matchTitle, y, progressRow), theme.Paper)
 		u.Fill(gfx.Rect{X: x, Y: y + progressRow - 1, W: p.list.CellW, H: 1}, theme.PaperA(0.08))
 	})
 	u.PopClip()
+}
+
+// percents are "0 %" to "100 %", made on first use so that drawing a
+// download's progress doesn't build a string each frame.
+var percents [101]string
+
+func percent(f float32) string {
+	if percents[0] == "" {
+		for i := range percents {
+			percents[i] = strconv.Itoa(i) + " %"
+		}
+	}
+	return percents[min(max(int(f*100+0.5), 0), 100)]
 }
 
 // downloadText is a song's download as its row says it.
 func downloadText(st media.DownloadState, f float32) string {
 	switch st {
 	case media.Downloading:
-		return strconv.Itoa(int(f*100+0.5)) + " %"
+		return percent(f)
 	case media.Saved:
 		return "Saved"
 	case media.Failed:

@@ -3,6 +3,7 @@ package app
 import (
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/platform"
@@ -29,7 +30,7 @@ func TestWatchStatus(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		watchStatus(read, 5*time.Millisecond, out, func() { wakes <- struct{}{} }, stop)
+		watchStatus(read, 5*time.Millisecond, out, func() { wakes <- struct{}{} }, nil, stop)
 	}()
 
 	next := func(what string) platform.Status {
@@ -87,7 +88,7 @@ func TestWatchStatusKeepsOnlyTheLatest(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		watchStatus(read, time.Millisecond, out, func() {}, stop)
+		watchStatus(read, time.Millisecond, out, func() {}, nil, stop)
 	}()
 	time.Sleep(30 * time.Millisecond)
 	close(stop)
@@ -102,4 +103,47 @@ func TestWatchStatusKeepsOnlyTheLatest(t *testing.T) {
 	if got := <-out; got.Battery != last {
 		t.Fatalf("waiting reading %d, want the latest, %d", got.Battery, last)
 	}
+}
+
+// With the screen off nothing is read; as it comes back on the status is read
+// at once, and every interval again after.
+func TestWatchStatusWaitsWhileDark(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var mu sync.Mutex
+		reads := 0
+		read := func() platform.Status {
+			mu.Lock()
+			defer mu.Unlock()
+			reads++
+			return platform.Status{Battery: 80}
+		}
+		count := func() int { mu.Lock(); defer mu.Unlock(); return reads }
+		out := make(chan platform.Status, 1)
+		lit, stop, done := make(chan bool, 1), make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(done)
+			watchStatus(read, statusEvery, out, func() {}, lit, stop)
+		}()
+		after := func(d time.Duration) int {
+			time.Sleep(d)
+			synctest.Wait()
+			return count()
+		}
+		if n := after(statusEvery + time.Millisecond); n != 2 {
+			t.Fatalf("%d readings in the first 10 s, want 2", n)
+		}
+		lit <- false
+		if n := after(time.Hour); n != 2 {
+			t.Fatalf("%d readings with the screen off, want none", n-2)
+		}
+		lit <- true
+		if n := after(0); n != 3 {
+			t.Fatalf("%d readings as the screen came on, want 1", n-2)
+		}
+		if n := after(statusEvery + time.Millisecond); n != 4 {
+			t.Fatalf("%d readings 10 s after, want 1", n-3)
+		}
+		close(stop)
+		<-done
+	})
 }

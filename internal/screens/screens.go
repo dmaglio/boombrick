@@ -72,7 +72,7 @@ func DrawReading(u *ui.Context, c *widgets.Wrapped, musicDir string) {
 	widgets.EmptyState(u, c, "Reading your music", "This takes a little while the first time.", musicDir)
 }
 
-// Placeholder stands in for a tab that hasn't been built yet.
+// Placeholder stands in for a tab whose service isn't there.
 type Placeholder struct {
 	Tab   int
 	Title string

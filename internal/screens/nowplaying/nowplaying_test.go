@@ -53,8 +53,10 @@ func TestGolden(t *testing.T) {
 
 func TestFocusMovesAlongTheControls(t *testing.T) {
 	n := New(playing())
-	if !n.Handle(press(input.Right), t0) || !n.Handle(press(input.Right), t0) {
-		t.Fatal("Right should move focus from play/pause to repeat")
+	for range 2 { // play/pause, next, repeat
+		if !n.Handle(press(input.Right), t0) {
+			t.Fatal("Right should move focus from play/pause to repeat")
+		}
 	}
 	if n.focus != repeatCtl || n.Handle(press(input.Right), t0) {
 		t.Fatalf("focus = %d; Right past repeat should do nothing", n.focus)
@@ -255,6 +257,26 @@ func TestStreamTexts(t *testing.T) {
 	}
 	if got := source(s.Track); got != media.Spotify {
 		t.Fatalf("badge %v", got)
+	}
+}
+
+// Frames drawn again allocate nothing: the clocks, the format line and the
+// hint bar are made when they change.
+func TestFramesDrawnAgainAllocateNothing(t *testing.T) {
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	u.Status = fixture.Status()
+	u.Now = t0
+	f := playing()
+	n := New(f)
+	n.SetLyrics(func() {})
+	n.Draw(u)
+	if a := testing.AllocsPerRun(10, func() { n.Draw(u) }); a != 0 {
+		t.Fatalf("a frame allocates %v times", a)
+	}
+	f.st.Format, f.st.Rate = "OPUS", 48000
+	n.Draw(u)
+	if n.format != "OPUS · 48 kHz" {
+		t.Fatalf("the format line is %q after the track changed", n.format)
 	}
 }
 

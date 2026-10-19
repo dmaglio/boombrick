@@ -10,7 +10,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/text"
 )
 
-var volumeText = text.Style{Face: text.Lora, Size: 24, Tabular: true}
+var volumeText = text.Style{Face: text.Figtree, Size: 24, Tabular: true}
 
 const (
 	volumeBar  = 220 // the bar's width

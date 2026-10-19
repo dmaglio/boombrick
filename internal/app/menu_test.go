@@ -161,7 +161,7 @@ func (l *lamp) On() error { l.off, l.ons = false, l.ons+1; return nil }
 
 func darkApp(light Backlight) (*App, *page) {
 	tab := &page{name: "home"}
-	a := &App{shell: newShell(tab), repeat: input.NewRepeater(), held: map[input.Button]bool{},
+	a := &App{shell: newShell(tab), repeat: input.NewRepeater(),
 		fade: newAccentFade(theme.Fallback()), ui: &ui.Context{},
 		opts: Options{Backlight: light, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}}
 	return a, tab
@@ -367,13 +367,13 @@ func TestInputWaitsWhileHandingOver(t *testing.T) {
 	if n := entered.Load(); n != 1 {
 		t.Fatalf("Background entered %d times while handing over, want 1", n)
 	}
-	a.dispatch(press(input.A))
-	if !a.held[input.A] || len(tab.got) > 0 {
-		t.Fatalf("during the hand-over: A held %v, the screen heard %v", a.held[input.A], tab.got)
+	a.dispatch(press(input.Down))
+	if _, held := a.repeat.Next(); !held || len(tab.got) > 0 {
+		t.Fatalf("during the hand-over: Down held %v, the screen heard %v", held, tab.got)
 	}
-	a.dispatch(release(input.A))
-	if len(a.held) != 0 {
-		t.Fatalf("a button let go during the hand-over is stuck: %v", a.held)
+	a.dispatch(release(input.Down))
+	if _, held := a.repeat.Next(); held {
+		t.Fatal("a button let go during the hand-over is stuck")
 	}
 	close(unblock)
 	for end := time.Now().Add(2 * time.Second); !a.handFailed.Load(); time.Sleep(time.Millisecond) {
@@ -418,6 +418,39 @@ func TestVolumeChangedShowsThePill(t *testing.T) {
 	a.volumeNews(t0.Add(time.Second))
 	if a.shell.volume != 17 {
 		t.Fatalf("level %d, want 17", a.shell.volume)
+	}
+}
+
+// volumeWatcher records what the app tells it.
+type volumeWatcher struct {
+	presses int
+	paused  []bool
+}
+
+func (v *volumeWatcher) Pressed()          { v.presses++ }
+func (v *volumeWatcher) Pause(paused bool) { v.paused = append(v.paused, paused) }
+
+// Every button pressed, even one Boombrick doesn't use, has the volume read.
+// With the screen off the volume watcher and the status reader wait, and they
+// carry on as it comes back on.
+func TestTheReadersFollowTheScreen(t *testing.T) {
+	a, _ := darkApp(&lamp{})
+	v := &volumeWatcher{}
+	a.opts.Volume = v
+	a.lit = make(chan bool, 1)
+	a.event(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Scancode: 128}})
+	a.event(&sdl.JoyButtonEvent{Type: sdl.JOYBUTTONDOWN, Button: 14, State: sdl.PRESSED})
+	a.event(&sdl.JoyButtonEvent{Type: sdl.JOYBUTTONUP, Button: 14, State: sdl.RELEASED})
+	if v.presses != 2 {
+		t.Fatalf("the volume watcher heard %d presses, want 2", v.presses)
+	}
+	a.setDark(true)
+	if on := <-a.lit; on || !slices.Equal(v.paused, []bool{true}) {
+		t.Fatalf("screen off: lit %v, volume paused %v", on, v.paused)
+	}
+	a.setDark(false)
+	if on := <-a.lit; !on || !slices.Equal(v.paused, []bool{true, false}) {
+		t.Fatalf("screen on: lit %v, volume paused %v", on, v.paused)
 	}
 }
 

@@ -37,6 +37,8 @@ type AlbumPage struct {
 	nav    screens.Nav
 	p      Player
 	album  *library.Album
+	who    string // the artist, and the year when known
+	length string // the songs and their time
 	tracks []player.Track
 	rows   []widgets.Row
 	list   views.Grid
@@ -47,7 +49,11 @@ type AlbumPage struct {
 
 // NewAlbumPage opens album a.
 func NewAlbumPage(nav screens.Nav, p Player, a *library.Album) *AlbumPage {
-	pg := &AlbumPage{nav: nav, p: p, album: a, tracks: screens.Tracks(a.Tracks)}
+	pg := &AlbumPage{nav: nav, p: p, album: a, tracks: screens.Tracks(a.Tracks), who: a.Artist,
+		length: screens.SongsAndTime(len(a.Tracks), a.Duration)}
+	if a.Year > 0 {
+		pg.who += " · " + strconv.Itoa(a.Year)
+	}
 	pg.list = views.Grid{Cols: 1, CellW: theme.ScreenW - side - listX, CellH: widgets.RowHeight, Pad: pad,
 		ViewH: contentBot - contentTop}
 	pg.list.SetCount(len(a.Tracks))
@@ -161,13 +167,9 @@ func (pg *AlbumPage) Draw(u *ui.Context) {
 	y := float32(albumTop + albumArt + pad)
 	u.Text(u.Fit(a.Title, text.Heading, albumArt), text.Heading, side, y, theme.Paper)
 	y += u.LineHeight(text.Heading)
-	who := a.Artist
-	if a.Year > 0 {
-		who += " · " + strconv.Itoa(a.Year)
-	}
-	u.Text(u.Fit(who, text.Meta, albumArt), text.Meta, side, y, theme.Ink2)
+	u.Text(u.Fit(pg.who, text.Meta, albumArt), text.Meta, side, y, theme.Ink2)
 	y += u.LineHeight(text.Meta)
-	u.Text(u.Fit(screens.SongsAndTime(len(a.Tracks), a.Duration), text.Meta, albumArt), text.Meta, side, y, theme.Ink3)
+	u.Text(u.Fit(pg.length, text.Meta, albumArt), text.Meta, side, y, theme.Ink3)
 	py := float32(contentBot - pad - widgets.PillHeight)
 	x := float32(side)
 	play, shuffle := float32(pg.pills[playPill].At(now)), float32(pg.pills[shufflePill].At(now))
@@ -194,11 +196,18 @@ func (pg *AlbumPage) Draw(u *ui.Context) {
 	widgets.HintBar(u, pg.hints())
 }
 
+// albumHints are the page's hint bars, by the pill A presses; on the tracks,
+// A plays.
+var albumHints = [pillCount][]widgets.Hint{
+	playPill: {{Key: "A", Label: "Play"}, {Key: "Y", Label: "Add to queue"}, {Key: "B", Label: "Back"},
+		{Key: "L1/R1", Label: "Tabs"}},
+	shufflePill: {{Key: "A", Label: "Shuffle"}, {Key: "Y", Label: "Add to queue"}, {Key: "B", Label: "Back"},
+		{Key: "L1/R1", Label: "Tabs"}},
+}
+
 func (pg *AlbumPage) hints() []widgets.Hint {
-	a := "Play"
 	if !pg.onList && pg.pill == shufflePill {
-		a = "Shuffle"
+		return albumHints[shufflePill]
 	}
-	return []widgets.Hint{{Key: "A", Label: a}, {Key: "Y", Label: "Add to queue"}, {Key: "B", Label: "Back"},
-		{Key: "L1/R1", Label: "Tabs"}}
+	return albumHints[playPill]
 }

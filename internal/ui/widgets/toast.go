@@ -8,7 +8,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/text"
 )
 
-var toastText = text.Style{Face: text.Lora, Size: 24}
+var toastText = text.Style{Face: text.Figtree, Size: 24}
 
 // Toast draws msg centred 16 px above the hint bar on the raised colour,
 // padding 14 22 and radius 14. alpha fades it.

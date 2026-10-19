@@ -113,6 +113,33 @@ func TestAccentFadesOnceItsBackgroundsAreRendered(t *testing.T) {
 	}
 }
 
+// With the screen off a new album's accent isn't worked out, nor its
+// backgrounds rendered; they are once the screen is back on.
+func TestAccentWaitsForTheScreen(t *testing.T) {
+	gold := theme.Fallback()
+	art := &colourArt{fakeColours{hue: 25, chroma: 0.12, colour: true, ok: true}}
+	woken := make(chan struct{}, 1)
+	a := &App{opts: Options{Covers: art}, fade: newAccentFade(gold), dark: true}
+	a.grounds = newGrounds(gold, func(theme.Accent) []ground { return nil }, func() { woken <- struct{}{} })
+	st := player.State{Queued: true, Track: player.Track{Path: "/m/1.flac", AlbumArtist: "Odalys", Album: "Copper Season"}}
+
+	a.followAccent(st, true, t0)
+	a.followAccent(st, false, t0)
+	if art.asked != (media.Cover{}) || a.grounds.running {
+		t.Fatal("the accent was worked out with the screen off")
+	}
+	a.dark = false
+	a.followAccent(st, false, t0)
+	if !a.grounds.running {
+		t.Fatal("the screen came on, and the new accent's backgrounds weren't asked for")
+	}
+	<-woken
+	a.followAccent(st, false, t0)
+	if a.fade.target() != theme.Derive(25, 0.12) {
+		t.Fatalf("the fade heads for %+v", a.fade.target())
+	}
+}
+
 func TestGroundsFollowTheLatestAccent(t *testing.T) {
 	gold, red, blue := theme.Fallback(), theme.Derive(25, 0.12), theme.Derive(265, 0.12)
 	gate, woken := make(chan struct{}), make(chan struct{}, 1)

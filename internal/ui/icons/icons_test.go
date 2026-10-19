@@ -14,7 +14,7 @@ func coverage(img *image.NRGBA) float64 {
 }
 
 func TestEveryIconRasterizes(t *testing.T) {
-	for _, name := range Names() {
+	for name := range paths {
 		img, err := Rasterize(name, 48, 2, false)
 		if err != nil {
 			t.Errorf("%s: %v", name, err)

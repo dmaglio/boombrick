@@ -34,12 +34,12 @@ const (
 )
 
 var (
-	signTitle = text.Style{Face: text.CormorantSemiBold, Size: 44}
-	stepText  = text.Style{Face: text.Lora, Size: 24}
-	urlText   = text.Style{Face: text.Lora, Size: 22}
-	codeText  = text.Style{Face: text.CormorantSemiBold, Size: 44, Tabular: true}
-	waitText  = text.Style{Face: text.Lora, Size: 24}
-	countText = text.Style{Face: text.Lora, Size: 20, Tabular: true}
+	signTitle = text.Style{Face: text.OutfitSemiBold, Size: 44}
+	stepText  = text.Style{Face: text.Figtree, Size: 24}
+	urlText   = text.Style{Face: text.Figtree, Size: 22}
+	codeText  = text.Style{Face: text.OutfitSemiBold, Size: 44, Tabular: true}
+	waitText  = text.Style{Face: text.Figtree, Size: 24}
+	countText = text.Style{Face: text.Figtree, Size: 20, Tabular: true}
 )
 
 // steps say what to do on the phone.

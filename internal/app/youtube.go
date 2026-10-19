@@ -22,6 +22,7 @@ type Downloads interface {
 	Ready() <-chan struct{}
 	Busy() bool
 	Note() string
+	Version() uint64
 }
 
 // ytDownloads is what playing and downloading YouTube Music songs needs from

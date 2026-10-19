@@ -64,12 +64,12 @@ func heard(elapsed time.Duration) time.Duration { return max(elapsed-outputDelay
 const lineCache = 6 << 20
 
 var (
-	titleStyle  = text.Style{Face: text.Lora, Size: 26}
-	artistStyle = text.Style{Face: text.Lora, Size: 22}
-	pillStyle   = text.Style{Face: text.Lora, Size: 20}
-	lineStyle   = text.Style{Face: text.CormorantSemiBold, Size: 36}
-	curStyle    = text.Style{Face: text.CormorantSemiBold, Size: 60}
-	timeStyle   = text.Style{Face: text.Lora, Size: 22, Tabular: true}
+	titleStyle  = text.Style{Face: text.Figtree, Size: 26}
+	artistStyle = text.Style{Face: text.Figtree, Size: 22}
+	pillStyle   = text.Style{Face: text.Figtree, Size: 20}
+	lineStyle   = text.Style{Face: text.OutfitSemiBold, Size: 36}
+	curStyle    = text.Style{Face: text.OutfitSemiBold, Size: 60}
+	timeStyle   = text.Style{Face: text.Figtree, Size: 22, Tabular: true}
 )
 
 // The lines around the current one, as paper alphas: the two before it,
@@ -85,7 +85,9 @@ type Screen struct {
 	src  Source
 	back func() // back to Now Playing
 
-	key    string // the track whose lyrics are shown, by its lyrics key
+	track  lrc.Track // the track asked about, as asked
+	asked  time.Time // when
+	key    string    // the track whose lyrics are shown, by its lyrics key
 	ly     lrc.Lyrics
 	state  lrc.State
 	line   int           // the current line when last drawn, -1 before the first
@@ -96,16 +98,18 @@ type Screen struct {
 	scroll anim.Value    // plain lyrics' scroll, in rows
 	texts  *ui.TextCache // the lyric lines' text
 
-	// The footer's clock strings, rebuilt only when they change.
-	elapsedSec int
-	elapsed    string
-	totalFor   time.Duration
-	total      string
+	elapsed, total screens.ClockText // the footer's
 }
+
+// askEvery is how often the screen asks again about the track it shows: an
+// answer still being looked for may come in, or better lyrics replace plain
+// ones. Asking every frame of a line filling in would take the lyrics
+// service's lock 30 times a second for nothing.
+const askEvery = 250 * time.Millisecond
 
 // New creates the screen; back returns to Now Playing.
 func New(p Player, src Source, back func()) *Screen {
-	return &Screen{p: p, src: src, back: back, line: -1, rows: map[int][]row{}, texts: ui.NewTextCache(lineCache), elapsedSec: -1, totalFor: -1}
+	return &Screen{p: p, src: src, back: back, line: -1, rows: map[int][]row{}, texts: ui.NewTextCache(lineCache)}
 }
 
 // row is one wrapped row of the current line, with how far along it each
@@ -132,10 +136,10 @@ func newRow(u *ui.Context, s string) row {
 func (r row) runes() int     { return len(r.x) - 1 }
 func (r row) width() float32 { return r.x[len(r.x)-1] }
 
-// fillWidth is how far along rows[k] the fill reaches when sung of the whole
-// line has been sung: part of the way across the character it stops in. The
-// space a wrap drops between rows counts as a character, as it does in the
-// lyrics' own timing.
+// fillWidth is how far along rows[k] the fill reaches when the share sung of
+// the whole line has been sung, stopping part of the way across a character.
+// The space a wrap drops between rows counts as a character, as it does in
+// the lyrics' own timing.
 func fillWidth(rows []row, k int, sung float64) float32 {
 	total := len(rows) - 1
 	for _, r := range rows {
@@ -157,19 +161,28 @@ func fillWidth(rows []row, k int, sung float64) float32 {
 }
 
 // refresh picks up the playing track's lyrics, starting over for a new track.
-func (s *Screen) refresh(st player.State) {
-	if key := screens.LyricsTrack(st.Track).Key(); key != s.key {
-		s.key, s.line, s.plain = key, -1, nil
-		clear(s.rows)
-		s.texts.Clear()
-		s.slide.Set(0)
-		s.scroll.Set(0)
+// It asks the source at once about a new track, and otherwise every askEvery.
+func (s *Screen) refresh(st player.State, now time.Time) {
+	if t := screens.PlayingLyricsTrack(st); t != s.track {
+		if key := t.Key(); key != s.key {
+			s.key, s.line, s.plain = key, -1, nil
+			clear(s.rows)
+			s.texts.Clear()
+			s.slide.Set(0)
+			s.scroll.Set(0)
+		}
+		s.track, s.asked = t, time.Time{}
 	}
 	if !st.Queued {
 		s.ly, s.state, s.head = lrc.Lyrics{}, lrc.None, nil
+		s.asked = time.Time{}
 		return
 	}
-	ly, state := s.src.Lyrics(screens.PlayingLyricsTrack(st))
+	if !s.asked.IsZero() && now.Sub(s.asked) < askEvery {
+		return
+	}
+	s.asked = now
+	ly, state := s.src.Lyrics(s.track)
 	var head *lrc.Line
 	if len(ly.Lines) > 0 {
 		head = &ly.Lines[0]
@@ -260,7 +273,7 @@ func (s *Screen) Animating(now time.Time) bool { return !s.slide.Done(now) || !s
 func (s *Screen) Draw(u *ui.Context) {
 	made := u.Made()
 	st := s.p.State()
-	s.refresh(st)
+	s.refresh(st, u.Now)
 	art := screens.TrackArt(st.Track)
 	drawBackdrop(u, art)
 	status := u.Status
@@ -284,10 +297,9 @@ func (s *Screen) Draw(u *ui.Context) {
 	}
 }
 
-// drawBackdrop draws the blurred art: 1400 px
-// square at (-200, -260) on the 1024 frame, so 1120 at (-160, -208) on the
-// canvas, 75 % over the ground, under a veil of ground from 55 % at the top
-// to 82 % at the bottom. Without art the Now Playing glow stands in.
+// drawBackdrop draws the blurred art 1120 px square at (-160, -208), 75 %
+// over the ground, under a veil of ground from 55 % at the top to 82 % at the
+// bottom. Without art the Now Playing glow stands in.
 func drawBackdrop(u *ui.Context, art widgets.ArtSpec) {
 	t, a, none := u.Backdrop(art.Cover)
 	if none {
@@ -357,13 +369,7 @@ func (s *Screen) drawFooter(u *ui.Context, st player.State) float32 {
 	if !st.Queued {
 		return y
 	}
-	if sec := int(st.Elapsed / time.Second); sec != s.elapsedSec {
-		s.elapsedSec, s.elapsed = sec, screens.Clock(st.Elapsed)
-	}
-	if st.Duration != s.totalFor {
-		s.totalFor, s.total = st.Duration, screens.Clock(st.Duration)
-	}
-	elapsed, total := s.elapsed, s.total
+	elapsed, total := s.elapsed.Of(st.Elapsed), s.total.Of(st.Duration)
 	u.Text(elapsed, timeStyle, side, y, theme.Ink2)
 	tw := u.TextWidth(total, timeStyle)
 	u.Text(total, timeStyle, theme.ScreenW-side-tw, y, theme.Ink2)
@@ -423,10 +429,10 @@ func (s *Screen) drawSynced(u *ui.Context, st player.State, area gfx.Rect) {
 	}
 }
 
-// prepare makes ahead, a piece a call, what the frame the next line becomes
-// current would otherwise make all at once: the line's rows, each row's text
-// and glow, and the text of the lines around it there, the one that comes
-// into view among them.
+// prepare makes ahead of time, a piece a call, what the next line would
+// otherwise need all in the frame it becomes current: its rows, each row's
+// text and glow, and the text of the lines around it, including the one that
+// comes into view.
 func (s *Screen) prepare(u *ui.Context) {
 	next := s.line + 1
 	if next >= len(s.ly.Lines) {

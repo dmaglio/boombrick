@@ -26,7 +26,8 @@ var t0 = time.Unix(1000, 0)
 
 func press(b input.Button) input.Event { return input.Event{Button: b, Kind: input.Press} }
 
-// fakeSource answers from its fields.
+// fakeSource answers from its fields; a test changing them after the first
+// frame bumps version. It counts the times the status is asked.
 type fakeSource struct {
 	status    spotify.Status
 	statusErr error
@@ -37,9 +38,11 @@ type fakeSource struct {
 	logins    int
 	loginErr  error
 	retries   int
+	version   uint64
+	asked     int
 }
 
-func (s *fakeSource) Status() (spotify.Status, error) { return s.status, s.statusErr }
+func (s *fakeSource) Status() (spotify.Status, error) { s.asked++; return s.status, s.statusErr }
 func (s *fakeSource) Playlists() ([]spotify.Playlist, bool, error) {
 	return s.playlists, s.have, s.listErr
 }
@@ -50,6 +53,7 @@ func (s *fakeSource) Tracks(uri string) ([]spotify.Track, bool, error) {
 func (s *fakeSource) Retry()          { s.retries++ }
 func (s *fakeSource) Login()          { s.logins++ }
 func (s *fakeSource) LoginErr() error { return s.loginErr }
+func (s *fakeSource) Version() uint64 { return s.version }
 
 // fakePlayer records what the screens ask it.
 type fakePlayer struct {
@@ -196,9 +200,30 @@ func TestTabOffline(t *testing.T) {
 		t.Fatalf("A offline showed tabs %v", nav.tabs)
 	}
 	src.playlists, src.have = lists, true
+	src.version++
 	render(t, tab)
 	if tab.offline {
 		t.Fatal("offline with playlists kept, the tab doesn't show them")
+	}
+}
+
+// The tab asks the library again only once it has changed, or a second on.
+func TestTabAsksWhenTheLibraryChanges(t *testing.T) {
+	src := signedIn()
+	tab := NewTab(&Env{Nav: &fakeNav{}, Src: src, Player: &fakePlayer{}})
+	render(t, tab)
+	n := src.asked
+	if render(t, tab); src.asked != n {
+		t.Fatalf("asked %d times more with nothing changed", src.asked-n)
+	}
+	src.playlists = lists[:1]
+	src.version++
+	if render(t, tab); src.asked != n+1 || len(tab.rows) != 2 {
+		t.Fatalf("changed, asked %d times more, %d rows", src.asked-n, len(tab.rows))
+	}
+	tab.refresh(t0.Add(time.Second))
+	if src.asked != n+2 {
+		t.Fatal("not asked again a second on")
 	}
 }
 

@@ -53,12 +53,33 @@ func SpecFor(name string) ArtSpec {
 	return s
 }
 
+// placeholderKey is what a placeholder's image depends on.
+type placeholderKey struct {
+	hue     float64
+	variant int
+	glyph   string
+	px      int
+	radius  float64
+}
+
+// placeholderKeys remembers the image key of each placeholder drawn lately,
+// so that a frame formats none. Only the UI thread draws.
+var placeholderKeys = map[placeholderKey]string{}
+
 // placeholder draws spec's generated art, size design pixels square, into box.
 func placeholder(u *ui.Context, spec ArtSpec, size int, radius float64, box gfx.Rect) {
 	px := u.Px(float32(size))
 	// Draw at the rasterised size so the copy stays 1:1.
 	k := float32(px) / (float32(size) * u.Scale)
-	key := fmt.Sprintf("art:%g:%d:%s:%d:%g", spec.Hue, spec.Variant, spec.Glyph, px, radius)
+	pk := placeholderKey{spec.Hue, spec.Variant, spec.Glyph, px, radius}
+	key, ok := placeholderKeys[pk]
+	if !ok {
+		if len(placeholderKeys) >= 4096 {
+			clear(placeholderKeys)
+		}
+		key = fmt.Sprintf("art:%g:%d:%s:%d:%g", spec.Hue, spec.Variant, spec.Glyph, px, radius)
+		placeholderKeys[pk] = key
+	}
 	u.Image(key, func() *image.NRGBA {
 		var glyph *image.NRGBA
 		gx, gy := 0, 0
@@ -82,8 +103,8 @@ func Art(u *ui.Context, spec ArtSpec, size int, radius float64, box gfx.Rect) {
 	}
 }
 
-// artGlyph renders the letter for variant 2: Cormorant Italic at 90 % of the
-// art size, 10 % from the left, in a line box that ends 6 % below the art.
+// artGlyph renders the letter for variant 2: Outfit at 90 % of the art size,
+// 10 % from the left, in a line box that ends 6 % below the art.
 // Liked Songs uses a heart icon instead of ♥, which the fonts lack. size is in
 // device pixels: this calls the text engine directly, which works in whatever
 // pixels the style gives it.
@@ -98,9 +119,9 @@ func artGlyph(u *ui.Context, glyph string, size int) (*image.NRGBA, int, int) {
 		return img, int(0.12 * s), size - hs - int(0.08*s)
 	}
 	fs := int(math.Round(0.9 * s))
-	st := text.Style{Face: text.CormorantItalic, Size: float32(fs)}
+	st := text.Style{Face: text.Outfit, Size: float32(fs)}
 	line := u.Fonts.Shape(glyph, st)
 	img, pad := u.Fonts.Rasterize(line, st)
 	top := 1.06*s - float64(fs) + (float64(fs)-float64(line.Height()))/2
-	return img, int(0.1*s) - pad, int(math.Round(top))
+	return img, int(0.1*s) - pad.X, int(math.Round(top)) - pad.Y
 }

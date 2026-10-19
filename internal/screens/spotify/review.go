@@ -29,9 +29,9 @@ const (
 )
 
 var (
-	tallyText  = text.Style{Face: text.Lora, Size: 24, Tabular: true}
-	matchTitle = text.Style{Face: text.Lora, Size: 24}
-	detailText = text.Style{Face: text.Lora, Size: 20, Tabular: true}
+	tallyText  = text.Style{Face: text.Figtree, Size: 24, Tabular: true}
+	matchTitle = text.Style{Face: text.Figtree, Size: 24}
+	detailText = text.Style{Face: text.Figtree, Size: 20, Tabular: true}
 )
 
 // Review shows an import's songs as they are matched: the sure, the unsure
@@ -43,11 +43,12 @@ type Review struct {
 	first   bool // the first of the import's pages, which ends its leaving
 	cur     int
 	started map[string]bool // the playlists imported from this page
-	job     importer.Job
+	job     importer.Job    // the shown import, its songs changed as they change
 	have    bool
-	version uint64 // the importer's, when job was taken
+	version uint64 // the importer's, when job was last brought up to date
 	list    views.Grid
 	rows    []reviewRow
+	tally   [importer.Skipped + 1]int // the songs by state
 	counts  string
 	msg     widgets.Wrapped
 	other   *others // the Other matches list, while open
@@ -67,11 +68,12 @@ func NewReview(e *Env, pls []spotify.Playlist, first bool) *Review {
 		list: views.Grid{Cols: 1, CellW: theme.ScreenW - 2*screens.Side, CellH: widgets.RowHeight, Pad: screens.Pad}}
 }
 
-// Claims keeps Start, which goes on to the downloads, and L2 and R2.
+// Claims keeps Start, which goes on to the downloads.
 func (r *Review) Claims(b input.Button) bool { return b == input.Start }
 
-// refresh imports the playlists whose songs have come, and takes the shown
-// one's import when it has changed.
+// refresh imports the playlists whose songs have come, and brings the shown
+// one's import up to date when it has changed: only the rows of the songs
+// that changed are made again.
 func (r *Review) refresh() {
 	for _, p := range r.pls {
 		if r.started[p.URI] {
@@ -86,27 +88,56 @@ func (r *Review) refresh() {
 	if r.have && v == r.version {
 		return
 	}
-	job, ok := r.e.Import.Job(r.pls[r.cur].URI)
-	r.version = v
-	if !ok || !r.started[r.pls[r.cur].URI] {
-		r.have = false
+	uri := r.pls[r.cur].URI
+	since := r.version
+	if !r.have {
+		since = 0
+	}
+	c, ok := r.e.Import.Changes(uri, since)
+	if !ok || !r.started[uri] {
+		r.have, r.version = false, v
 		return
 	}
-	r.job, r.have = job, true
-	r.rows = make([]reviewRow, len(job.Items))
-	for i, it := range job.Items {
-		r.rows[i] = rowOf(it)
+	r.version = c.Version
+	switch {
+	case c.All:
+		r.job = importer.Job{URI: uri, Items: c.Items}
+		r.rows = make([]reviewRow, len(c.Items))
+		r.tally = [len(r.tally)]int{}
+		for i, it := range c.Items {
+			r.rows[i] = rowOf(it)
+			r.count(it.State, 1)
+		}
+		r.list.SetCountFocus(len(r.rows), min(r.list.Focus(), max(len(r.rows)-1, 0)))
+	case len(c.At) > 0:
+		for k, i := range c.At {
+			r.count(r.job.Items[i].State, -1)
+			r.job.Items[i] = c.Items[k]
+			r.rows[i] = rowOf(c.Items[k])
+			r.count(c.Items[k].State, 1)
+		}
+	default:
+		return // nothing of this import changed
 	}
-	r.list.SetCountFocus(len(r.rows), min(r.list.Focus(), max(len(r.rows)-1, 0)))
-	sure := job.Count(importer.Matched) + job.Count(importer.Accepted) + job.Count(importer.Have)
-	r.counts = strconv.Itoa(sure) + " matched · " + strconv.Itoa(job.Count(importer.Unsure)) + " unsure · " +
-		strconv.Itoa(job.Count(importer.NotFound)) + " not found"
-	if w := job.Count(importer.Waiting); w > 0 {
-		r.counts += " · Matching " + strconv.Itoa(len(job.Items)-w) + " of " + strconv.Itoa(len(job.Items))
+	r.have = true
+	n := r.tally
+	sure := n[importer.Matched] + n[importer.Accepted] + n[importer.Have]
+	r.counts = strconv.Itoa(sure) + " matched · " + strconv.Itoa(n[importer.Unsure]) + " unsure · " +
+		strconv.Itoa(n[importer.NotFound]) + " not found"
+	if w := n[importer.Waiting]; w > 0 {
+		all := len(r.job.Items)
+		r.counts += " · Matching " + strconv.Itoa(all-w) + " of " + strconv.Itoa(all)
 	}
 }
 
-// rowOf writes song it's row.
+// count adds d to the songs counted in state st.
+func (r *Review) count(st importer.State, d int) {
+	if int(st) < len(r.tally) {
+		r.tally[st] += d
+	}
+}
+
+// rowOf is the review's row for song it.
 func rowOf(it importer.Item) reviewRow {
 	r := reviewRow{title: it.Track.Title, artist: strings.Join(it.Track.Artists, ", ")}
 	var best *importer.Candidate

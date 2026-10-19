@@ -1,10 +1,11 @@
-// Package queue is the Queue screen: what's playing,
-// what follows, and moving or removing what follows.
+// Package queue is the Queue screen: what's playing, what follows, and
+// moving or removing what follows.
 package queue
 
 import (
 	"fmt"
 	"image/color"
+	"slices"
 	"strconv"
 	"time"
 
@@ -37,9 +38,9 @@ const (
 )
 
 var (
-	nowLabel = text.Style{Face: text.LoraSemiBold, Size: 18}
-	timeText = text.Style{Face: text.Lora, Size: 22, Tabular: true}
-	upNext   = text.Style{Face: text.CormorantSemiBold, Size: 30}
+	nowLabel = text.Style{Face: text.FigtreeSemiBold, Size: 18}
+	timeText = text.Style{Face: text.Figtree, Size: 22, Tabular: true}
+	upNext   = text.Style{Face: text.OutfitSemiBold, Size: 30}
 )
 
 // Queue shows the play queue. Up next lists the tracks after the current one;
@@ -54,11 +55,24 @@ type Queue struct {
 	st      player.State // the player's state at the start of this frame
 	header  string
 	list    views.Grid // up next: tracks[pos+1:]
+	rows    []upRow    // up next's rows, made as they first show
 	moving  bool
 	from    int          // where the lifted row was, in up next
 	moveAt  player.State // the player's state when the row was lifted
 	moveMsg string
 	listTop float32
+	// The panel's lines, made again only when what they show changes.
+	clock   string
+	clockAt [2]time.Duration // the seconds clock shows
+	line    string
+	lineOf  [2]string // the title and artist line shows
+}
+
+// upRow is what a row of up next shows that takes making.
+type upRow struct {
+	index    string
+	art      widgets.ArtSpec
+	duration string
 }
 
 // New creates the screen.
@@ -86,6 +100,8 @@ func (q *Queue) refresh(now time.Time) {
 	q.tracks, q.pos = q.p.Queue(q.tracks[:0])
 	q.version, q.index, q.stale = q.st.Version, q.st.Index, false
 	q.list.SetCount(max(len(q.tracks)-q.pos-1, 0))
+	q.rows = slices.Grow(q.rows[:0], q.list.Count())[:q.list.Count()]
+	clear(q.rows)
 	if shift != 0 {
 		q.list.SetFocus(min(max(q.list.Focus()-shift, 0), q.list.Count()-1), now)
 	}
@@ -142,6 +158,7 @@ func (q *Queue) Handle(ev input.Event, now time.Time) bool {
 			}
 			up := q.upNext()
 			up[f], up[to] = up[to], up[f]
+			q.rows[f], q.rows[to] = upRow{}, upRow{}
 			q.list.SetFocus(to, now)
 			return true
 		case input.A:
@@ -271,13 +288,32 @@ func (q *Queue) drawPanel(u *ui.Context, y float32) {
 		box, fadeTo(u.Accent.Color, 0.5))
 	widgets.Art(u, screens.TrackArt(st.Track), panelAr, 8, gfx.Rect{X: side + 12, Y: y + 12, W: panelAr, H: panelAr})
 	x := float32(side + 12 + panelAr + 16)
-	clock := screens.Clock(st.Elapsed) + " / " + screens.Clock(st.Duration)
-	cw := u.TextWidth(clock, timeText)
-	u.Text(clock, timeText, side+w-16-cw, u.CenterY(timeText, y, panelH), theme.Ink2)
+	if at := [2]time.Duration{st.Elapsed / time.Second, st.Duration / time.Second}; q.clock == "" || at != q.clockAt {
+		q.clock, q.clockAt = screens.Clock(st.Elapsed)+" / "+screens.Clock(st.Duration), at
+	}
+	if of := [2]string{st.Track.Title, st.Track.Artist}; q.line == "" || of != q.lineOf {
+		q.line, q.lineOf = of[0]+" · "+of[1], of
+	}
+	cw := u.TextWidth(q.clock, timeText)
+	u.Text(q.clock, timeText, side+w-16-cw, u.CenterY(timeText, y, panelH), theme.Ink2)
 	labelH, titleH := u.LineHeight(nowLabel), u.LineHeight(text.Body)
 	ty := y + (panelH-labelH-titleH)/2
 	u.Text("NOW PLAYING", nowLabel, x, ty, u.Accent.Color)
-	u.Text(u.Fit(st.Track.Title+" · "+st.Track.Artist, text.Body, side+w-16-cw-24-x), text.Body, x, ty+labelH, theme.Paper)
+	u.Text(u.Fit(q.line, text.Body, side+w-16-cw-24-x), text.Body, x, ty+labelH, theme.Paper)
+}
+
+// row is up next's row i, made the first time it shows rather than every
+// frame.
+func (q *Queue) row(i int) *upRow {
+	r := &q.rows[i]
+	if r.index == "" {
+		t := &q.upNext()[i]
+		r.index, r.art = strconv.Itoa(i+1), screens.TrackArt(*t)
+		if t.Duration > 0 {
+			r.duration = screens.Clock(t.Duration)
+		}
+	}
+	return r
 }
 
 // drawList draws up next. In move mode the rows show grips, the lifted row
@@ -291,12 +327,9 @@ func (q *Queue) drawList(u *ui.Context, now time.Time) {
 	list := gfx.Rect{X: 0, Y: q.listTop, W: theme.ScreenW, H: bottom - q.listTop}
 	u.PushClip(gfx.Rect{X: 0, Y: widgets.StatusHeight, W: theme.ScreenW, H: bottom - widgets.StatusHeight})
 	q.list.Draw(now, side, q.listTop, func(i int, x, y, k float32) {
-		t := up[i]
-		art := screens.TrackArt(t)
-		r := widgets.Row{Index: strconv.Itoa(i + 1), Grip: q.moving, Art: &art, Title: t.Title, Subtitle: t.Artist}
-		if t.Duration > 0 {
-			r.Duration = screens.Clock(t.Duration)
-		}
+		ur := q.row(i)
+		r := widgets.Row{Index: ur.index, Grip: q.moving, Art: &ur.art, Title: up[i].Title, Subtitle: up[i].Artist,
+			Duration: ur.duration}
 		box := gfx.Rect{X: x, Y: y, W: q.list.CellW, H: widgets.RowHeight}
 		if !q.moving {
 			widgets.RowGlow(u, box, widgets.RowRadius, k)
@@ -342,13 +375,21 @@ func fadeTo(c color.NRGBA, a float64) color.NRGBA {
 	return c
 }
 
+// The screen's hint bars: while a row is lifted, with nothing up next, and
+// otherwise.
+var (
+	moveHints  = []widgets.Hint{{Key: "A", Label: "Drop here"}, {Key: "▲ ▼", Label: "Move"}, {Key: "B", Label: "Cancel"}}
+	emptyHints = []widgets.Hint{{Key: "B", Label: "Back"}}
+	listHints  = []widgets.Hint{{Key: "A", Label: "Play now"}, {Key: "X", Label: "Move"}, {Key: "Y", Label: "Remove"},
+		{Key: "B", Label: "Back"}}
+)
+
 func (q *Queue) hints() []widgets.Hint {
 	switch {
 	case q.moving:
-		return []widgets.Hint{{Key: "A", Label: "Drop here"}, {Key: "▲ ▼", Label: "Move"}, {Key: "B", Label: "Cancel"}}
+		return moveHints
 	case q.list.Count() == 0:
-		return []widgets.Hint{{Key: "B", Label: "Back"}}
+		return emptyHints
 	}
-	return []widgets.Hint{{Key: "A", Label: "Play now"}, {Key: "X", Label: "Move"}, {Key: "Y", Label: "Remove"},
-		{Key: "B", Label: "Back"}}
+	return listHints
 }

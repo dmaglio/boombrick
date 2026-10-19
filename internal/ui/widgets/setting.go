@@ -45,8 +45,8 @@ func (p Panel) End(u *ui.Context) {
 const SettingHeight = 74
 
 var (
-	settingLabel = text.Style{Face: text.Lora, Size: 28}
-	settingValue = text.Style{Face: text.Lora, Size: 22, Tabular: true}
+	settingLabel = text.Style{Face: text.Figtree, Size: 28}
+	settingValue = text.Style{Face: text.Figtree, Size: 22, Tabular: true}
 )
 
 // Setting is a row of Settings or the quick menu: an icon, a label, its value

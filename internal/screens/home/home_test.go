@@ -10,6 +10,7 @@ import (
 
 	"github.com/ujjwal313/boombrick/internal/fixture"
 	"github.com/ujjwal313/boombrick/internal/library"
+	"github.com/ujjwal313/boombrick/internal/media"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
 	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/spotify"
@@ -269,6 +270,73 @@ func TestFocusStaysInBounds(t *testing.T) {
 	h.Handle(press(input.Down), t0)  // Spotify playlists has four cards
 	if h.row != 2 || h.col != 3 {
 		t.Fatalf("focus = %d,%d, want 2,3 (column clamped)", h.row, h.col)
+	}
+}
+
+// A frame drawn again allocates nothing: no closure per item, no focus
+// strength for items that never had focus, no hint bar.
+func TestDrawingAgainAllocatesNothing(t *testing.T) {
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	u.Accent = theme.Derive(fixture.PlayingHue, fixture.PlayingChroma)
+	u.Status = fixture.Status()
+	u.Now = t0
+	h := New(fixture.Home())
+	h.Draw(u)
+	if n := testing.AllocsPerRun(10, func() { h.Draw(u) }); n != 0 {
+		t.Fatalf("a frame allocates %v times", n)
+	}
+}
+
+// Only the focused item and the one focus left, still fading out, keep a
+// focus strength.
+func TestFadedFocusIsForgotten(t *testing.T) {
+	h := New(fixture.Home())
+	at := t0
+	for range 3 {
+		h.Handle(press(input.Right), at)
+		at = at.Add(anim.Focus)
+	}
+	if len(h.focus) != 2 {
+		t.Fatalf("%d items keep a focus strength", len(h.focus))
+	}
+}
+
+// covers records the albums whose covers are asked for, and has none.
+type covers map[string]bool
+
+func (c covers) Cover(cv media.Cover, _ int) (*image.NRGBA, bool) {
+	c[cv.Album] = true
+	return nil, false
+}
+
+func (c covers) Backdrop(media.Cover) (*image.NRGBA, bool) { return nil, true }
+
+// Items out of view, off the side of their row or in a row scrolled away,
+// aren't drawn.
+func TestItemsOutOfViewArentDrawn(t *testing.T) {
+	var rows []fixture.Row
+	for r := range 6 {
+		var items []fixture.Item
+		for i := range maxRecent {
+			name := fmt.Sprintf("%d-%d", r, i)
+			items = append(items, fixture.Item{Title: name, Art: widgets.ArtSpec{Cover: media.Cover{Album: name}}})
+		}
+		rows = append(rows, fixture.Row{Title: fmt.Sprint(r), Cards: true, Items: items})
+	}
+	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
+	asked := covers{}
+	u.Covers = asked
+	u.Now = t0
+	New(rows).Draw(u)
+	for _, album := range []string{"0-0", "0-3", "1-0"} {
+		if !asked[album] {
+			t.Errorf("%s, in view, wasn't drawn", album)
+		}
+	}
+	for _, album := range []string{"0-5", "0-11", "5-0"} {
+		if asked[album] {
+			t.Errorf("%s, out of view, was drawn", album)
+		}
 	}
 }
 
