@@ -2,6 +2,36 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.3.1]
+
+### Changed
+
+- **New type:** Outfit for headings and Figtree for everything else, in place of Cormorant Garamond and Lora. Times, counts and percentages still line up.
+- Titles in Cyrillic, Greek and Vietnamese are drawn in Noto Sans wherever Outfit and Figtree have no letters for them, a word at a time, so a word never mixes two fonts.
+- Lighter on the battery: with the screen off, Boombrick no longer reads the battery, Wi-Fi, Bluetooth or volume, and the background player checks on the music once a second instead of four times. The volume is read quickly only after a button press.
+- Smoother: Home, Library, Queue, Now Playing, Lyrics and Settings no longer allocate memory each frame, and album backgrounds take a sixteenth of the memory they did.
+- Playing or skipping to a song no longer freezes the screen while a slow card opens its file, and an MP3 without a length header starts at once instead of after the whole file is read.
+- Songs at 44.1 kHz, most music and all of Spotify, take half the work to play.
+- Big covers are made about four times faster.
+- A song played while it downloads starts sooner: its lyrics are looked up while its cover is fetched.
+- Importing a big Spotify playlist no longer slows the Brick down as songs are matched: each saves only itself.
+- Boombrick keeps less in memory: Spotify playlists you haven't looked at lately, songs downloaded before today, and streams the Spotify helper has finished with.
+- About 1 MB smaller to download and 2.8 MB smaller on the card.
+
+### Fixed
+
+- An album whose cover inside the file is damaged or too big shows the folder's cover instead of none.
+- Albums asked for from YouTube Music's results keep downloading while an artist's page is open.
+- Settings keeps showing an update that's ready to install when a check for a newer one fails.
+- Seeking to the very end of a Spotify song no longer plays it again from the top.
+- Signing out of Spotify while a playlist loads no longer brings that account's playlist back after a restart.
+- The import's playlist picker updates its size estimate when a playlist's songs arrive.
+
+### Security
+
+- Releases are built with Go 1.27.2, and the image and text libraries are updated with their fixes.
+- Covers are made only from JPEG, PNG and WebP pictures; other formats are refused.
+
 ## [v0.3.0]
 
 ### Added
