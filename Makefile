@@ -82,12 +82,16 @@ define app
 			/src/$(1)/lib/'
 endef
 
+# Boombrick.pak.zip unzips at the root of the SD card, and is what Boombrick
+# updates itself from. The Pak Store unzips its own zip into the pak's folder,
+# so that one holds the same files at its root.
 pak: device dist/qjs/qjs-linux-aarch64
 	rm -rf dist/pak
 	$(call app,$(PAK_DIR),pak)
-	rm -f dist/Boombrick.pak.zip
+	rm -f dist/Boombrick.pak.zip dist/Boombrick-PakStore.zip
 	cd dist/pak && zip -9qr ../Boombrick.pak.zip Tools
-	@echo "dist/Boombrick.pak.zip"
+	cd $(PAK_DIR) && zip -9qr $(CURDIR)/dist/Boombrick-PakStore.zip .
+	@echo "dist/Boombrick.pak.zip dist/Boombrick-PakStore.zip"
 
 # CrossMix lists the app in its Apps menu from config.json, with the icon
 # drawn from the logo.

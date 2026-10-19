@@ -24,6 +24,8 @@ You need a TrimUI Brick with NextUI or CrossMix. Wi-Fi is used for Spotify, YouT
 1. Download the zip for your firmware:
    - **NextUI:** `Boombrick.pak.zip` from the [latest release](https://github.com/ujjwal313/boombrick/releases/latest).
    - **CrossMix:** `Boombrick-CrossMix.zip` from the same release.
+
+   `Boombrick-PakStore.zip` holds the same NextUI app for the Pak Store, which unzips it into the app's folder; it isn't for the root of the card.
 2. Unzip it at the root of the SD card. It goes to `Tools/tg5040/Boombrick.pak` on NextUI and `Apps/Boombrick` on CrossMix.
 3. Put your music in the card's `Music` folder, in any layout; `Artist/Album/01 Title.flac` works best when files have no tags.
 4. Start Boombrick from Tools on NextUI, or from Apps on CrossMix. The library is scanned on the first launch, and again on every launch after that.

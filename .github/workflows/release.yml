@@ -1,8 +1,10 @@
 # Pushing a tag like v0.5.0 builds the app for NextUI and for CrossMix with
 # that version and publishes both, with their checksums, as a GitHub
-# release. Boombrick's Settings offers the latest release as an update. A
-# tag with a suffix, like v0.5.0-beta.1, is a beta: a pre-release, which
-# GitHub's latest release, and so Settings, leaves out.
+# release, with the NextUI pak's zip for the Pak Store. Boombrick's Settings
+# offers the latest release as an update, and the Pak Store the version
+# pak.json names, so a full release's tag must match it. A tag with a suffix,
+# like v0.5.0-beta.1, is a beta: a pre-release, which GitHub's latest release,
+# and so Settings, leaves out, as does the Pak Store.
 name: Release
 
 on:
@@ -17,6 +19,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Pak Store version
+        run: |
+          case "$GITHUB_REF_NAME" in *-*) exit 0 ;; esac
+          v="$(jq -r .version pak.json)"
+          [ "$v" = "$GITHUB_REF_NAME" ] || { echo "pak.json says $v, the tag is $GITHUB_REF_NAME" >&2; exit 1; }
       # The Makefile builds the toolchain image with the Go that go.mod asks for.
       - uses: actions/setup-go@v5
         with:
@@ -30,7 +37,7 @@ jobs:
           make pak crossmix VERSION="${GITHUB_REF_NAME#v}"
       - name: Checksums
         working-directory: dist
-        run: sha256sum Boombrick.pak.zip Boombrick-CrossMix.zip > SHA256SUMS
+        run: sha256sum Boombrick.pak.zip Boombrick-CrossMix.zip Boombrick-PakStore.zip > SHA256SUMS
       # The notes are the tag's section of CHANGELOG.md, from its "## [v…]"
       # heading to the next; GitHub's own when there is none.
       - name: Release notes
@@ -46,5 +53,5 @@ jobs:
           flags="--notes-file dist/NOTES.md"
           grep -q '[^[:space:]]' dist/NOTES.md || flags="--generate-notes"
           case "$GITHUB_REF_NAME" in *-*) flags="$flags --prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/Boombrick.pak.zip dist/Boombrick-CrossMix.zip dist/SHA256SUMS \
+          gh release create "$GITHUB_REF_NAME" dist/Boombrick.pak.zip dist/Boombrick-CrossMix.zip dist/Boombrick-PakStore.zip dist/SHA256SUMS \
             --title "Boombrick ${GITHUB_REF_NAME#v}" $flags
