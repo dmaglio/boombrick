@@ -26,13 +26,8 @@ type Picture struct {
 	Data          []byte
 }
 
-var (
-	// ErrNotOpus is a file with no Opus track.
-	ErrNotOpus = errors.New("no Opus track")
-	// ErrLaced is a block holding more than one packet, which YouTube's files
-	// never have.
-	ErrLaced = errors.New("laced block")
-)
+// ErrNotOpus is a file with no Opus track.
+var ErrNotOpus = errors.New("no Opus track")
 
 // serial is the Ogg stream's serial number; a file holds one stream.
 const serial = 0x426f6f6d
@@ -41,14 +36,7 @@ const serial = 0x426f6f6d
 // when it is turned into samples: it is far longer than any packet.
 const maxPadding = 1 << 40
 
-// Remux reads WebM from r and writes it to w as Ogg Opus tagged with t.
-func Remux(r io.Reader, w io.Writer, t Tags) error {
-	if err := remux(r, w, t); err != nil {
-		return fmt.Errorf("remux: %w", err)
-	}
-	return nil
-}
-
+// remux reads WebM from r and writes it to w as Ogg Opus tagged with t.
 func remux(r io.Reader, w io.Writer, t Tags) error {
 	in := newWebM(r)
 	head, err := in.head()
@@ -94,8 +82,9 @@ func File(src, dst string, t Tags) error {
 		return err
 	}
 	w := bufio.NewWriterSize(f, 64<<10)
-	err = Remux(bufio.NewReaderSize(in, 64<<10), w, t)
-	if err == nil {
+	if err = remux(bufio.NewReaderSize(in, 64<<10), w, t); err != nil {
+		err = fmt.Errorf("remux: %w", err)
+	} else {
 		err = w.Flush()
 	}
 	if err == nil {

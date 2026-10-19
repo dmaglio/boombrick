@@ -155,6 +155,24 @@ func TestStreamToFollowOpensNearTheEnd(t *testing.T) {
 	}
 }
 
+// The wait to open the stream to follow is stopped when another replaces it,
+// as on each seek, and when the player closes.
+func TestWaitsForTheStreamToFollowAreStopped(t *testing.T) {
+	p, _, a, _ := streamPlayer(t, nil, long)
+	p.Play(spotifyTracks("a", "b"), 0)
+	eventually(t, "a to play", func() bool { return p.State().Elapsed > 0 })
+	first := a.last(t)
+	p.Seek(time.Second)
+	second := a.last(t)
+	if second == first || !first.stopped {
+		t.Fatalf("after a seek: waiting again %v, the first wait stopped %v", second != first, first.stopped)
+	}
+	p.Close()
+	if !second.stopped {
+		t.Fatal("the wait outlived the player")
+	}
+}
+
 // A refused key is waited out once; refused again, playback stops on the
 // track, and play tries again. It never skips on to the next track.
 func TestThrottledStreamWaitsThenTriesOnce(t *testing.T) {

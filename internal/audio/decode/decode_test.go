@@ -1,11 +1,13 @@
 package decode
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -82,6 +84,59 @@ func TestMP3LengthAndRate(t *testing.T) {
 	if pcm := readAll(t, src); int64(len(pcm)/2) != src.Frames() {
 		t.Fatalf("decoded %d frames, Frames() said %d", len(pcm)/2, src.Frames())
 	}
+}
+
+// Without a Xing or Info header an MP3's length is estimated from its bitrate
+// rather than counted by decoding the whole file, and reads still run to the
+// real end, whichever side of it the estimate falls.
+func TestMP3WithoutAHeader(t *testing.T) {
+	for _, name := range []string{"noxing-44100.mp3", "noise-untagged.mp3"} {
+		src := open(t, name)
+		est := src.Frames()
+		if n := int64(len(readAll(t, src)) / 2); est < n-1152 || est > n+1152 {
+			t.Errorf("%s: Frames() = %d, decoded %d; at a constant bitrate the estimate is within a frame", name, est, n)
+		}
+	}
+
+	// Cut out of a VBR file, the estimate runs long.
+	src := open(t, "noise-cut.mp3")
+	if est, n := src.Frames(), int64(len(readAll(t, src))/2); est <= n {
+		t.Errorf("noise-cut.mp3: Frames() = %d, decoded %d; want the estimate long", est, n)
+	}
+
+	// After a stretch at 320 kbps, 45 s at 128 kbps: the estimate falls well
+	// short, and reads and seeks go past it.
+	high, err := os.ReadFile(fixture(t, "noise-320k.mp3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	low, err := os.ReadFile(fixture(t, "noise-untagged.mp3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := id3Size(high)
+	info := high[at:] // LAME's Info frame: MPEG 1 Layer III, 320 kbps at 44.1 kHz
+	if string(info[36:40]) != "Info" {
+		t.Fatalf("noise-320k.mp3 has no Info frame at %d", at)
+	}
+	path := filepath.Join(t.TempDir(), "joined.mp3")
+	if err := os.WriteFile(path, slices.Concat(info[144*320000/44100+int(info[2]>>1&1):], low), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if src, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	est := src.Frames()
+	whole := readAll(t, src)
+	if n := int64(len(whole) / 2); est <= 0 || est > n-20*44100 {
+		t.Fatalf("Frames() = %d, decoded %d; want an estimate at least 20 s short", est, n)
+	}
+	frame := est + 10*44100
+	if err := src.SeekFrame(frame); err != nil {
+		t.Fatal(err)
+	}
+	same(t, src, whole[2*frame:2*frame+2*5000], false, fmt.Sprintf("after seeking past the estimate to %d", frame))
 }
 
 func TestMonoIsCopiedToBothSides(t *testing.T) {
@@ -306,6 +361,43 @@ func TestM4AUpsampledMono(t *testing.T) {
 func TestALACIsRefused(t *testing.T) {
 	if _, err := Open(fixture(t, "alac.m4a")); err == nil {
 		t.Fatal("Open should refuse ALAC; only AAC is decoded")
+	}
+}
+
+// faad2 is built for AAC-LC, with SBR and PS: files of the other profiles are
+// refused when they're opened.
+func TestOtherAACProfilesAreRefused(t *testing.T) {
+	data, err := os.ReadFile(fixture(t, "tone-44100.m4a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr, err := readMP4(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	asc := bytes.Index(data, tr.config)
+	esds := bytes.Index(data, []byte("esds"))
+	typ := esds + bytes.IndexByte(data[esds:], 0x40) // the esds's object type: MPEG-4 audio
+	for _, c := range []struct {
+		name string
+		at   int
+		v    byte
+	}{
+		{"AAC Main", asc, 1<<3 | data[asc]&7},
+		{"AAC LTP", asc, 4<<3 | data[asc]&7},
+		{"MPEG-2 AAC Main", typ, 0x66},
+		{"MPEG-2 AAC SSR", typ, 0x68},
+	} {
+		b := slices.Clone(data)
+		b[c.at] = c.v
+		path := filepath.Join(t.TempDir(), "x.m4a")
+		if err := os.WriteFile(path, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if src, err := Open(path); err == nil {
+			src.Close()
+			t.Errorf("Open should refuse %s", c.name)
+		}
 	}
 }
 func TestOpusUnknownLengthIsMinusOne(t *testing.T) {

@@ -120,8 +120,7 @@ func (p *Player) stopSleepLocked() {
 
 // sleepFire begins the fade of a timed sleep, sleepFade before its time. The
 // timer is off from then; the engine pauses playback when the fade is done. A
-// track playback waits on, for its download or its stream to open, lands
-// paused.
+// track playback waits on, for its download or to open, lands paused.
 func (p *Player) sleepFire(gen uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -3,7 +3,7 @@
 package decode
 
 /*
-#cgo CFLAGS: -O2
+#cgo CFLAGS: -O2 -DNDEBUG
 #cgo LDFLAGS: -lm
 #include <stdlib.h>
 #include "dr_mp3.h"
@@ -20,8 +20,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/ujjwal313/boombrick/internal/audio"
@@ -32,24 +34,39 @@ var ErrUnsupported = errors.New("decode: unsupported format")
 
 var errOpen = errors.New("not a readable file of its format")
 
+// format is how files of one extension are opened and measured.
+type format struct {
+	open     func(path *C.char) (*decoder, error)
+	duration func(r io.ReaderAt, size int64) (time.Duration, error)
+}
+
+var formats = map[string]format{
+	".mp3":  {openMP3, mp3Duration},
+	".flac": {openFLAC, flacDuration},
+	".opus": {openOpus, opusDuration},
+	".m4a":  {openM4A, m4aDuration},
+}
+
+func formatOf(path string) (format, bool) {
+	f, ok := formats[strings.ToLower(filepath.Ext(path))]
+	return f, ok
+}
+
 // Supported reports whether Open handles path's format.
 func Supported(path string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".mp3", ".flac", ".opus", ".m4a":
-		return true
-	}
-	return false
+	_, ok := formatOf(path)
+	return ok
 }
 
 // Open opens path with the decoder its extension names.
 func Open(path string) (audio.Source, error) {
-	open := map[string]func(*C.char) (*decoder, error){".mp3": openMP3, ".flac": openFLAC, ".opus": openOpus, ".m4a": openM4A}[strings.ToLower(filepath.Ext(path))]
-	if open == nil {
+	f, ok := formatOf(path)
+	if !ok {
 		return nil, ErrUnsupported
 	}
 	cpath := C.CString(path)
 	defer C.free(unsafe.Pointer(cpath))
-	d, err := open(cpath)
+	d, err := f.open(cpath)
 	if err != nil {
 		return nil, fmt.Errorf("decode %s: %w", path, err)
 	}
@@ -176,8 +193,16 @@ func openMP3(path *C.char) (*decoder, error) {
 	if m == nil {
 		return nil, errOpen
 	}
-	frames := int64(C.drmp3_get_pcm_frame_count(m))
-	if frames == 0 {
+	var frames int64
+	if m.totalPCMFrameCount != ^C.drmp3_uint64(0) {
+		frames = int64(C.drmp3_get_pcm_frame_count(m))
+	} else {
+		// Without a Xing or Info header dr_mp3 would read the whole file to
+		// count the frames. An estimate does: an MP3's length isn't taken as
+		// exact, so reads go on to the real end.
+		frames = mp3Estimate(C.GoString(path), int(m.sampleRate))
+	}
+	if frames <= 0 {
 		frames = -1
 	}
 	d := &decoder{
@@ -191,6 +216,25 @@ func openMP3(path *C.char) (*decoder, error) {
 	}
 	d.seek = func(f int64) bool { return C.bb_mp3_seek(m, C.drmp3_uint64(f), C.drmp3_uint64(d.pos)) != 0 }
 	return d, nil
+}
+
+// mp3Estimate is the length the library scan gives an MP3 with no Xing or
+// Info header, from its bitrate, or -1.
+func mp3Estimate(path string, rate int) int64 {
+	f, err := os.Open(path)
+	if err != nil {
+		return -1
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return -1
+	}
+	n, r, err := mp3Length(f, info.Size())
+	if err != nil || r != int64(rate) {
+		return -1
+	}
+	return n
 }
 
 func openFLAC(path *C.char) (*decoder, error) {

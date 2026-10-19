@@ -6,8 +6,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -18,6 +16,10 @@ var errNoLength = errors.New("decode: no length in the file's headers")
 // track's edit list or sample table, and an MP3's Xing, Info or VBRI header,
 // or an estimate from its bitrate when it has none.
 func Duration(path string) (time.Duration, error) {
+	format, ok := formatOf(path)
+	if !ok {
+		return 0, ErrUnsupported
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, err
@@ -27,18 +29,7 @@ func Duration(path string) (time.Duration, error) {
 	if err != nil {
 		return 0, err
 	}
-	size := info.Size()
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".flac":
-		return flacDuration(f)
-	case ".opus":
-		return opusDuration(f, size)
-	case ".m4a":
-		return m4aDuration(f, size)
-	case ".mp3":
-		return mp3Duration(f, size)
-	}
-	return 0, ErrUnsupported
+	return format.duration(f, info.Size())
 }
 
 func seconds(samples, rate int64) time.Duration {
@@ -57,7 +48,7 @@ func id3Size(head []byte) int64 {
 	return n + 10
 }
 
-func flacDuration(r io.ReaderAt) (time.Duration, error) {
+func flacDuration(r io.ReaderAt, _ int64) (time.Duration, error) {
 	var head [10]byte
 	if _, err := r.ReadAt(head[:], 0); err != nil {
 		return 0, errNoLength
@@ -125,9 +116,19 @@ var (
 )
 
 func mp3Duration(r io.ReaderAt, size int64) (time.Duration, error) {
+	n, rate, err := mp3Length(r, size)
+	if err != nil {
+		return 0, err
+	}
+	return seconds(n, rate), nil
+}
+
+// mp3Length is an MP3's length in samples at its sample rate: from its Xing,
+// Info or VBRI header, or else estimated from its first frame's bitrate.
+func mp3Length(r io.ReaderAt, size int64) (samples, rate int64, err error) {
 	var head [10]byte
 	if _, err := r.ReadAt(head[:], 0); err != nil {
-		return 0, errNoLength
+		return 0, 0, errNoLength
 	}
 	start := id3Size(head[:])
 	buf := make([]byte, 16<<10)
@@ -153,7 +154,7 @@ func mp3Duration(r io.ReaderAt, size int64) (time.Duration, error) {
 			if trim < samples {
 				samples -= trim
 			}
-			return seconds(samples, rate), nil
+			return samples, rate, nil
 		}
 		audio := size - start - int64(i)
 		var tag [3]byte
@@ -161,9 +162,9 @@ func mp3Duration(r io.ReaderAt, size int64) (time.Duration, error) {
 			audio -= 128 // ID3v1
 		}
 		bitrate := mp3Bitrates[table][bri] * 1000
-		return time.Duration(float64(audio*8) / float64(bitrate) * float64(time.Second)), nil
+		return audio * 8 * rate / bitrate, rate, nil
 	}
-	return 0, errNoLength
+	return 0, 0, errNoLength
 }
 
 // vbrFrames reads the frame count from a Xing or Info header, which sits after

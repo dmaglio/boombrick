@@ -77,7 +77,8 @@ type State struct {
 	Version           uint64 // changes whenever the queue or its order does
 }
 
-// Opener opens a track's file for decoding.
+// Opener opens a track's file for decoding. It is never called with the
+// player's lock held.
 type Opener func(path string) (audio.Source, error)
 
 // restartAfter is how far into a track Prev restarts it instead of going back.
@@ -116,6 +117,8 @@ type Player struct {
 	startFrame        int64  // where cur was started, cued or last sought to
 	playedOut         bool   // the queue ended and cur was dropped
 	waiting           bool   // the current track is pending: nothing is open until it lands
+	loading           bool   // the current track is being opened, a file or a stream
+	format, formatOf  string // State's Format, and the path it was worked out for
 	levelling, closed bool
 	wg                sync.WaitGroup // priming goroutines
 	shuffle           bool
@@ -136,11 +139,12 @@ type Player struct {
 	stream      StreamOpener
 	notify      func(Notice)
 	skipped     time.Time
-	loading     bool // the current track is a stream being opened
 	retried     bool // the current stream was refused and waited for once
 	failures    int  // streams in a row that wouldn't open
 	cancelOpen  context.CancelFunc
 	cancelPrime context.CancelFunc
+	retryTimer  stopper // tries a refused stream again
+	primeTimer  stopper // opens the stream to follow once cur nears its end
 }
 
 // New creates a player that plays through out and opens files with open.
@@ -202,12 +206,6 @@ func (p *Player) albumModeLocked() bool {
 		}
 	}
 	return first.Album != ""
-}
-
-func (p *Player) albumMode() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.albumModeLocked()
 }
 
 // openTrack opens t, wrapped in its ReplayGain when levelling is on, the
@@ -274,42 +272,89 @@ func (p *Player) orderLocked(first int) []int {
 // startLocked plays the track at pos from its start.
 func (p *Player) startLocked() { p.startAtLocked(0) }
 
-// startAtLocked plays the track at pos from frame, moving on past files that
-// won't open (those start from the top). It wraps at the end of the order only
-// with repeat all, and stops if nothing opens.
+// startAtLocked plays the track at pos from frame, once it has opened or, if
+// it is still downloading, once it lands. Files that won't open are moved on
+// past (see openFileLocked).
 func (p *Player) startAtLocked(frame int64) {
-	p.cued, p.playedOut, p.waiting = false, false, false
-	for range p.order {
-		t := p.queue[p.order[p.pos]]
-		if t.Pending() {
-			p.stopLocked()
-			p.waiting, p.startFrame = true, max(frame, 0)
-			return
-		}
-		if t.Streamed() && p.stream != nil {
-			p.stopLocked()
-			p.openLocked(frame)
-			return
-		}
-		src, err := p.openTrack(t, p.levelling, p.albumModeLocked())
-		if err == nil {
-			p.cur, p.curRate, p.curFrames, p.startFrame = src, src.SampleRate(), src.Frames(), max(frame, 0)
-			p.framesOf = t.key()
-			p.engine.PlayFrom(src, frame)
-			p.primeLocked()
-			return
-		}
-		frame = 0
-		p.log.Warn("skipping unplayable track", "path", t.Path, "err", err)
-		if p.pos+1 < len(p.order) {
-			p.pos++
-		} else if p.repeat == RepeatAll {
-			p.pos = 0
-		} else {
-			break
-		}
-	}
 	p.stopLocked()
+	p.playedOut = false
+	p.loadLocked(frame, len(p.order))
+}
+
+// loadLocked opens the track at pos from frame, or waits for its download.
+// Opening happens on a goroutine, so neither the caller nor anything else
+// that takes the lock waits on a slow card or the network. tries bounds how
+// many files in a row are tried when they won't open.
+func (p *Player) loadLocked(frame int64, tries int) {
+	t := p.queue[p.order[p.pos]]
+	switch {
+	case t.Pending():
+		p.waiting, p.startFrame = true, max(frame, 0)
+	case t.Streamed() && p.stream != nil:
+		p.openLocked(frame)
+	default:
+		p.openFileLocked(frame, tries)
+	}
+}
+
+// openFileLocked opens the file at pos on a goroutine and plays it from
+// frame, or cues it there if playback is cued by then. If it won't open and
+// playback is cued, playback stops on it, and play tries it again; otherwise
+// the tracks after it are started from their tops instead, until tries files
+// in all have failed. The order wraps only with repeat all.
+func (p *Player) openFileLocked(frame int64, tries int) {
+	if p.closed {
+		return
+	}
+	p.gen++ // anything opening for what was playing is stale
+	p.cancelOpensLocked()
+	p.loading, p.startFrame = true, max(frame, 0)
+	gen, t, levelling, album := p.gen, p.queue[p.order[p.pos]], p.levelling, p.albumModeLocked()
+	p.wg.Go(func() {
+		src, err := p.openTrack(t, levelling, album)
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if gen != p.gen || p.closed {
+			if src != nil {
+				src.Close()
+			}
+			return
+		}
+		p.loading = false
+		if err != nil {
+			p.unplayableLocked(t, err, tries)
+			return
+		}
+		p.failures = 0
+		p.cur, p.curRate, p.curFrames = src, src.SampleRate(), src.Frames()
+		p.framesOf = t.key()
+		if p.cued {
+			p.engine.Cue(src, frame)
+		} else {
+			p.engine.PlayFrom(src, frame)
+		}
+		p.primeLocked()
+	})
+}
+
+// unplayableLocked moves on from the file t at pos, which wouldn't open, as
+// openFileLocked describes; tries counted it.
+func (p *Player) unplayableLocked(t Track, err error, tries int) {
+	if p.cued {
+		p.log.Warn("can't open track", "path", t.Path, "err", err)
+		return
+	}
+	p.log.Warn("skipping unplayable track", "path", t.Path, "err", err)
+	switch {
+	case tries > 1 && p.pos+1 < len(p.order):
+		p.pos++
+	case tries > 1 && p.repeat == RepeatAll:
+		p.pos = 0
+	default:
+		p.stopLocked() // nothing opens, or the queue has ended
+		return
+	}
+	p.loadLocked(0, tries-1)
 }
 
 func (p *Player) stopLocked() {
@@ -340,10 +385,7 @@ func (p *Player) followingLocked(pos int) (int, bool) {
 func (p *Player) primeLocked() {
 	p.gen++
 	p.next = nil
-	if p.cancelPrime != nil {
-		p.cancelPrime()
-		p.cancelPrime = nil
-	}
+	p.cancelPrimeLocked()
 	p.engine.Queue(nil)
 	if p.cur != nil && p.sleepsAfterLocked() {
 		p.engine.FadeEnd(p.cur, sleepFade) // the sleep timer stops playback at its end
@@ -369,9 +411,7 @@ func (p *Player) primeLocked() {
 		}
 		return
 	}
-	p.wg.Add(1)
-	go func() {
-		defer p.wg.Done()
+	p.wg.Go(func() {
 		src, err := p.openTrack(t, levelling, album)
 		if err != nil {
 			return // tried again, and skipped, when cur ends
@@ -385,7 +425,7 @@ func (p *Player) primeLocked() {
 		}
 		p.next, p.nextPos, p.nextIdx, p.nextAlbum, p.nextRate, p.nextFrames = src, pos, idx, album, rate, frames
 		p.engine.Queue(src)
-	}()
+	})
 }
 
 // ended moves on after a source played to its end.
@@ -490,8 +530,6 @@ func (p *Player) Prev() {
 	}
 	if p.pos > 0 && (p.cur == nil || p.elapsedLocked() <= restartAfter) {
 		p.pos--
-		p.startLocked()
-		return
 	}
 	p.startLocked()
 }
@@ -578,6 +616,23 @@ func (p *Player) Queue(dst []Track) ([]Track, int) {
 	return dst, p.pos
 }
 
+// Upcoming reports the track to play after the current one, as playback
+// moves on to it: the next in play order, the first again after the last
+// with repeat all, or the current one with repeat one. It reports false when
+// nothing follows.
+func (p *Player) Upcoming() (Track, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.order) == 0 {
+		return Track{}, false
+	}
+	pos, ok := p.followingLocked(p.pos)
+	if !ok {
+		return Track{}, false
+	}
+	return p.queue[p.order[pos]], true
+}
+
 // PlayIndex plays the track at position i of the play order.
 func (p *Player) PlayIndex(i int) {
 	p.mu.Lock()
@@ -598,6 +653,14 @@ func (p *Player) Remove(i int) {
 	if i < 0 || i >= len(p.order) || i == p.pos {
 		return
 	}
+	p.deleteLocked(i)
+	p.editedLocked()
+}
+
+// deleteLocked takes the entry at position i of the play order out of the
+// queue. pos and the primed entry's index stay on the entries they were on;
+// pos moves on to the next entry if it was i's.
+func (p *Player) deleteLocked(i int) {
 	q := p.order[i]
 	switch {
 	case q == p.nextIdx:
@@ -615,7 +678,6 @@ func (p *Player) Remove(i int) {
 	if i < p.pos {
 		p.pos--
 	}
-	p.editedLocked()
 }
 
 // Move moves the track at position from of the play order to position to.
@@ -693,24 +755,11 @@ func (p *Player) Drop(videoID string) int {
 		p.cueLocked()
 	}
 	for i := len(p.order) - 1; i >= 0; i-- {
-		q := p.order[i]
-		if t := p.queue[q]; !t.Pending() || t.VideoID != videoID {
+		if t := p.queue[p.order[i]]; !t.Pending() || t.VideoID != videoID {
 			continue
 		}
 		removedCur = removedCur || i == p.pos
-		if q < p.nextIdx {
-			p.nextIdx--
-		}
-		p.queue = slices.Delete(p.queue, q, q+1)
-		p.order = slices.Delete(p.order, i, i+1)
-		for j, v := range p.order {
-			if v > q {
-				p.order[j] = v - 1
-			}
-		}
-		if i < p.pos {
-			p.pos--
-		}
+		p.deleteLocked(i)
 		n++
 	}
 	if n == 0 {
@@ -773,10 +822,13 @@ func (p *Player) State() State {
 	}
 	t := p.queue[p.order[p.pos]]
 	s.Queued, s.Track, s.Index = true, t, p.pos
-	s.Waiting, s.Loading, s.Cued = p.waiting, p.loading, p.cued
-	s.Format = strings.ToUpper(strings.TrimPrefix(filepath.Ext(t.Path), "."))
+	s.Waiting, s.Loading, s.Cued = p.waiting, p.loading && t.Streamed(), p.cued
+	if t.Path != p.formatOf {
+		p.format, p.formatOf = strings.ToUpper(strings.TrimPrefix(filepath.Ext(t.Path), ".")), t.Path
+	}
+	s.Format = p.format
 	if p.loading {
-		s.Playing = !p.cued
+		s.Playing, s.Duration = !p.cued, t.Duration // the length known before it opens
 	}
 	if p.cur == nil {
 		return s
@@ -864,7 +916,7 @@ func (p *Player) Snapshot() (Snapshot, bool) {
 	if (p.cur != nil || p.cued || p.waiting || p.loading) && s.Frame < p.startFrame {
 		// Started, cued or sought, and the engine hasn't got there yet.
 		s.Frame = p.startFrame
-		if p.curFrames > 0 && !p.waiting {
+		if p.curFrames > 0 && !p.waiting && !p.loading {
 			elapsed, total = float64(s.Frame), float64(p.curFrames)
 		}
 	}
@@ -957,20 +1009,12 @@ func (p *Player) Restore(s Snapshot) bool {
 }
 
 // cueLocked opens the current track paused at startFrame, as a restored
-// queue starts.
+// queue starts; playback is already cued. One that won't open leaves the
+// queue stopped there.
 func (p *Player) cueLocked() {
-	t := p.queue[p.order[p.pos]]
 	p.waiting = false
-	if t.Streamed() {
+	if p.queue[p.order[p.pos]].Streamed() {
 		return // opened when played
 	}
-	src, err := p.openTrack(t, p.levelling, p.albumModeLocked())
-	if err != nil {
-		p.log.Warn("can't resume track", "path", t.Path, "err", err)
-		return // the queue is back, stopped
-	}
-	p.cur, p.curRate, p.curFrames = src, src.SampleRate(), src.Frames()
-	p.framesOf = t.key()
-	p.engine.Cue(src, p.startFrame)
-	p.primeLocked()
+	p.openFileLocked(p.startFrame, len(p.order))
 }

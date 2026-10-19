@@ -218,7 +218,7 @@ var testTags = Tags{Title: "Night Drive Theory", Artist: "Lumen Coast", Album: "
 func TestRemux(t *testing.T) {
 	for _, unknown := range []bool{false, true} {
 		var out bytes.Buffer
-		if err := Remux(bytes.NewReader(testWebM(testPackets, 3_000_000, unknown)), &out, testTags); err != nil {
+		if err := remux(bytes.NewReader(testWebM(testPackets, 3_000_000, unknown)), &out, testTags); err != nil {
 			t.Fatal(err)
 		}
 		pages := readPages(t, out.Bytes())
@@ -281,7 +281,7 @@ func TestALargeCoverSpansPages(t *testing.T) {
 	tags := testTags
 	tags.Picture = &Picture{MIME: "image/jpeg", Width: 544, Height: 544, Data: bytes.Repeat([]byte{0xAB}, 100_000)}
 	var out bytes.Buffer
-	if err := Remux(bytes.NewReader(testWebM(testPackets, 0, false)), &out, tags); err != nil {
+	if err := remux(bytes.NewReader(testWebM(testPackets, 0, false)), &out, tags); err != nil {
 		t.Fatal(err)
 	}
 	pages := readPages(t, out.Bytes())
@@ -310,23 +310,23 @@ func TestALargeCoverSpansPages(t *testing.T) {
 
 func TestNotWhatItShouldBe(t *testing.T) {
 	vorbis := bytes.Replace(testWebM(testPackets, 0, false), []byte("A_OPUS"), []byte("A_VORB"), 1)
-	if err := Remux(bytes.NewReader(vorbis), &bytes.Buffer{}, Tags{}); !errors.Is(err, ErrNotOpus) {
+	if err := remux(bytes.NewReader(vorbis), &bytes.Buffer{}, Tags{}); !errors.Is(err, ErrNotOpus) {
 		t.Errorf("no Opus track: %v", err)
 	}
 	laced := el(idEBML, el(0x4282, []byte("webm")))
 	laced = append(laced, el(idSegment,
 		el(idTracks, el(idTrackEntry, uintEl(idTrackNumber, 1), el(idCodecID, []byte("A_OPUS")), el(idCodecPrivate, opusHead(312)))),
 		el(idCluster, el(idSimpleBlock, []byte{0x81, 0, 0, 0x82}, packet(0xF8, 4))))...)
-	if err := Remux(bytes.NewReader(laced), &bytes.Buffer{}, Tags{}); !errors.Is(err, ErrLaced) {
+	if err := remux(bytes.NewReader(laced), &bytes.Buffer{}, Tags{}); !errors.Is(err, errLaced) {
 		t.Errorf("laced: %v", err)
 	}
 	file := testWebM(testPackets, 0, false)
 	for _, n := range []int{0, 3, 40, len(file) / 2, len(file) - 1} {
-		if err := Remux(bytes.NewReader(file[:n]), &bytes.Buffer{}, Tags{}); err == nil {
+		if err := remux(bytes.NewReader(file[:n]), &bytes.Buffer{}, Tags{}); err == nil {
 			t.Errorf("cut at %d bytes: no error", n)
 		}
 	}
-	if err := Remux(strings.NewReader("RIFF....WAVEfmt "), &bytes.Buffer{}, Tags{}); err == nil {
+	if err := remux(strings.NewReader("RIFF....WAVEfmt "), &bytes.Buffer{}, Tags{}); err == nil {
 		t.Error("a WAV file remuxed")
 	}
 }
@@ -386,7 +386,7 @@ func grouped(track byte, p []byte, padding []byte, before bool) []byte {
 func lastGranule(t *testing.T, file []byte) int64 {
 	t.Helper()
 	var out bytes.Buffer
-	if err := Remux(bytes.NewReader(file), &out, Tags{}); err != nil {
+	if err := remux(bytes.NewReader(file), &out, Tags{}); err != nil {
 		t.Fatal(err)
 	}
 	pages := readPages(t, out.Bytes())
@@ -427,7 +427,7 @@ func TestPaddingIsBounded(t *testing.T) {
 	}
 	for _, ns := range []uint64{1 << 62, 1<<63 - 1, 1 << 40, 1<<64 - 5_000_000} {
 		var out bytes.Buffer
-		if err := Remux(bytes.NewReader(testWebM(many, ns, false)), &out, Tags{}); err != nil {
+		if err := remux(bytes.NewReader(testWebM(many, ns, false)), &out, Tags{}); err != nil {
 			t.Fatal(err)
 		}
 		pages := readPages(t, out.Bytes())
@@ -450,7 +450,7 @@ func TestPageClosesAt255Segments(t *testing.T) {
 		many = append(many, one)
 	}
 	var out bytes.Buffer
-	if err := Remux(bytes.NewReader(testWebM(many, 0, false)), &out, Tags{}); err != nil {
+	if err := remux(bytes.NewReader(testWebM(many, 0, false)), &out, Tags{}); err != nil {
 		t.Fatal(err)
 	}
 	pages := readPages(t, out.Bytes())
@@ -469,7 +469,7 @@ func TestCutAfterTheLastCluster(t *testing.T) {
 	cues := el(0x1C53BB6B, el(0xBB, uintEl(0xB3, 0)))
 	file := testWebM(testPackets, 0, false)
 	cut := file[:len(file)-len(cues)]
-	if err := Remux(bytes.NewReader(cut), &bytes.Buffer{}, Tags{}); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if err := remux(bytes.NewReader(cut), &bytes.Buffer{}, Tags{}); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Errorf("cut where the segment says more follows: %v", err)
 	}
 }
@@ -480,17 +480,17 @@ func TestHostileFiles(t *testing.T) {
 		entries = append(entries, el(idTrackEntry))
 	}
 	crowded := append(el(idEBML), el(idSegment, el(idTracks, entries...), el(idCluster))...)
-	if err := Remux(bytes.NewReader(crowded), &bytes.Buffer{}, Tags{}); !errors.Is(err, errFormat) {
+	if err := remux(bytes.NewReader(crowded), &bytes.Buffer{}, Tags{}); !errors.Is(err, errFormat) {
 		t.Errorf("40 tracks: %v", err)
 	}
 	big := el(idBlockGroup, el(idBlock, make([]byte, maxBlock+1)))
-	if err := Remux(bytes.NewReader(opusWebM(big)), &bytes.Buffer{}, Tags{}); !errors.Is(err, errTooBig) {
+	if err := remux(bytes.NewReader(opusWebM(big)), &bytes.Buffer{}, Tags{}); !errors.Is(err, errTooBig) {
 		t.Errorf("oversized block: %v", err)
 	}
 	// Cut before any cluster: the file is short, not Opus-less.
 	head := testWebM(testPackets, 0, false)
 	head = head[:bytes.Index(head, ebmlID(idCluster))]
-	if err := Remux(bytes.NewReader(head), &bytes.Buffer{}, Tags{}); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if err := remux(bytes.NewReader(head), &bytes.Buffer{}, Tags{}); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Errorf("cut before the first cluster: %v", err)
 	}
 }

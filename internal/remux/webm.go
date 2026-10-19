@@ -40,6 +40,10 @@ var errFormat = errors.New("not a WebM file")
 
 var errTooBig = errors.New("block too large")
 
+// errLaced is a block holding more than one packet, which YouTube's files
+// never have.
+var errLaced = errors.New("laced block")
+
 type trackEntry struct {
 	number  uint64
 	codec   string
@@ -162,7 +166,7 @@ func (w *webm) packet() ([]byte, error) {
 				continue
 			}
 			if b[n+2]&0x06 != 0 {
-				return nil, ErrLaced
+				return nil, errLaced
 			}
 			// Padding belongs to its own block: the last Opus block's trims the end.
 			w.discard, w.groupOpus = 0, id == idBlock

@@ -75,9 +75,7 @@ func (p *Player) openLocked(frame int64) {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancelOpen = cancel
 	wait := p.skipped.Add(settle).Sub(p.now())
-	p.wg.Add(1)
-	go func() {
-		defer p.wg.Done()
+	p.wg.Go(func() {
 		defer cancel()
 		if wait > 0 {
 			select {
@@ -109,7 +107,7 @@ func (p *Player) openLocked(frame int64) {
 			p.engine.PlayFrom(src, frame)
 		}
 		p.primeLocked()
-	}()
+	})
 }
 
 // refusedLocked deals with the streamed track at pos not opening from frame.
@@ -122,7 +120,7 @@ func (p *Player) refusedLocked(err error, frame int64) {
 		p.retried, p.loading = true, true
 		p.tellLocked(Notice{Kind: Throttled, Wait: th.Wait})
 		gen := p.gen
-		p.after(th.Wait, func() {
+		p.retryTimer = p.after(th.Wait, func() {
 			p.mu.Lock()
 			defer p.mu.Unlock()
 			if gen == p.gen && p.loading && !p.closed {
@@ -178,7 +176,7 @@ func (p *Player) moveOnLocked() {
 // has streamLead left to play, so streams open at the pace they're heard.
 func (p *Player) primeStreamLocked(gen uint64, pos, idx int, t Track, level, album bool) {
 	if left := p.leftLocked(); left > streamLead {
-		p.after(left-streamLead, func() {
+		p.primeTimer = p.after(left-streamLead, func() {
 			p.mu.Lock()
 			defer p.mu.Unlock()
 			if gen == p.gen && !p.closed {
@@ -189,9 +187,7 @@ func (p *Player) primeStreamLocked(gen uint64, pos, idx int, t Track, level, alb
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancelPrime = cancel
-	p.wg.Add(1)
-	go func() {
-		defer p.wg.Done()
+	p.wg.Go(func() {
 		defer cancel()
 		src, err := p.stream(ctx, t, 0, level)
 		if err != nil {
@@ -205,7 +201,7 @@ func (p *Player) primeStreamLocked(gen uint64, pos, idx int, t Track, level, alb
 		}
 		p.next, p.nextPos, p.nextIdx, p.nextAlbum, p.nextRate, p.nextFrames = src, pos, idx, album, src.SampleRate(), src.Frames()
 		p.engine.Queue(src)
-	}()
+	})
 }
 
 // leftLocked is how long cur has left to play, 0 when that isn't known. A
@@ -222,14 +218,27 @@ func (p *Player) leftLocked() time.Duration {
 	return time.Duration(n/r)*time.Second + duration(n%r, rate) // in two, as n can be huge
 }
 
-// cancelOpensLocked stops the stream opens under way.
+// cancelOpensLocked stops the stream opens under way or waiting to start.
 func (p *Player) cancelOpensLocked() {
 	if p.cancelOpen != nil {
 		p.cancelOpen()
 		p.cancelOpen = nil
 	}
+	if p.retryTimer != nil {
+		p.retryTimer.Stop()
+		p.retryTimer = nil
+	}
+	p.cancelPrimeLocked()
+}
+
+// cancelPrimeLocked stops opening the stream to follow cur, or waiting to.
+func (p *Player) cancelPrimeLocked() {
 	if p.cancelPrime != nil {
 		p.cancelPrime()
 		p.cancelPrime = nil
+	}
+	if p.primeTimer != nil {
+		p.primeTimer.Stop()
+		p.primeTimer = nil
 	}
 }

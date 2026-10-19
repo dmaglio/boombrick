@@ -388,7 +388,7 @@ func esdsConfig(p []byte) []byte {
 		return nil
 	}
 	switch dc.uint(1) { // object type
-	case 0x40, 0x66, 0x67, 0x68: // MPEG-4 audio; MPEG-2 AAC main, LC, SSR
+	case 0x40, 0x67: // MPEG-4 audio, MPEG-2 AAC LC; faad2 isn't built for Main or SSR
 	default:
 		return nil
 	}

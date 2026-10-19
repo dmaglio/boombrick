@@ -643,9 +643,12 @@ static int update_filter(SpeexResamplerState *st)
    if (INT_MAX/sizeof(spx_word16_t)/st->den_rate < st->filt_len)
       goto fail;
 #else
-   /* Choose the resampling type that requires the least amount of memory */
-   use_direct = st->filt_len*st->den_rate <= st->filt_len*st->oversample+8
-                && INT_MAX/sizeof(spx_word16_t)/st->den_rate >= st->filt_len;
+   /* Choose the resampling type that requires the least amount of memory.
+      Boombrick also takes the direct table whenever it has at most 64K
+      entries, as for 44.1 to 48 kHz: it runs about twice as fast. */
+   use_direct = INT_MAX/sizeof(spx_word16_t)/st->den_rate >= st->filt_len
+                && (st->filt_len*st->den_rate <= st->filt_len*st->oversample+8
+                    || st->filt_len*st->den_rate <= 65536);
 #endif
    if (use_direct)
    {

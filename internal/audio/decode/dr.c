@@ -1,5 +1,8 @@
 // Builds the single-file decoders vendored in this directory, and the MP3
 // opening and seeking that need dr_mp3's internals.
+#define DR_MP3_FLOAT_OUTPUT // what Read wants, so samples aren't cut to 16 bits on the way
+#define DR_FLAC_NO_OGG      // FLAC in Ogg isn't among the formats opened
+#define DR_FLAC_NO_WCHAR
 #define DR_MP3_IMPLEMENTATION
 #include "dr_mp3.h"
 #define DR_FLAC_IMPLEMENTATION
@@ -267,5 +270,5 @@ int bb_mp3_seek(drmp3* m, drmp3_uint64 frame, drmp3_uint64 cur)
 		if (!drmp3_seek_to_pcm_frame(m, 0)) return 0;
 		cur = 0;
 	}
-	return drmp3_read_pcm_frames_s16(m, frame - cur, NULL) == frame - cur;
+	return drmp3_read_pcm_frames_f32(m, frame - cur, NULL) == frame - cur;
 }

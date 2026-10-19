@@ -28,15 +28,15 @@ const (
 
 // Source rates the engine accepts: maxRatio sizes its buffers for 8 kHz.
 const (
-	MinRate = 8000
-	MaxRate = 384000
+	minRate = 8000
+	maxRate = 384000
 )
 
 // ErrRate is reported for sources whose sample rate the engine can't play.
 var ErrRate = errors.New("audio: unsupported sample rate")
 
 // SupportedRate reports whether the engine can play a source at rate.
-func SupportedRate(rate int) bool { return rate >= MinRate && rate <= MaxRate }
+func SupportedRate(rate int) bool { return rate >= minRate && rate <= maxRate }
 
 // Status is a snapshot of the engine.
 type Status struct {

@@ -1,12 +1,14 @@
 package player
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -159,6 +161,7 @@ func TestShuffleStartsWithTheChosenTrack(t *testing.T) {
 	p, f := newPlayer(t, lengths)
 	p.SetShuffle(true)
 	p.Play(queue(paths...), 3)
+	settled(t, p)
 	if got := f.log(); len(got) == 0 || got[0] != "3" {
 		t.Fatalf("shuffle opened %v first, want 3", got)
 	}
@@ -256,9 +259,10 @@ func TestStateDescribesTheNewTrackBeforeTheEngineSwitches(t *testing.T) {
 	p.Play(queue("a", "b"), 0)
 	<-out.entered // the engine is stuck mid-write on a
 	p.Next()
+	settled(t, p)
 	s := p.State()
 	if s.Track.Path != "b" || !s.Playing || s.Elapsed != 0 || s.Duration != 2*time.Second || s.Rate != 48000 {
-		t.Fatalf("state right after Next = %+v", s)
+		t.Fatalf("state once b opened = %+v", s)
 	}
 }
 
@@ -539,6 +543,7 @@ func TestSettingLevellingRePrimesTheNextTrack(t *testing.T) {
 func TestStateAfterRestoreShowsTheRestoredPosition(t *testing.T) {
 	p, _ := newPlayer(t, map[string]int64{"a": long})
 	p.Restore(Snapshot{Queue: queue("a"), Order: []int{0}, Frame: 5 * 48000})
+	settled(t, p)
 	if s := p.State(); s.Elapsed != 5*time.Second || s.Playing {
 		t.Fatalf("state = %+v, want paused at 5 s", s)
 	}
@@ -679,6 +684,12 @@ func TestLevelGain(t *testing.T) {
 	}
 }
 
+func (p *Player) albumMode() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.albumModeLocked()
+}
+
 func TestAlbumModeIsOneAlbumUnshuffled(t *testing.T) {
 	p, _ := newPlayer(t, map[string]int64{"1": long, "2": long, "x": long})
 	album := queue("1", "2")
@@ -710,6 +721,7 @@ func TestEnqueueAfterPlayOutStartsTheNewTracks(t *testing.T) {
 	}
 	p.Toggle()
 	eventually(t, "b to play", func() bool { return p.State().Playing })
+	settled(t, p)
 	if got := f.log(); !slices.Equal(got, []string{"a", "b"}) {
 		t.Fatalf("opened %v; Toggle should start b, not replay a", got)
 	}
@@ -722,6 +734,16 @@ func primed(t *testing.T, p *Player) {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		return p.next != nil
+	})
+}
+
+// settled waits for the current track to have opened, or failed to.
+func settled(t *testing.T, p *Player) {
+	t.Helper()
+	eventually(t, "the track to open", func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return !p.loading
 	})
 }
 
@@ -837,11 +859,15 @@ func TestPlayFromShowsItsStartBeforeTheEngine(t *testing.T) {
 	p.Play(queue("a"), 0)
 	<-out.entered // the engine is stuck mid-write on a
 	p.PlayFrom(queue("b"), 0, 96000)
-	if s := p.State(); s.Track.Path != "b" || s.Elapsed != 2*time.Second {
-		t.Fatalf("state right after PlayFrom = %+v, want b at 2s", s)
-	}
 	if snap, _ := p.Snapshot(); snap.Frame != 96000 {
 		t.Fatalf("snapshot frame %d right after PlayFrom, want 96000", snap.Frame)
+	}
+	settled(t, p)
+	if s := p.State(); s.Track.Path != "b" || s.Elapsed != 2*time.Second {
+		t.Fatalf("state once b opened = %+v, want b at 2s", s)
+	}
+	if snap, _ := p.Snapshot(); snap.Frame != 96000 {
+		t.Fatalf("snapshot frame %d once b opened, want 96000", snap.Frame)
 	}
 }
 
@@ -849,6 +875,7 @@ func TestSeek(t *testing.T) {
 	p, _ := newPlayer(t, map[string]int64{"a": 48000 * 60})
 	p.Seek(time.Second) // nothing queued: nothing happens
 	p.Play(queue("a"), 0)
+	settled(t, p)
 	p.Seek(30 * time.Second)
 	if s := p.State(); s.Elapsed < 30*time.Second {
 		t.Fatalf("elapsed %v right after seeking to 30s", s.Elapsed)
@@ -976,6 +1003,7 @@ func TestARestoredPendingTrackIsCuedWhenItLands(t *testing.T) {
 		t.Fatalf("restored %+v", s)
 	}
 	p.Resolve("v1", "/m/v1.opus")
+	settled(t, p)
 	if s := p.State(); s.Waiting || s.Playing || s.Track.Path != "/m/v1.opus" || s.Elapsed != 100*time.Millisecond {
 		t.Fatalf("landed %+v", s)
 	}
@@ -1198,4 +1226,181 @@ func TestRestoreReportsWhetherItTookTheSnapshot(t *testing.T) {
 	if q, _ := newPlayer(t, map[string]int64{"a": long}); q.Restore(Snapshot{}) {
 		t.Fatal("an empty snapshot was taken")
 	}
+}
+
+// within fails the test unless f returns within a second.
+func within(t *testing.T, what string, f func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f()
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("%s waited for a file to open", what)
+	}
+}
+
+// watched is a source that records being closed.
+type watched struct {
+	tone
+	closed *atomic.Bool
+}
+
+func (w *watched) Close() error {
+	w.closed.Store(true)
+	return nil
+}
+
+// slowPlayer is a player whose opens of "slow" wait until release is called,
+// as on a slow card, and report closing their sources to closed. Other paths
+// open at once, as tones of their lengths, or long ones.
+func slowPlayer(t *testing.T, lengths map[string]int64) (p *Player, release func(), closed *atomic.Bool) {
+	t.Helper()
+	ch := make(chan struct{})
+	release = sync.OnceFunc(func() { close(ch) })
+	closed = &atomic.Bool{}
+	open := func(path string) (audio.Source, error) {
+		if path != "slow" {
+			return &tone{n: cmp.Or(lengths[path], long)}, nil
+		}
+		<-ch
+		return &watched{tone{n: long}, closed}, nil
+	}
+	p = New(nullOut{}, open, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { p.Close() })
+	t.Cleanup(release) // runs first, so Close isn't stuck behind an open
+	return p, release, closed
+}
+
+// A file slow to open holds up neither the call that plays it nor anything
+// asking the player meanwhile, as the screens do every frame.
+func TestASlowFileHoldsNothingUp(t *testing.T) {
+	p, release, closed := slowPlayer(t, nil)
+	within(t, "Play", func() { p.Play([]Track{{Path: "slow", Duration: time.Minute}, {Path: "b"}}, 0) })
+	var s State
+	within(t, "State", func() { s = p.State() })
+	if s.Track.Path != "slow" || !s.Playing || s.Loading || s.Rate != 0 || s.Duration != time.Minute {
+		t.Fatalf("while it opens: %+v", s)
+	}
+	within(t, "Snapshot", func() { p.Snapshot() })
+	within(t, "Next", p.Next)
+	eventually(t, "b to play", func() bool { s := p.State(); return s.Track.Path == "b" && s.Rate == 48000 && s.Elapsed > 0 })
+	release()
+	eventually(t, "the slow file, opened too late, to be closed", closed.Load)
+	if s := p.State(); s.Track.Path != "b" || !s.Playing {
+		t.Fatalf("after the slow file opened: %+v", s)
+	}
+}
+
+// A track that ends with nothing primed opens the next off the lock too: the
+// engine reports the end on its own goroutine while the screens ask for the
+// state.
+func TestATrackEndingOpensTheNextOffTheLock(t *testing.T) {
+	p, release, _ := slowPlayer(t, map[string]int64{"a": short})
+	p.Play(queue("a", "slow"), 0) // a ends while slow is still being primed
+	var s State
+	eventually(t, "a to end", func() bool {
+		within(t, "State", func() { s = p.State() })
+		return s.Index == 1
+	})
+	if !s.Playing || s.Rate != 0 {
+		t.Fatalf("while slow opens: %+v", s)
+	}
+	release()
+	eventually(t, "slow to play", func() bool { s := p.State(); return s.Rate == 48000 && s.Elapsed > 0 })
+}
+
+// Restoring a queue cues its track without waiting for the file to open.
+func TestRestoreDoesntWaitForTheFile(t *testing.T) {
+	p, release, _ := slowPlayer(t, nil)
+	within(t, "Restore", func() { p.Restore(Snapshot{Queue: queue("slow"), Order: []int{0}, Frame: 48000}) })
+	var s State
+	within(t, "State", func() { s = p.State() })
+	if s.Track.Path != "slow" || s.Playing || !s.Cued {
+		t.Fatalf("while it opens: %+v", s)
+	}
+	if snap, _ := p.Snapshot(); snap.Frame != 48000 {
+		t.Fatalf("snapshot frame %d while it opens, want 48000", snap.Frame)
+	}
+	release()
+	settled(t, p)
+	if s := p.State(); s.Playing || s.Elapsed != time.Second {
+		t.Fatalf("once open: %+v, want it cued at 1 s", s)
+	}
+}
+
+// Paused while it opens, a file is cued rather than played.
+func TestPausedWhileAFileOpens(t *testing.T) {
+	p, release, _ := slowPlayer(t, nil)
+	p.Play(queue("slow"), 0)
+	p.Toggle()
+	if s := p.State(); s.Playing || !s.Cued {
+		t.Fatalf("paused while it opens: %+v", s)
+	}
+	release()
+	settled(t, p)
+	time.Sleep(50 * time.Millisecond)
+	if s := p.State(); s.Playing || s.Rate != 48000 || s.Elapsed != 0 {
+		t.Fatalf("once open: %+v, want it cued", s)
+	}
+	p.Toggle()
+	eventually(t, "it to play", func() bool { return p.State().Elapsed > 0 })
+}
+
+// With repeat all and no file that opens, each is tried once and playback
+// stops, rather than going round for ever.
+func TestNothingOpensWithRepeatAll(t *testing.T) {
+	var tried atomic.Int32
+	open := func(string) (audio.Source, error) {
+		tried.Add(1)
+		return nil, errors.New("unreadable")
+	}
+	p := New(nullOut{}, open, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { p.Close() })
+	p.CycleRepeat()
+	p.Play(queue("x", "y", "z"), 1)
+	settled(t, p)
+	time.Sleep(20 * time.Millisecond)
+	if n := tried.Load(); n != 3 || p.State().Playing {
+		t.Fatalf("tried %d opens, playing %v; want each tried once, then a stop", n, p.State().Playing)
+	}
+}
+
+func TestStateDoesNotAllocate(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"a.flac": long})
+	p.Play(queue("a.flac"), 0)
+	settled(t, p)
+	if s := p.State(); s.Format != "FLAC" {
+		t.Fatalf("format %q, want FLAC", s.Format)
+	}
+	if n := testing.AllocsPerRun(100, func() { p.State() }); n != 0 {
+		t.Fatalf("State allocates %v times a call", n)
+	}
+}
+
+func TestUpcoming(t *testing.T) {
+	p, _ := newPlayer(t, map[string]int64{"a": long, "b": long, "c": long})
+	next := func(what, want string) {
+		t.Helper()
+		got, ok := p.Upcoming()
+		if ok != (want != "") || got.Path != want {
+			t.Fatalf("%s: upcoming %q, %v; want %q", what, got.Path, ok, want)
+		}
+	}
+	next("nothing queued", "")
+	p.Play(queue("a", "b", "c"), 1)
+	next("in order", "c")
+	p.Next()
+	next("the last", "")
+	p.CycleRepeat()
+	next("the last, repeating all", "a")
+	p.CycleRepeat()
+	next("repeating one", "c")
+	p.CycleRepeat()
+	p.SetShuffle(true)
+	q, pos := p.Queue(nil)
+	next("shuffled", q[pos+1].Path)
 }

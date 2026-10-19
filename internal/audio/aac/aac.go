@@ -2,20 +2,19 @@
 package aac
 
 /*
-#cgo CFLAGS: -O2 -w -DHAVE_STDINT_H=1 -DHAVE_STRING_H=1 -DSTDC_HEADERS=1 -include ${SRCDIR}/version.h
+#cgo CFLAGS: -O2 -w -DNDEBUG -DLC_ONLY_DECODER -DHAVE_STDINT_H=1 -DHAVE_STRING_H=1 -DSTDC_HEADERS=1 -include ${SRCDIR}/version.h
 #cgo LDFLAGS: -lm
 #include "neaacdec.h"
 
-static NeAACDecHandle bb_open(unsigned char *config, unsigned long n, unsigned long *rate) {
+static NeAACDecHandle bb_open(unsigned char *config, unsigned long n, unsigned long *rate, unsigned char *ch) {
 	NeAACDecHandle h = NeAACDecOpen();
 	if (h == NULL) return NULL;
 	NeAACDecConfigurationPtr c = NeAACDecGetCurrentConfiguration(h);
 	c->outputFormat = FAAD_FMT_FLOAT;
 	c->downMatrix = 1;
 	NeAACDecSetConfiguration(h, c);
-	unsigned char ch;
 	// Init2 returns a char: -1 reads as 255 where char is unsigned, as on arm64.
-	if (NeAACDecInit2(h, config, n, rate, &ch) != 0) {
+	if (NeAACDecInit2(h, config, n, rate, ch) != 0) {
 		NeAACDecClose(h);
 		return NULL;
 	}
@@ -57,6 +56,17 @@ const MaxFrame = 2048
 // maxChannels bounds the channels a stream may have before downmixing.
 const maxChannels = 8
 
+// outChannels is the most channels a frame decodes to, given the channels the
+// stream's config reports. faad2 reports and outputs mono as stereo, for
+// parametric stereo; other layouts get room for maxChannels, as 7.1's
+// configuration reports 7.
+func outChannels(ch int) int {
+	if ch <= 2 {
+		return 2
+	}
+	return maxChannels
+}
+
 // Decoder decodes one AAC stream to stereo. It is not safe for concurrent use.
 type Decoder struct {
 	h    C.NeAACDecHandle
@@ -70,7 +80,8 @@ func New(config []byte) (*Decoder, error) {
 		return nil, errors.New("aac: no decoder config")
 	}
 	var rate C.ulong
-	h := C.bb_open((*C.uchar)(&config[0]), C.ulong(len(config)), &rate)
+	var ch C.uchar
+	h := C.bb_open((*C.uchar)(&config[0]), C.ulong(len(config)), &rate, &ch)
 	if h != nil && rate == 0 {
 		C.NeAACDecClose(h)
 		h = nil
@@ -78,7 +89,7 @@ func New(config []byte) (*Decoder, error) {
 	if h == nil {
 		return nil, errors.New("aac: unsupported decoder config")
 	}
-	return &Decoder{h: h, rate: int(rate), out: make([]float32, MaxFrame*maxChannels)}, nil
+	return &Decoder{h: h, rate: int(rate), out: make([]float32, MaxFrame*outChannels(int(ch)))}, nil
 }
 
 // Rate is the decoded sample rate, which SBR, or faad2's upsampling of

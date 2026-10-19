@@ -52,6 +52,7 @@ func sleepyPlayer(t *testing.T, lengths map[string]int64) (*Player, *files, *ala
 func TestTimedSleepFadesOutAndPauses(t *testing.T) {
 	p, _, a := sleepyPlayer(t, map[string]int64{"a": long})
 	p.Play(queue("a"), 0)
+	settled(t, p)
 	p.SetSleep(Sleep15)
 	if s := p.Sleep(); s.Mode != Sleep15 || time.Until(s.At) < 14*time.Minute {
 		t.Fatalf("sleep = %+v, want 15 minutes from now", s)
@@ -70,6 +71,7 @@ func TestTimedSleepFadesOutAndPauses(t *testing.T) {
 func TestPlayDuringTheFadeKeepsPlaying(t *testing.T) {
 	p, _, a := sleepyPlayer(t, map[string]int64{"a": long})
 	p.Play(queue("a"), 0)
+	settled(t, p)
 	p.SetSleep(Sleep30)
 	a.last(t).f()
 	p.Toggle()
@@ -125,6 +127,7 @@ func TestSleepAtTheEndOfTheAlbum(t *testing.T) {
 		s := p.State()
 		return s.Track.Path == "b1" && !s.Playing
 	})
+	settled(t, p)
 	if got := f.log(); !slices.Equal(got, []string{"a1", "a2", "b1"}) {
 		t.Errorf("opened %v, want a1, a2, then b1 cued", got)
 	}
@@ -150,6 +153,7 @@ func TestSleepWhileWaitingForADownload(t *testing.T) {
 func TestTheFadeStopsAtATrackChange(t *testing.T) {
 	p, _, a := sleepyPlayer(t, map[string]int64{"a": 200000, "c": long})
 	p.Play(queue("a", "x", "c"), 0) // x won't open
+	settled(t, p)
 	p.SetSleep(Sleep15)
 	a.last(t).f()
 	eventually(t, "a stop after a", func() bool { s := p.State(); return s.Track.Path != "a" && !s.Playing })
@@ -185,6 +189,7 @@ func TestTheEndFadeGoesWhenATrackFollows(t *testing.T) {
 	p, _, _ := sleepyPlayer(t, map[string]int64{"a1": long, "a2": long})
 	p.SetSleep(SleepAlbum)
 	p.Play([]Track{{Path: "a1", Album: "A"}}, 0)
+	settled(t, p)
 	if !p.endFade {
 		t.Fatal("no fade at the end of the album's last track")
 	}
@@ -199,6 +204,7 @@ func TestTheEndFadeGoesWhenATrackFollows(t *testing.T) {
 func TestPlayAtTheVeryEndOfTheFade(t *testing.T) {
 	p, _, a := sleepyPlayer(t, map[string]int64{"a": long})
 	p.Play(queue("a"), 0)
+	settled(t, p)
 	p.SetSleep(Sleep30)
 	a.last(t).f()
 	eventually(t, "the fade to pause playback", func() bool { return !p.State().Playing })
@@ -214,9 +220,9 @@ func TestPlayDuringTheEndFadeKeepsPlaying(t *testing.T) {
 	p, _, _ := sleepyPlayer(t, map[string]int64{"a": 4 * 48000, "b": long})
 	p.SetSleep(SleepTrack)
 	p.Play(queue("a", "b"), 0)
-	p.Seek(-time.Hour) // the start, so as to know where a is
+	settled(t, p)
 	p.mu.Lock()
-	p.engine.SeekFrame(p.curFrames - 48000) // a second from its end
+	p.engine.SeekFrame(p.curFrames - 48000) // a second from its end, behind the player's back
 	p.mu.Unlock()
 	eventually(t, "the seek", func() bool { return p.State().Elapsed >= 2*time.Second })
 	p.Toggle()
@@ -243,6 +249,7 @@ func TestTurningSleepOffPrimesTheNextTrack(t *testing.T) {
 func TestResumeSleepKeepsItsTime(t *testing.T) {
 	p, _, a := sleepyPlayer(t, map[string]int64{"a": long})
 	p.Play(queue("a"), 0)
+	settled(t, p)
 	at := time.Now().Add(20 * time.Minute)
 	p.ResumeSleep(Sleep{Mode: Sleep30, At: at})
 	if s := p.Sleep(); s.Mode != Sleep30 || s.At.Sub(at).Abs() > time.Second {
@@ -294,6 +301,7 @@ func TestFadeOutPauses(t *testing.T) {
 	p, _, _ := sleepyPlayer(t, map[string]int64{"a": long})
 	p.FadeOut(10 * time.Millisecond) // nothing queued
 	p.Play(queue("a"), 0)
+	settled(t, p)
 	eventually(t, "playing", func() bool { return p.State().Playing })
 	p.FadeOut(10 * time.Millisecond)
 	eventually(t, "the fade to pause playback", func() bool { return !p.State().Playing })

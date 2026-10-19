@@ -75,10 +75,10 @@ func newM4A(f *os.File) (*m4a, error) {
 	m := &m4a{f: f, t: t, dec: dec, spf: 1024, pcm: make([]float32, 2*aac.MaxFrame)}
 	// faad2 outputs nothing for the first frame; the second shows how many
 	// samples a frame makes, which SBR or upsampling doubles.
+	var n int
 	for i := 0; i < min(2, len(t.sizes)); i++ {
 		buf, err := m.readFrame(i)
 		if err == nil {
-			var n int
 			if n, err = dec.Decode(buf, m.pcm); n > 0 {
 				m.spf = int64(n)
 			}
@@ -108,10 +108,13 @@ func newM4A(f *os.File) (*m4a, error) {
 	if m.length <= 0 {
 		m.length = -1
 	}
-	if !m.seek(0) {
-		m.dec.Close()
-		return nil, errBadMP4
-	}
+	// Those frames were decoded just as reading from the start decodes them,
+	// so reading carries on from them: what the second made is the first to
+	// be read, less what is left of the priming.
+	m.next, m.skip = min(2, len(t.sizes)), m.delay-m.spf
+	drop := min(m.skip, int64(n))
+	m.skip -= drop
+	m.pending = m.pcm[2*drop : 2*n]
 	return m, nil
 }
 
@@ -189,9 +192,8 @@ func (m *m4a) seek(s int64) bool {
 		return false
 	}
 	if j == 0 {
-		// A reset leaves faad2's SBR state behind, and the probe in newM4A
-		// has dirtied it; a new decoder starts the stream as an open does,
-		// so joins from the start are exact.
+		// A reset leaves faad2's SBR state behind; a new decoder starts the
+		// stream as an open does, so joins from the start are exact.
 		dec, err := aac.New(m.t.config)
 		if err != nil {
 			return false

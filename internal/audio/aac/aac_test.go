@@ -20,6 +20,24 @@ func TestOpensLCStereo(t *testing.T) {
 	}
 }
 
+// Mono and stereo streams, nearly all of them, need a stereo frame's room;
+// other layouts keep room for every channel they may decode to.
+func TestOutputFitsTheChannels(t *testing.T) {
+	// AAC-LC at 44.1 kHz with channel configuration 1, 2, 6 (5.1) and 7 (7.1).
+	for config, want := range map[[2]byte]int{
+		{0x12, 0x08}: 2, {0x12, 0x10}: 2, {0x12, 0x30}: maxChannels, {0x12, 0x38}: maxChannels,
+	} {
+		d, err := New(config[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(d.out); got != want*MaxFrame {
+			t.Errorf("config %x: room for %d samples, want %d", config, got, want*MaxFrame)
+		}
+		d.Close()
+	}
+}
+
 func TestUpsamplesImplicitSBR(t *testing.T) {
 	// AAC-LC, 22.05 kHz, mono, with no SBR signalling: faad2 assumes SBR.
 	d, err := New([]byte{0x13, 0x88})
@@ -29,6 +47,18 @@ func TestUpsamplesImplicitSBR(t *testing.T) {
 	defer d.Close()
 	if d.Rate() != 44100 {
 		t.Fatalf("Rate = %d, want 44100", d.Rate())
+	}
+}
+
+func TestRejectsProfilesNotBuilt(t *testing.T) {
+	// faad2 is built for AAC-LC, with SBR and PS: 44.1 kHz stereo as Main
+	// (object type 1), LTP (4) or ER AAC-LC (17), or as AAC-LC with
+	// 960-sample frames, is refused.
+	for _, config := range [][]byte{{0x0a, 0x10}, {0x22, 0x10}, {0x8a, 0x10}, {0x12, 0x14}} {
+		if d, err := New(config); err == nil {
+			d.Close()
+			t.Errorf("New(%x) should fail", config)
+		}
 	}
 }
 
