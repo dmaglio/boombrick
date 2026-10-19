@@ -61,8 +61,12 @@ func TestReadStatus(t *testing.T) {
 			"net/wlan0/operstate": "down",
 		}, Status{Battery: -1}},
 	} {
-		if got := ReadStatus(sysfs(t, c.files)); got != c.want {
+		sys := sysfs(t, c.files)
+		if got := ReadStatus(sys); got != c.want {
 			t.Errorf("%s: ReadStatus = %+v, want %+v", c.name, got, c.want)
+		}
+		if got := Online(sys); got != c.want.Online {
+			t.Errorf("%s: Online = %v, want %v", c.name, got, c.want.Online)
 		}
 	}
 }

@@ -2,6 +2,9 @@ package platform
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -15,17 +18,25 @@ import (
 // devices; Boombrick only reads. It is called from the status reader's
 // goroutine, never the UI thread.
 type Bluetooth struct {
+	sys   string // the sysfs tree the adapters are listed in
 	mu    sync.Mutex
 	conn  *dbus.Conn
-	retry time.Time // when to try the bus again after it failed
+	retry time.Time // when to ask again after BlueZ or the bus failed
 }
 
 // retryBus is how long a missing bus or BlueZ is left before asking again.
 const retryBus = time.Minute
 
+// NewBluetooth returns a Bluetooth that asks BlueZ only while the sysfs tree
+// at sys, normally "/sys", lists an adapter.
+func NewBluetooth(sys string) *Bluetooth { return &Bluetooth{sys: sys} }
+
 // Connected is the name of the connected Bluetooth audio device, or "" when
 // none is connected or BlueZ isn't there to ask.
 func (b *Bluetooth) Connected() string {
+	if !hasAdapter(b.sys) {
+		return "" // nothing to connect with, as when Bluetooth is off
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if time.Now().Before(b.retry) {
@@ -44,9 +55,14 @@ func (b *Bluetooth) Connected() string {
 	var objects map[dbus.ObjectPath]map[string]map[string]dbus.Variant
 	err := b.conn.Object("org.bluez", "/").CallWithContext(ctx, "org.freedesktop.DBus.ObjectManager.GetManagedObjects", 0).Store(&objects)
 	if err != nil {
-		// BlueZ isn't running, as with Bluetooth off, or the bus went away.
-		b.conn.Close()
-		b.conn, b.retry = nil, time.Now().Add(retryBus)
+		// An error the bus sent back, as when BlueZ isn't running, leaves the
+		// connection fine to ask again; anything else, as the bus going away,
+		// doesn't.
+		if !replied(err) {
+			b.conn.Close()
+			b.conn = nil
+		}
+		b.retry = time.Now().Add(retryBus)
 		return ""
 	}
 	return connectedAudio(objects)
@@ -60,6 +76,24 @@ func (b *Bluetooth) Close() {
 		b.conn.Close()
 		b.conn = nil
 	}
+}
+
+// replied reports whether err is an error reply from the bus or a service on
+// it.
+func replied(err error) bool {
+	var e dbus.Error
+	return errors.As(err, &e)
+}
+
+// hasAdapter reports whether the sysfs tree at sys lists a Bluetooth adapter.
+func hasAdapter(sys string) bool {
+	entries, _ := os.ReadDir(filepath.Join(sys, "class", "bluetooth"))
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "hci") {
+			return true
+		}
+	}
+	return false
 }
 
 // connectedAudio picks the connected audio device from BlueZ's objects:

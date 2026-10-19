@@ -11,6 +11,9 @@ import (
 	"github.com/ujjwal313/boombrick/internal/store"
 )
 
+// Save stores s with its queue, as a first save does.
+func Save(db *sql.DB, s player.Snapshot) error { return save(db, s, true) }
+
 func openDB(t *testing.T) *sql.DB {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "resume.db"))
@@ -84,6 +87,43 @@ func TestSaverRewritesTheQueueOnlyWhenItChanged(t *testing.T) {
 	}
 	if got, ok, err := Load(db); err != nil || !ok || got.Frame != 99 || len(got.Queue) != 2 {
 		t.Fatalf("Load after a new version = %+v, %v, %v", got, ok, err)
+	}
+}
+
+// The play order is written with the queue, when the version changes; the
+// position is written every time.
+func TestSaverWritesTheOrderWithTheQueue(t *testing.T) {
+	db := openDB(t)
+	sv := NewSaver(db)
+	saved := func() (order string, frame int64) {
+		t.Helper()
+		if err := db.QueryRow(`SELECT play_order, frame FROM playback_state WHERE id = 1`).Scan(&order, &frame); err != nil {
+			t.Fatal(err)
+		}
+		return order, frame
+	}
+	s := snapshot()
+	s.Version = 1
+	if err := sv.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	if order, _ := saved(); order != "1,0" {
+		t.Fatalf("order %q after the first save", order)
+	}
+	// An order that differs under the same version shows whether it is written.
+	s.Order, s.Frame = []int{0, 1}, 99
+	if err := sv.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	if order, frame := saved(); order != "1,0" || frame != 99 {
+		t.Fatalf("same version: order %q, frame %d; want the order left, the frame written", order, frame)
+	}
+	s.Version = 2
+	if err := sv.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	if order, _ := saved(); order != "0,1" {
+		t.Fatalf("order %q after a new version", order)
 	}
 }
 

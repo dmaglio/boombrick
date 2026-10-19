@@ -168,7 +168,7 @@ func run(started time.Time) error {
 	defer meter.Close()
 	// The status bar names the Bluetooth headphones or speaker connected,
 	// asking BlueZ on the status reader's goroutine.
-	bt := &platform.Bluetooth{}
+	bt := platform.NewBluetooth("/sys")
 	defer bt.Close()
 	// On the Brick, Power turns the backlight off and holding it shuts down.
 	var light app.Backlight
@@ -213,7 +213,7 @@ func run(started time.Time) error {
 	// A background player gives the music back before the saved queue is
 	// read; neither must hold up the first frame. Every later release keeps
 	// this take-back at launch, as only it can stop a background player an
-	// earlier version left playing (design.md, Background play, Release).
+	// earlier version left playing.
 	restored := make(chan struct{})
 	go func() {
 		defer close(restored)
@@ -308,41 +308,25 @@ func run(started time.Time) error {
 		default:
 		}
 	}
-	// Save the queue every 5 s while music plays, so a crash or a flat battery
-	// loses at most that much.
-	// The app reloads Continue listening when a save moves to another track or
-	// playback stops.
+	// Save the queue every 5 s while music plays. The app reloads Continue
+	// listening when a save moves to another track or playback stops.
 	savedTrack := make(chan struct{}, 1)
 	go func() {
 		defer close(saved)
 		defer close(savedTrack)
-		tick := time.NewTicker(5 * time.Second)
-		defer tick.Stop()
-		wasPlaying := false
-		lastPath := ""
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-tick.C:
-				// One more save when playback stops, to keep a paused position.
-				st := p.State()
-				if st.Playing || wasPlaying {
-					save()
-					if st.Track.Path != lastPath || !st.Playing {
-						lastPath = st.Track.Path
-						select {
-						case savedTrack <- struct{}{}:
-						default:
-						}
-					}
-				}
-				wasPlaying = st.Playing
-			}
-		}
+		keepSaving(ctx, 5*time.Second, p.State, save, savedTrack)
 	}()
 
-	a, err := app.New(app.Options{
+	// NextUI's volume keys change the volume NextUI keeps in a file, read for
+	// the volume pill; the app has it read when a button is pressed.
+	var volume *platform.VolumeWatcher
+	if f := prof.VolumeSettings(); f != "" {
+		var ok bool
+		volume, ok = platform.NewVolumeWatcher(f)
+		log.Info("volume", "source", f, "ok", ok)
+	}
+
+	opts := app.Options{
 		Fullscreen: paths.OnDevice,
 		Log:        log,
 		Started:    started,
@@ -386,18 +370,20 @@ func run(started time.Time) error {
 					exe, os.Environ(), 5*time.Second)
 			})
 		},
-	})
+	}
+	if volume != nil {
+		opts.Volume = volume // a nil *VolumeWatcher would make a Volume that isn't nil
+	}
+	a, err := app.New(opts)
 	if err != nil {
 		return err
 	}
 	defer a.Close()
 	// The volume watcher stops before the app and SDL close under it.
-	if f := prof.VolumeSettings(); f != "" {
+	if volume != nil {
 		vol, stop := context.WithCancel(context.Background())
 		defer stop()
-		_, ok := platform.NextUIVolume(f)
-		log.Info("volume", "source", f, "ok", ok)
-		go platform.WatchVolume(vol, f, 150*time.Millisecond, a.VolumeChanged)
+		go volume.Watch(vol, a.VolumeChanged)
 	}
 	rec.Mark("window")
 

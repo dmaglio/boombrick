@@ -102,7 +102,7 @@ func runBackground() error {
 		StayAwake:  prof.StayAwake(),
 		Ready:      ready,
 		Log:        log,
-		Every:      250 * time.Millisecond,
+		Every:      time.Second,
 		SaveEvery:  5 * time.Second,
 		StallLimit: 2 * time.Minute,
 	})

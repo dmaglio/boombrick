@@ -110,9 +110,6 @@ func (s *Settings) Set(key, value string) {
 	}
 }
 
-// SetInt stores an integer.
-func (s *Settings) SetInt(key string, v int) { s.Set(key, strconv.Itoa(v)) }
-
 // SetBool stores a boolean.
 func (s *Settings) SetBool(key string, v bool) { s.Set(key, strconv.FormatBool(v)) }
 

@@ -14,8 +14,13 @@ const (
 	// fadeOut is how long the music fades as Boombrick takes it back.
 	fadeOut = 300 * time.Millisecond
 	// quiet is how long nothing has played before playback counts as
-	// stopped, so the moment between two tracks doesn't.
+	// stopped, so the moment between two tracks doesn't. It counts from the
+	// first look that heard nothing, which may come just as the music
+	// stopped.
 	quiet = time.Second
+	// readyEvery is how often, at most, the player is looked at until the
+	// music plays, as Boombrick waits to hear that it does before quitting.
+	readyEvery = 250 * time.Millisecond
 )
 
 // Player is what Run plays with. *player.Player is one.
@@ -44,8 +49,8 @@ type Options struct {
 	StayAwake string
 	Ready     func() // called once the music really plays
 	Log       *slog.Logger
-	// Every is how often the player is looked at, and SaveEvery how often
-	// the queue's place is saved; tests shorten them.
+	// Every is how often the player is looked at once the music plays, and
+	// SaveEvery how often the queue's place is saved; tests shorten them.
 	Every, SaveEvery time.Duration
 	// StallLimit is how long a stream may load or stay stalled before the music
 	// counts as stopped, as when the Wi-Fi is gone; tests shorten it.
@@ -65,10 +70,12 @@ type Options struct {
 func Run(ctx context.Context, o Options) error {
 	p := o.Player
 	p.Toggle()
-	tick := time.NewTicker(o.Every)
+	every := min(o.Every, readyEvery)
+	tick := time.NewTicker(every)
 	defer tick.Stop()
 	var (
 		ready  bool
+		hushed bool          // the last look heard nothing
 		silent time.Duration // how long nothing has played
 		stuck  time.Duration // how long a stream meant to play has loaded or stalled without a sound
 		skips  int           // songs skipped in a row
@@ -77,7 +84,7 @@ func Run(ctx context.Context, o Options) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return o.takenBack(ready, silent == 0)
+			return o.takenBack(ready, !hushed)
 		case <-tick.C:
 		}
 		st := p.State()
@@ -93,21 +100,26 @@ func Run(ctx context.Context, o Options) error {
 			o.Log.Info("skipped a song not downloaded yet", "title", st.Track.Title)
 			p.Next()
 		case st.Playing && (st.Stalled || st.Loading):
-			silent, skips = 0, 0
-			if stuck += o.Every; o.StallLimit > 0 && stuck >= o.StallLimit {
+			hushed, silent, skips = false, 0, 0
+			if stuck += every; o.StallLimit > 0 && stuck >= o.StallLimit {
 				return o.stopped(ready)
 			}
 		case st.Playing && !st.Waiting:
-			silent, stuck, skips = 0, 0, 0
+			hushed, silent, stuck, skips = false, 0, 0, 0
 			if !ready {
 				ready = true
 				if o.Sleep.Mode != player.SleepOff {
 					p.ResumeSleep(o.Sleep)
 				}
 				o.Ready()
+				every = o.Every
+				tick.Reset(every)
 			}
 		default:
-			if silent += o.Every; silent >= quiet {
+			if hushed {
+				silent += every
+			}
+			if hushed = true; silent >= quiet {
 				return o.stopped(ready)
 			}
 		}

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/player"
@@ -139,6 +140,36 @@ func TestTakenBack(t *testing.T) {
 	if r.saves == 0 || !slices.Equal(r.handovers, []resume.Handover{{Playing: true, Sleep: o.Sleep}}) {
 		t.Fatalf("saves %d, hand-overs %+v", r.saves, r.handovers)
 	}
+}
+
+// Looking a second apart, as on the device, one look that falls between two
+// tracks isn't the end, but two a second apart that hear nothing are. Until
+// the music plays the player is looked at more often, so that Boombrick hears
+// it plays soon.
+func TestLooksASecondApart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := &fakePlayer{states: []player.State{loading, playing, playing, gap, playing, gap}}
+		r := &record{}
+		o := options(p, r)
+		o.Every = time.Second
+		start := time.Now()
+		var readyAt time.Duration
+		o.Ready = func() { readyAt = time.Since(start) }
+		if err := Run(context.Background(), o); err != nil {
+			t.Fatal(err)
+		}
+		if readyAt != 2*readyEvery {
+			t.Fatalf("said it plays %v in, want %v", readyAt, 2*readyEvery)
+		}
+		// Looks at 0.25 s and 0.5 s, then a second apart: a gap at 2.5 s,
+		// music again at 3.5 s, and nothing from 4.5 s.
+		if took := time.Since(start); took != 5500*time.Millisecond {
+			t.Fatalf("stopped %v in, want 5.5s", took)
+		}
+		if !slices.Equal(r.handovers, []resume.Handover{{}}) {
+			t.Fatalf("hand-overs %+v", r.handovers)
+		}
+	})
 }
 
 // Taken back within the quiet second after the music stopped by itself, as at

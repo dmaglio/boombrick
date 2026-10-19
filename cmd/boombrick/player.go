@@ -45,7 +45,7 @@ func newPlayer(db *sql.DB, prefs *settings.Settings, sp *spotify.Helper, online 
 }
 
 // online reports whether the device has a network connection.
-func online() bool { return platform.ReadStatus("/sys").Online }
+func online() bool { return platform.Online("/sys") }
 
 // newHelper makes the Spotify helper both modes use: the program's, in its
 // bin folder, with its sessions kept in the data folder.

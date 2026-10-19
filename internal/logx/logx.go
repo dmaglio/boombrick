@@ -1,5 +1,5 @@
-// Package logx provides the size-rotated log file Boombrick writes to NextUI's
-// log folder.
+// Package logx provides the size-rotated log file Boombrick writes to the
+// firmware's log folder.
 package logx
 
 import (

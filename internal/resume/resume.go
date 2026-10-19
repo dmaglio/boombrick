@@ -14,10 +14,6 @@ import (
 // finished is how far through an album counts as done listening.
 const finished = 0.98
 
-// Save stores s and, when its current track's album was queued as an album,
-// the progress through it.
-func Save(db *sql.DB, s player.Snapshot) error { return save(db, s, true) }
-
 // Saver saves snapshots as playback goes on, rewriting the saved queue only
 // when it has changed since the last save. It is not safe for concurrent use.
 type Saver struct {
@@ -38,28 +34,31 @@ func (sv *Saver) Save(s player.Snapshot) error {
 	return nil
 }
 
-// save stores s, rewriting the queue's rows only if queue is set. The playback
-// state is written either way, and so is the album's progress when the album
-// was queued as one: a song played from the list of songs, or added on its
-// own, says nothing about how far through its album the listener is.
+// save stores s, rewriting the queue's rows and its play order only if queue
+// is set: the order changes only with the queue's version. The rest of the
+// playback state is written either way, and so is the album's progress when
+// the album was queued as one: a song played from the list of songs, or added
+// on its own, says nothing about how far through its album the listener is.
 func save(db *sql.DB, s player.Snapshot, queue bool) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	set := `pos = excluded.pos, frame = excluded.frame, shuffle = excluded.shuffle, repeat = excluded.repeat`
+	var order []string
 	if queue {
 		if err := saveQueue(tx, s.Queue); err != nil {
 			return err
 		}
-	}
-	order := make([]string, len(s.Order))
-	for i, v := range s.Order {
-		order[i] = strconv.Itoa(v)
+		order = make([]string, len(s.Order))
+		for i, v := range s.Order {
+			order[i] = strconv.Itoa(v)
+		}
+		set += `, play_order = excluded.play_order`
 	}
 	if _, err := tx.Exec(`INSERT INTO playback_state (id, pos, frame, shuffle, repeat, play_order) VALUES (1, ?, ?, ?, ?, ?)
-		ON CONFLICT (id) DO UPDATE SET pos = excluded.pos, frame = excluded.frame, shuffle = excluded.shuffle,
-			repeat = excluded.repeat, play_order = excluded.play_order`,
+		ON CONFLICT (id) DO UPDATE SET `+set,
 		s.Pos, s.Frame, s.Shuffle, int(s.Repeat), strings.Join(order, ",")); err != nil {
 		return err
 	}

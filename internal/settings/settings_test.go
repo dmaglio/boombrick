@@ -48,7 +48,7 @@ func TestDefaults(t *testing.T) {
 func TestSetPersists(t *testing.T) {
 	db := openDB(t)
 	s := load(t, db)
-	s.SetInt(StreamingKbps, 320)
+	s.Set(StreamingKbps, "320")
 	s.SetBool(PreferDownloaded, false)
 	if got := s.Int(StreamingKbps); got != 320 {
 		t.Errorf("StreamingKbps = %d before it is written, want 320", got)

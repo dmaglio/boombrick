@@ -31,15 +31,22 @@ func ReadStatus(sys string) Status {
 		}
 		break
 	}
+	st.Online = Online(sys)
+	return st
+}
+
+// Online reports whether a network interface other than loopback is up, from
+// the sysfs tree at sys. It reads only the network, for the services that ask
+// before going online.
+func Online(sys string) bool {
 	nets := filepath.Join(sys, "class", "net")
-	entries, _ = os.ReadDir(nets)
+	entries, _ := os.ReadDir(nets)
 	for _, e := range entries {
 		if e.Name() != "lo" && readLine(filepath.Join(nets, e.Name()), "operstate") == "up" {
-			st.Online = true
-			break
+			return true
 		}
 	}
-	return st
+	return false
 }
 
 // readLine is the contents of a one-line sysfs file, or "" if it can't be

@@ -1,6 +1,7 @@
 // Package platform holds device integration: the firmware Boombrick runs
-// under and where its data lives, the battery and network state the status
-// bar shows, and (in subpackages) input, power and connectivity.
+// under and where its data lives, the battery, network and Bluetooth state
+// the status bar shows, power, the volume and the screen. Input is in a
+// subpackage.
 package platform
 
 import (

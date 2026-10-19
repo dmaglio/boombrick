@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"sync"
+	"time"
 
 	"github.com/ujjwal313/boombrick/internal/player"
 )
@@ -47,4 +49,54 @@ func (s *saves) handOver(f func() error) error {
 		s.mu.Unlock()
 	}
 	return err
+}
+
+// place is where playback is, to the second, with the rest of what a save
+// records that can change without the queue's version.
+type place struct {
+	version uint64
+	index   int
+	second  time.Duration
+	shuffle bool
+	repeat  player.Repeat
+}
+
+func placeOf(st player.State) place {
+	return place{st.Version, st.Index, st.Elapsed.Truncate(time.Second), st.Shuffle, st.Repeat}
+}
+
+// keepSaving calls save every interval while music plays, and once more when
+// it stops, to keep a paused position, until ctx ends: a crash or a flat
+// battery then loses at most that much. It skips a save that would record the
+// same place as the last, as while a stream stalls. moved hears when playback
+// has moved to another track or stopped, for the app to reload Continue
+// listening.
+func keepSaving(ctx context.Context, every time.Duration, state func() player.State, save func(), moved chan<- struct{}) {
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	wasPlaying := false
+	lastPath := ""
+	var at place
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		st := state()
+		if st.Playing || wasPlaying {
+			if p := placeOf(st); p != at {
+				at = p
+				save()
+			}
+			if st.Track.Path != lastPath || !st.Playing {
+				lastPath = st.Track.Path
+				select {
+				case moved <- struct{}{}:
+				default:
+				}
+			}
+		}
+		wasPlaying = st.Playing
+	}
 }

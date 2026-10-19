@@ -366,7 +366,7 @@ func (r *rig) queue(frame int64) {
 	}
 	defer st.Close()
 	snap := player.Snapshot{Queue: []player.Track{r.track()}, Order: []int{0}, Frame: frame}
-	if err := resume.Save(st.DB, snap); err != nil {
+	if err := resume.NewSaver(st.DB).Save(snap); err != nil {
 		r.t.Fatal(err)
 	}
 	if err := resume.SaveHandover(st.DB, resume.Handover{Playing: true}); err != nil {
