@@ -4,7 +4,7 @@ set -euo pipefail
 
 sudo apt-get update
 sudo apt-get install -y build-essential pkg-config curl zip file python3-venv \
-  libsdl2-dev libsdl2-image-dev libasound2-dev libopus-dev libogg-dev \
+  libsdl2-dev libasound2-dev libopus-dev libogg-dev \
   ffmpeg libasound2-plugins alsa-utils
 
 go_version="$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -n1)"

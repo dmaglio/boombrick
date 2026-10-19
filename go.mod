@@ -2,6 +2,8 @@ module github.com/ujjwal313/boombrick
 
 go 1.25.0
 
+toolchain go1.27.2
+
 require (
 	github.com/devgianlu/go-librespot v0.10.5
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
@@ -14,8 +16,8 @@ require (
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/veandco/go-sdl2 v0.4.40
 	golang.org/x/crypto/x509roots/fallback v0.0.0-20260721213823-31914c699bfc
-	golang.org/x/image v0.36.0
-	golang.org/x/text v0.34.0
+	golang.org/x/image v0.45.0
+	golang.org/x/text v0.41.0
 	google.golang.org/protobuf v1.36.11
 	rsc.io/qr v0.2.0
 )
@@ -35,8 +37,10 @@ require (
 	golang.org/x/exp v0.0.0-20251209150349-8475f28825e9 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
-	golang.org/x/sys v0.39.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 replace github.com/xlab/vorbis-go => ./third_party/novorbis
+
+replace github.com/srwiley/oksvg => ./third_party/oksvg

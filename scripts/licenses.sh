@@ -18,8 +18,9 @@ echo "the components; this file holds their licences in full."
 title "Go $(go version "$1" | awk '{ print $NF }' | sed 's/^go//'), its standard library and runtime"
 cat "$(go env GOROOT)/LICENSE"
 
-# Each dep line, or the module replacing it; modules replaced by a folder in
-# this repository are Boombrick's own.
+# Each dep line, or the module replacing it. Modules replaced by a folder in
+# this repository are Boombrick's own, or a modified copy whose licence is in
+# third_party/licenses.
 go version -m "$@" | awk '
 	$1 == "dep" { if (d != "") print d; d = $2 " " $3 }
 	$1 == "=>"  { d = ($2 ~ /^[.\/]/) ? "" : $2 " " $3 }

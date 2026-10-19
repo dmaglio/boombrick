@@ -2,6 +2,8 @@ GO      ?= go
 VERSION ?= dev
 PKG     := github.com/ujjwal313/boombrick
 LDFLAGS := -s -w -X $(PKG)/internal/version.Version=$(VERSION)
+# SQLite without loadable extensions, which Boombrick never loads.
+TAGS    := sqlite_omit_load_extension
 
 # QuickJS-NG, yt-dlp's JavaScript runtime: the project's static builds,
 # checked against these sums.
@@ -13,7 +15,7 @@ QJS_SHA_x86_64  := 0bfc02511a9f549c28b53880d988fc7cd5d361e90c5e8afdfcd7dc6774cea
 .PHONY: build run test fonts fixtures clean
 
 build:
-	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/desktop/boombrick ./cmd/boombrick
+	$(GO) build -trimpath -tags '$(TAGS)' -ldflags '$(LDFLAGS)' -o dist/desktop/boombrick ./cmd/boombrick
 	$(GO) build -trimpath -ldflags '-s -w' -o dist/desktop/bin/boombrick-spotify ./cmd/boombrick-spotify
 
 build: dist/desktop/bin/qjs
@@ -60,7 +62,7 @@ device-image:
 device: device-image
 	docker run --rm -v "$$(pwd)":/src \
 		-v boombrick-gomod:/root/go/pkg/mod -v boombrick-gocache:/root/.cache/go-build \
-		$(DEVICE_IMAGE) sh -c "go build -trimpath -buildvcs=false -ldflags '$(LDFLAGS)' -o dist/tg5040/boombrick ./cmd/boombrick && \
+		$(DEVICE_IMAGE) sh -c "go build -trimpath -buildvcs=false -tags '$(TAGS)' -ldflags '$(LDFLAGS)' -o dist/tg5040/boombrick ./cmd/boombrick && \
 			go build -trimpath -buildvcs=false -ldflags '-s -w' -o dist/tg5040/boombrick-spotify ./cmd/boombrick-spotify"
 
 # app fills the folder $(1) with what every firmware's app holds: the
@@ -84,7 +86,7 @@ pak: device dist/qjs/qjs-linux-aarch64
 	rm -rf dist/pak
 	$(call app,$(PAK_DIR),pak)
 	rm -f dist/Boombrick.pak.zip
-	cd dist/pak && zip -qr ../Boombrick.pak.zip Tools
+	cd dist/pak && zip -9qr ../Boombrick.pak.zip Tools
 	@echo "dist/Boombrick.pak.zip"
 
 # CrossMix lists the app in its Apps menu from config.json, with the icon
@@ -95,5 +97,5 @@ crossmix: device dist/qjs/qjs-linux-aarch64
 	cp build/crossmix/config.json $(CROSSMIX_DIR)/
 	$(GO) run ./scripts/appicon $(CROSSMIX_DIR)/icon.png
 	rm -f dist/Boombrick-CrossMix.zip
-	cd dist/crossmix && zip -qr ../Boombrick-CrossMix.zip Apps
+	cd dist/crossmix && zip -9qr ../Boombrick-CrossMix.zip Apps
 	@echo "dist/Boombrick-CrossMix.zip"
