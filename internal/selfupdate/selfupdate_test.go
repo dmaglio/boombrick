@@ -25,10 +25,11 @@ type file struct {
 	mode       os.FileMode
 }
 
-// The two firmwares' paks, as their profiles name them.
+// The firmwares' paks, as their profiles name them.
 var (
-	nextUI   = Pak{Asset: "Boombrick.pak.zip", Dir: "Tools/tg5040/Boombrick.pak/"}
-	crossMix = Pak{Asset: "Boombrick-CrossMix.zip", Dir: "Apps/Boombrick/"}
+	nextUI   = Pak{Asset: "Boombrick.pak.zip", Dir: "Tools/tg5040/Boombrick.pak/", Launcher: "launch.sh"}
+	crossMix = Pak{Asset: "Boombrick-CrossMix.zip", Dir: "Apps/Boombrick/", Launcher: "launch.sh"}
+	knulli   = Pak{Asset: "Boombrick-Knulli.zip", Dir: "roms/ports/boombrick/", Launcher: "launch"}
 )
 
 // pak is p's release zip as the Makefile builds it.
@@ -38,7 +39,7 @@ func pak(p Pak, extra ...file) []file {
 		{name: top + "/", mode: os.ModeDir | 0o755},
 		{name: p.Dir, mode: os.ModeDir | 0o755},
 		{name: p.Dir + "boombrick", body: "new program", mode: 0o755},
-		{name: p.Dir + "launch.sh", body: "#!/bin/sh\n", mode: 0o755},
+		{name: p.Dir + p.Launcher, body: "#!/bin/sh\n", mode: 0o755},
 		{name: p.Dir + "lib/libopus.so.0", body: "opus", mode: 0o644},
 	}, extra...)
 }
@@ -149,6 +150,30 @@ func TestStageCrossMix(t *testing.T) {
 	dir = t.TempDir()
 	if err := Stage(context.Background(), other.srv.Client(), other.release("v0.5.0"), dir, crossMix, nil); err == nil {
 		t.Fatal("staged NextUI's pak for CrossMix")
+	}
+}
+
+// Knulli's zip holds the script Knulli lists under Ports beside the app's
+// folder, roms/ports/boombrick/, and only the folder is staged; its
+// launcher has no .sh, which would list it under Ports too. A zip with
+// launch.sh in its place isn't Knulli's.
+func TestStageKnulli(t *testing.T) {
+	s := newServer(t, knulli.Asset, pak(knulli, file{name: "roms/ports/Boombrick.sh", body: "#!/bin/bash\n", mode: 0o755}))
+	dir := t.TempDir()
+	if err := Stage(context.Background(), s.srv.Client(), s.release("v0.5.0"), dir, knulli, nil); err != nil {
+		t.Fatal(err)
+	}
+	staged := filepath.Join(dir, ".update", "pak")
+	if b, _ := os.ReadFile(filepath.Join(staged, "launch")); string(b) != "#!/bin/sh\n" {
+		t.Fatal("the launcher wasn't staged")
+	}
+	if _, err := os.Stat(filepath.Join(staged, "Boombrick.sh")); !os.IsNotExist(err) {
+		t.Fatal("the script beside the folder was staged")
+	}
+	other := newServer(t, knulli.Asset, pak(Pak{Asset: knulli.Asset, Dir: knulli.Dir, Launcher: "launch.sh"}))
+	dir = t.TempDir()
+	if err := Stage(context.Background(), other.srv.Client(), other.release("v0.5.0"), dir, knulli, nil); err == nil {
+		t.Fatal("staged a zip without Knulli's launcher")
 	}
 }
 

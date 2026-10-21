@@ -71,8 +71,8 @@ func (b *Backlight) On() error {
 // On NextUI it does as NextUI's own apps do when Power is held: without
 // nextui_exec its launcher stops starting the menu again, and with poweroff
 // it shuts down. On CrossMix it leaves boombrick-poweroff for Boombrick's
-// launch.sh, which powers off when Boombrick has exited. On a desktop it does
-// nothing.
+// launch.sh, which powers off when Boombrick has exited. Elsewhere it does
+// nothing: Knulli keeps Power for itself.
 func (p Profile) PowerOff() error {
 	switch p.Firmware {
 	case NextUI:

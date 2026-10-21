@@ -28,10 +28,11 @@ import (
 // Sums is the release's list of checksums.
 const Sums = "SHA256SUMS"
 
-// Pak is a firmware's update: the release file, and the folder in its zip
-// that holds the app's own files, as "Apps/Boombrick/".
+// Pak is a firmware's update: the release file, the folder in its zip that
+// holds the app's own files, as "Apps/Boombrick/", and the script there
+// that starts the app and moves a staged update in.
 type Pak struct {
-	Asset, Dir string
+	Asset, Dir, Launcher string
 }
 
 // The limits on an update: the zip is about 14 MB.
@@ -89,7 +90,7 @@ func Stage(ctx context.Context, c *http.Client, r release.Release, pakDir string
 	if err := os.Remove(zipPath); err != nil {
 		return err
 	}
-	for _, f := range []string{"boombrick", "launch.sh"} {
+	for _, f := range []string{"boombrick", pak.Launcher} {
 		if _, err := os.Stat(filepath.Join(dir, "pak", f)); err != nil {
 			return fmt.Errorf("%s holds no %s", pak.Asset, f)
 		}

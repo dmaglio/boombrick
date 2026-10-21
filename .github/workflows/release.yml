@@ -1,5 +1,5 @@
-# Pushing a tag like v0.5.0 builds the app for NextUI and for CrossMix with
-# that version and publishes both, with their checksums, as a GitHub
+# Pushing a tag like v0.5.0 builds the app for NextUI, CrossMix and Knulli
+# with that version and publishes them, with their checksums, as a GitHub
 # release, with the NextUI pak's zip for the Pak Store. Boombrick's Settings
 # offers the latest release as an update, and the Pak Store the version
 # pak.json names, so a full release's tag must match it. A tag with a suffix,
@@ -34,10 +34,10 @@ jobs:
       - name: Build
         run: |
           mkdir -p dist/tg5040 dist/qjs
-          make pak crossmix VERSION="${GITHUB_REF_NAME#v}"
+          make pak crossmix knulli VERSION="${GITHUB_REF_NAME#v}"
       - name: Checksums
         working-directory: dist
-        run: sha256sum Boombrick.pak.zip Boombrick-CrossMix.zip Boombrick-PakStore.zip > SHA256SUMS
+        run: sha256sum Boombrick.pak.zip Boombrick-CrossMix.zip Boombrick-Knulli.zip Boombrick-PakStore.zip > SHA256SUMS
       # The notes are the tag's section of CHANGELOG.md, from its "## [v…]"
       # heading to the next; GitHub's own when there is none.
       - name: Release notes
@@ -53,5 +53,5 @@ jobs:
           flags="--notes-file dist/NOTES.md"
           grep -q '[^[:space:]]' dist/NOTES.md || flags="--generate-notes"
           case "$GITHUB_REF_NAME" in *-*) flags="$flags --prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/Boombrick.pak.zip dist/Boombrick-CrossMix.zip dist/Boombrick-PakStore.zip dist/SHA256SUMS \
+          gh release create "$GITHUB_REF_NAME" dist/Boombrick.pak.zip dist/Boombrick-CrossMix.zip dist/Boombrick-Knulli.zip dist/Boombrick-PakStore.zip dist/SHA256SUMS \
             --title "Boombrick ${GITHUB_REF_NAME#v}" $flags

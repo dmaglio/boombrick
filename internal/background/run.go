@@ -44,8 +44,8 @@ type Options struct {
 	Save     func(player.Snapshot) error
 	Handover func(resume.Handover) error
 	Sleep    player.Sleep // the sleep timer handed over; resumed once the music plays
-	// StayAwake is CrossMix's keep-awake file, written again while the music
-	// plays; "" under other firmwares.
+	// StayAwake is the firmware's keep-awake file, written again while the
+	// music plays; "" where there is none.
 	StayAwake string
 	Ready     func() // called once the music really plays
 	Log       *slog.Logger
@@ -67,7 +67,7 @@ type Options struct {
 // the music was playing: taken back it was, stopped by itself it wasn't. A song
 // still waiting for its download is skipped, since downloads wait for
 // Boombrick, unless it is stopped on, as by the sleep timer. Once the music
-// really plays Run says so and resumes the sleep timer handed over. CrossMix's
+// really plays Run says so and resumes the sleep timer handed over. The
 // keep-awake file is removed when the music stops by itself, but only once it
 // has played: a player that stops first leaves it to Boombrick.
 func Run(ctx context.Context, o Options) error {
@@ -156,7 +156,7 @@ func (o Options) takenBack(resumed, heard bool) error {
 }
 
 // stopped saves the queue's place once playback has stopped by itself, and
-// lets CrossMix sleep again. A player that never played leaves the keep-awake
+// lets the Brick sleep again. A player that never played leaves the keep-awake
 // file alone: Boombrick, still playing, owns it.
 func (o Options) stopped(played bool) error {
 	o.save()
@@ -184,14 +184,14 @@ func (o Options) save() {
 	}
 }
 
-// awake keeps CrossMix from sleeping under the music: its launch.sh removes
+// awake keeps the Brick from sleeping under the music: the launcher removes
 // the file when Boombrick's screen side quits.
 func (o Options) awake() {
 	if o.StayAwake == "" {
 		return
 	}
 	if err := os.WriteFile(o.StayAwake, []byte("1\n"), 0o644); err != nil {
-		o.Log.Warn("keep CrossMix awake", "err", err)
+		o.Log.Warn("keep the Brick awake", "err", err)
 	}
 }
 

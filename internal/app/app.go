@@ -92,6 +92,12 @@ type Options struct {
 	// PowerOff asks the firmware to shut the device down once Boombrick has
 	// quit; nil on a desktop, where holding Power only quits.
 	PowerOff func() error
+	// FirmwarePower leaves Power to the firmware, as Knulli suspends with it
+	// and shuts down when it is held. A screen turned off from the quick
+	// menu then comes back on with any button the music doesn't use.
+	FirmwarePower bool
+	// Pads is how the firmware hands over the Brick's buttons.
+	Pads input.Layout
 	// Version and Device are shown at the foot of Settings.
 	Version, Device string
 	// ToolReleases and Releases find yt-dlp's and Boombrick's latest
@@ -201,6 +207,7 @@ type App struct {
 	renderer   *sdl.Renderer
 	ui         *ui.Context
 	mapper     input.Mapper
+	pads       map[sdl.JoystickID]map[uint8]bool // those read as game controllers, with the joystick buttons their mappings use
 	repeat     *input.Repeater
 	home       *home.Home
 	nowPlaying *nowplaying.NowPlaying
@@ -258,7 +265,11 @@ type App struct {
 // New opens the window and builds the screens.
 func New(opts Options) (*App, error) {
 	sdl.SetHint(sdl.HINT_RENDER_SCALE_QUALITY, "1")
-	if err := sdl.Init(sdl.INIT_VIDEO | sdl.INIT_JOYSTICK); err != nil {
+	subsystems := uint32(sdl.INIT_VIDEO | sdl.INIT_JOYSTICK)
+	if opts.Pads.Controllers {
+		subsystems |= sdl.INIT_GAMECONTROLLER
+	}
+	if err := sdl.Init(subsystems); err != nil {
 		return nil, fmt.Errorf("sdl init: %w", err)
 	}
 	flags := uint32(sdl.WINDOW_SHOWN)
@@ -284,9 +295,7 @@ func New(opts Options) (*App, error) {
 	}
 	r.SetLogicalSize(theme.DeviceW, theme.DeviceH)
 	sdl.ShowCursor(sdl.DISABLE)
-	for i := range sdl.NumJoysticks() {
-		sdl.JoystickOpen(i)
-	}
+	pads := openPads(opts.Pads.Controllers, opts.Log)
 
 	fonts, err := text.NewEngine(assets.Fonts())
 	if err != nil {
@@ -305,6 +314,8 @@ func New(opts Options) (*App, error) {
 		window:     win,
 		renderer:   r,
 		ui:         u,
+		mapper:     input.Mapper{Labelled: opts.Pads.Labelled},
+		pads:       pads,
 		repeat:     input.NewRepeater(),
 		home:       home.New(nil),
 		nowPlaying: nowplaying.New(opts.Player),
@@ -842,17 +853,37 @@ func (a *App) event(ev sdl.Event) {
 	case *sdl.KeyboardEvent:
 		if e.Type == sdl.KEYDOWN && e.Repeat == 0 {
 			a.pressed()
+			// Batocera's hotkeys, which Knulli has, ask a port to quit so.
+			if e.Keysym.Scancode == sdl.SCANCODE_F4 && e.Keysym.Mod&sdl.KMOD_ALT != 0 {
+				a.quit = true
+			}
 		}
 		evs = a.mapper.Key(int(e.Keysym.Scancode), e.Type == sdl.KEYDOWN, e.Repeat != 0)
 	case *sdl.JoyButtonEvent:
+		// A controller's buttons come as its own events; a joystick button
+		// its mapping leaves out still makes a chord of Menu.
+		bound, controller := a.pads[e.Which]
+		if e.State == sdl.PRESSED && !bound[e.Button] {
+			a.pressed()
+		}
+		if !controller {
+			evs = a.mapper.JoyButton(e.Button, e.State == sdl.PRESSED)
+		}
+	case *sdl.JoyHatEvent:
+		if _, controller := a.pads[e.Which]; !controller {
+			evs = a.mapper.JoyHat(e.Value)
+		}
+	case *sdl.JoyAxisEvent:
+		if _, controller := a.pads[e.Which]; !controller {
+			evs = a.mapper.JoyAxis(e.Axis, e.Value)
+		}
+	case *sdl.ControllerButtonEvent:
 		if e.State == sdl.PRESSED {
 			a.pressed()
 		}
-		evs = a.mapper.JoyButton(e.Button, e.State == sdl.PRESSED)
-	case *sdl.JoyHatEvent:
-		evs = a.mapper.JoyHat(e.Value)
-	case *sdl.JoyAxisEvent:
-		evs = a.mapper.JoyAxis(e.Axis, e.Value)
+		evs = a.mapper.ControllerButton(e.Button, e.State == sdl.PRESSED)
+	case *sdl.ControllerAxisEvent:
+		evs = a.mapper.ControllerAxis(e.Axis, e.Value)
 	case *sdl.WindowEvent:
 		if e.Event == sdl.WINDOWEVENT_EXPOSED {
 			a.dirty = true
@@ -861,6 +892,47 @@ func (a *App) event(ev sdl.Event) {
 	for _, e := range evs {
 		a.dispatch(e)
 	}
+}
+
+// openPads opens every pad: as a game controller where controllers is set
+// and SDL has a mapping for it, as Knulli gives each port, and otherwise as
+// a joystick read by NextUI's numbers. It logs each, and returns the
+// controllers with the joystick buttons their mappings use.
+func openPads(controllers bool, log *slog.Logger) map[sdl.JoystickID]map[uint8]bool {
+	pads := make(map[sdl.JoystickID]map[uint8]bool)
+	for i := range sdl.NumJoysticks() {
+		name, guid := sdl.JoystickNameForIndex(i), sdl.JoystickGetGUIDString(sdl.JoystickGetDeviceGUID(i))
+		if controllers && sdl.IsGameController(i) {
+			if c := sdl.GameControllerOpen(i); c != nil {
+				bound := make(map[uint8]bool)
+				for b := range int(sdl.CONTROLLER_BUTTON_MAX) {
+					if bind := c.BindForButton(sdl.GameControllerButton(b)); bind.Type() == sdl.CONTROLLER_BINDTYPE_BUTTON {
+						bound[uint8(bind.Button())] = true
+					}
+				}
+				for ax := range int(sdl.CONTROLLER_AXIS_MAX) {
+					if bind := c.BindForAxis(sdl.GameControllerAxis(ax)); bind.Type() == sdl.CONTROLLER_BINDTYPE_BUTTON {
+						bound[uint8(bind.Button())] = true
+					}
+				}
+				pads[c.Joystick().InstanceID()] = bound
+				log.Info("pad", "name", name, "guid", guid, "mapping", c.Mapping())
+				continue
+			}
+		}
+		j := sdl.JoystickOpen(i)
+		if j == nil {
+			log.Warn("open pad", "name", name, "guid", guid, "err", sdl.GetError())
+			continue
+		}
+		args := []any{"name", name, "guid", guid, "buttons", j.NumButtons(), "axes", j.NumAxes(), "hats", j.NumHats()}
+		if controllers {
+			log.Warn("pad without a mapping, read by NextUI's numbers", args...)
+		} else {
+			log.Info("pad", args...)
+		}
+	}
+	return pads
 }
 
 // pressed hears each button that goes down, before it is mapped: even one
@@ -882,17 +954,21 @@ func (a *App) dispatch(e input.Event) {
 		a.repeat.Release(e.Button)
 	}
 	if e.Button == input.Power {
-		a.power(e, now)
+		if !a.opts.FirmwarePower {
+			a.power(e, now)
+		}
 		return
 	}
 	if a.handing.Load() {
 		return // the music is being handed over
 	}
 	if a.dark {
-		if e.Kind == input.Press {
-			a.darkButton(e.Button)
+		// The screen is off: only Power and the music's buttons are heard,
+		// or where the firmware keeps Power, any other button turns it on.
+		if e.Kind == input.Press && !a.darkButton(e.Button) && a.opts.FirmwarePower {
+			a.setDark(false)
 		}
-		return // the screen is off: only Power and the music's buttons are heard
+		return
 	}
 	if a.shell.handle(e, now) {
 		a.dirty = true
@@ -940,9 +1016,9 @@ func (a *App) power(e input.Event, now time.Time) {
 }
 
 // setDark turns the screen off or back on. Off, the backlight goes off where
-// there is one, nothing is drawn and only Power is heard; music plays on. The
-// status bar's readings and the volume, which only show, wait for it to come
-// back on.
+// there is one, nothing is drawn and only Power and the music's buttons are
+// heard; music plays on. The status bar's readings and the volume, which
+// only show, wait for it to come back on.
 func (a *App) setDark(dark bool) {
 	if dark == a.dark {
 		return
@@ -974,10 +1050,10 @@ func (a *App) setDark(dark bool) {
 }
 
 // darkButton does what a button does with the screen off: L1 and R1 skip back
-// and on, and A plays or pauses. The rest do nothing.
-func (a *App) darkButton(b input.Button) {
+// and on, and A plays or pauses. It reports whether b was one of those.
+func (a *App) darkButton(b input.Button) bool {
 	if a.music == nil {
-		return
+		return false
 	}
 	switch b {
 	case input.L1:
@@ -986,7 +1062,10 @@ func (a *App) darkButton(b input.Button) {
 		a.music.Next()
 	case input.A:
 		a.music.Toggle()
+	default:
+		return false
 	}
+	return true
 }
 
 // darkFrame draws what shows while the screen is off: nothing with the

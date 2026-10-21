@@ -57,3 +57,13 @@ type Event struct {
 	Button Button
 	Kind   Kind
 }
+
+// Layout is how a firmware hands over the Brick's buttons.
+type Layout struct {
+	// Controllers reads the pads through the game controller mappings SDL
+	// is given, as Knulli gives one to each port, instead of by NextUI's
+	// button numbers.
+	Controllers bool
+	// Labelled is Mapper.Labelled.
+	Labelled bool
+}

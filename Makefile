@@ -50,8 +50,9 @@ DEVICE_IMAGE := boombrick-tg5040
 GO_VERSION   := $(shell $(GO) env GOVERSION 2>/dev/null | sed 's/^go//')
 PAK_DIR      := dist/pak/Tools/tg5040/Boombrick.pak
 CROSSMIX_DIR := dist/crossmix/Apps/Boombrick
+KNULLI_DIR   := dist/knulli/roms/ports/boombrick
 
-.PHONY: device-image device pak crossmix
+.PHONY: device-image device pak crossmix knulli
 
 device-image:
 	docker build --build-arg GO_VERSION=$(GO_VERSION) -t $(DEVICE_IMAGE) build/docker
@@ -66,15 +67,15 @@ device: device-image
 			go build -trimpath -buildvcs=false -ldflags '-s -w' -o dist/tg5040/boombrick-spotify ./cmd/boombrick-spotify"
 
 # app fills the folder $(1) with what every firmware's app holds: the
-# program, its launch.sh from build/$(2), QuickJS, the Spotify helper, the
-# libraries the device lacks (Opus and Ogg for Boombrick; FLAC and mpg123,
-# which go-librespot links, for the helper), and the licences.
+# program, its launch script $(3) from build/$(2), QuickJS, the Spotify
+# helper, the libraries the device lacks (Opus and Ogg for Boombrick; FLAC
+# and mpg123, which go-librespot links, for the helper), and the licences.
 define app
 	rm -rf $(1)
 	mkdir -p $(1)/bin
-	cp dist/tg5040/boombrick build/$(2)/launch.sh LICENSE NOTICE assets/fonts/OFL-*.txt $(1)/
+	cp dist/tg5040/boombrick build/$(2)/$(3) LICENSE NOTICE assets/fonts/OFL-*.txt $(1)/
 	scripts/licenses.sh dist/tg5040/boombrick dist/tg5040/boombrick-spotify > $(1)/THIRD-PARTY.txt
-	chmod +x $(1)/boombrick $(1)/launch.sh
+	chmod +x $(1)/boombrick $(1)/$(3)
 	cp dist/qjs/qjs-linux-aarch64 $(1)/bin/qjs
 	cp dist/tg5040/boombrick-spotify $(1)/bin/
 	docker run --rm -v "$$(pwd)":/src $(DEVICE_IMAGE) sh -c \
@@ -87,7 +88,7 @@ endef
 # so that one holds the same files at its root.
 pak: device dist/qjs/qjs-linux-aarch64
 	rm -rf dist/pak
-	$(call app,$(PAK_DIR),pak)
+	$(call app,$(PAK_DIR),pak,launch.sh)
 	rm -f dist/Boombrick.pak.zip dist/Boombrick-PakStore.zip
 	cd dist/pak && zip -9qr ../Boombrick.pak.zip Tools
 	cd $(PAK_DIR) && zip -9qr $(CURDIR)/dist/Boombrick-PakStore.zip .
@@ -97,9 +98,20 @@ pak: device dist/qjs/qjs-linux-aarch64
 # drawn from the logo.
 crossmix: device dist/qjs/qjs-linux-aarch64
 	rm -rf dist/crossmix
-	$(call app,$(CROSSMIX_DIR),crossmix)
+	$(call app,$(CROSSMIX_DIR),crossmix,launch.sh)
 	cp build/crossmix/config.json $(CROSSMIX_DIR)/
 	$(GO) run ./scripts/appicon $(CROSSMIX_DIR)/icon.png
 	rm -f dist/Boombrick-CrossMix.zip
 	cd dist/crossmix && zip -9qr ../Boombrick-CrossMix.zip Apps
 	@echo "dist/Boombrick-CrossMix.zip"
+
+# Boombrick-Knulli.zip unzips at the root of Knulli's SHARE partition. Ports
+# lists Boombrick.sh, which starts the app in the boombrick folder beside it.
+knulli: device dist/qjs/qjs-linux-aarch64
+	rm -rf dist/knulli
+	$(call app,$(KNULLI_DIR),knulli,launch)
+	cp build/knulli/Boombrick.sh dist/knulli/roms/ports/
+	chmod +x dist/knulli/roms/ports/Boombrick.sh
+	rm -f dist/Boombrick-Knulli.zip
+	cd dist/knulli && zip -9qr ../Boombrick-Knulli.zip roms
+	@echo "dist/Boombrick-Knulli.zip"

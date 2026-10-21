@@ -72,7 +72,7 @@ func run(started time.Time) error {
 	debug.SetMemoryLimit(96 << 20)
 
 	// The program's folder holds QuickJS and, on the Brick, the app that
-	// updates are staged in; on CrossMix, Boombrick's data too.
+	// updates are staged in; on CrossMix and Knulli, Boombrick's data too.
 	dir := programDir()
 	prof := platform.Detect(dir)
 	paths := prof.Paths
@@ -187,7 +187,7 @@ func run(started time.Time) error {
 	defer releases.Close()
 	var updater app.Updater
 	if paths.OnDevice && dir != "" {
-		up := selfupdate.New(web, dir, selfupdate.Pak{Asset: prof.ReleaseAsset, Dir: prof.ReleaseDir}, log)
+		up := selfupdate.New(web, dir, selfupdate.Pak{Asset: prof.ReleaseAsset, Dir: prof.ReleaseDir, Launcher: prof.Launcher}, log)
 		defer up.Close()
 		updater = up
 	}
@@ -223,10 +223,10 @@ func run(started time.Time) error {
 			SaveHandover: func(h resume.Handover) error { return resume.SaveHandover(db.DB, h) },
 		}, log)
 		// A background player stopping by itself just as it was taken back can
-		// remove the file launch.sh has just written.
+		// remove the file the launcher has just written.
 		if f := prof.StayAwake(); f != "" {
 			if err := os.WriteFile(f, []byte("1\n"), 0o644); err != nil {
-				log.Warn("keep CrossMix awake", "err", err)
+				log.Warn("keep the Brick awake", "err", err)
 			}
 		}
 	}()
@@ -342,24 +342,26 @@ func run(started time.Time) error {
 			st.Bluetooth = bt.Connected()
 			return st
 		},
-		Covers:       covers,
-		Lyrics:       words,
-		Thumbs:       thumbs,
-		YouTube:      yt,
-		Downloads:    dl,
-		Prefs:        prefs,
-		Space:        meter,
-		Backlight:    light,
-		PowerOff:     powerOff,
-		Version:      version.Version,
-		Device:       "TrimUI Brick",
-		ToolReleases: toolReleases,
-		Releases:     releases,
-		Updater:      updater,
-		Perf:         rec,
-		Notices:      notices,
-		Spotify:      spLib,
-		Importer:     im,
+		Covers:        covers,
+		Lyrics:        words,
+		Thumbs:        thumbs,
+		YouTube:       yt,
+		Downloads:     dl,
+		Prefs:         prefs,
+		Space:         meter,
+		Backlight:     light,
+		PowerOff:      powerOff,
+		FirmwarePower: prof.FirmwarePower(),
+		Pads:          prof.Pads(),
+		Version:       version.Version,
+		Device:        "TrimUI Brick",
+		ToolReleases:  toolReleases,
+		Releases:      releases,
+		Updater:       updater,
+		Perf:          rec,
+		Notices:       notices,
+		Spotify:       spLib,
+		Importer:      im,
 		Background: func() error {
 			exe, err := os.Executable()
 			if err != nil {

@@ -316,6 +316,45 @@ func TestHoldingPowerPowersOff(t *testing.T) {
 	}
 }
 
+// Where the firmware keeps Power, as Knulli suspends with it and shuts down
+// when it is held, Boombrick neither turns the screen off with it nor
+// quits when it is held.
+func TestFirmwarePowerIsLeftAlone(t *testing.T) {
+	l := &lamp{}
+	a, tab := darkApp(l)
+	a.opts.FirmwarePower = true
+	asked := 0
+	a.opts.PowerOff = func() error { asked++; return nil }
+	a.dispatch(press(input.Power))
+	if a.powerHeld(time.Now().Add(powerHold)) || a.quit || asked > 0 {
+		t.Fatal("holding Power quit")
+	}
+	a.dispatch(release(input.Power))
+	if a.dark || l.off || len(tab.got) > 0 {
+		t.Fatalf("Power: dark %v, light off %v, the screen heard %v", a.dark, l.off, tab.got)
+	}
+}
+
+// With Power the firmware's, a screen turned off from the quick menu comes
+// back on with any button the music doesn't use, which goes no further.
+func TestAnyButtonTurnsTheScreenOnWhenTheFirmwareHasPower(t *testing.T) {
+	l := &lamp{}
+	a, tab := darkApp(l)
+	a.opts.FirmwarePower = true
+	r := &remote{}
+	a.music = r
+	a.setDark(true)
+	a.dispatch(press(input.A))
+	a.dispatch(release(input.A))
+	if !a.dark || !slices.Equal(r.got, []string{"toggle"}) {
+		t.Fatalf("A: dark %v, the music was asked for %v", a.dark, r.got)
+	}
+	a.dispatch(press(input.B))
+	if a.dark || l.off || len(tab.got) > 0 {
+		t.Fatalf("B: dark %v, light off %v, the screen heard %v", a.dark, l.off, tab.got)
+	}
+}
+
 func TestNothingTicksWhileDark(t *testing.T) {
 	a, _ := darkApp(&lamp{})
 	a.last.Playing = true
