@@ -2,6 +2,16 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.4.0-beta.1]
+
+A beta for testers: neither Settings nor the Pak Store offers it, and it is installed by hand.
+
+### Added
+
+- **Knulli:** `Boombrick-Knulli.zip` installs Boombrick under Ports. Unzip it at the root of the SHARE partition; your music goes in SHARE's `music` folder, and Boombrick's data and log stay in `roms/ports/boombrick`.
+- On Knulli the buttons follow Knulli's own mapping of the pad, so they match on the Brick and the Brick Pro. Power stays Knulli's: turn the screen off from the quick menu, and any button but A, L1 and R1 turns it back on.
+- Knulli's battery saver no longer mutes the music or puts the Brick to sleep while Boombrick is open or playing in the background.
+
 ## [v0.3.2]
 
 ### Added
