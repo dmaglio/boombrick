@@ -1178,6 +1178,24 @@ func TestPruneForgetsSongsWhoseFilesAreGone(t *testing.T) {
 	}
 }
 
+// The SD card's numbers count the library as a scan leaves it. The first
+// scan runs alongside the service's start, which measures the library before
+// the scan has filled it, so Prune, called as each scan ends, measures it
+// again.
+func TestPruneMeasuresTheLibraryAgain(t *testing.T) {
+	e := newEnv(t)
+	eventually(t, "the card measured", func() bool { return e.s.Status().Storage.Total > 0 })
+	if got := e.s.Status().Storage.Music; got != 0 {
+		t.Fatalf("an empty library counts %d bytes", got)
+	}
+	if _, err := e.db.Exec(`INSERT INTO tracks (path, size, mtime, artist, album, title, number, added)
+		VALUES (?, 5000, 0, '', '', '', 0, 0)`, filepath.Join(e.music, "scanned.flac")); err != nil {
+		t.Fatal(err)
+	}
+	e.s.Prune()
+	eventually(t, "the scanned song counted", func() bool { return e.s.Status().Storage.Music == 5000 })
+}
+
 // With Wi-Fi up but no internet, a song fails as Network only on its third
 // try in a row: each failure stops the batch, keeping the rest queued, and
 // the queue rests before trying again.

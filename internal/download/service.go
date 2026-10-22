@@ -508,8 +508,9 @@ func fraction(e Event) float32 {
 }
 
 // Prune forgets saved songs whose files the library no longer has, as when
-// they were deleted on a PC, so that they can be downloaded again. It works
-// on the service's own goroutine; call it when a library scan ends.
+// they were deleted on a PC, so that they can be downloaded again, and
+// measures the library again for the SD card's numbers. It works on the
+// service's own goroutine; call it when a library scan ends.
 func (s *Service) Prune() {
 	s.mu.Lock()
 	if s.closed {
@@ -720,8 +721,8 @@ func (s *Service) writer() {
 }
 
 // flush writes the rows the calls changed or forgot, deletes the partial
-// files of songs removed and, when asked, forgets saved songs whose files
-// are gone.
+// files of songs removed and, when asked after a scan, forgets saved songs
+// whose files are gone and measures the library again.
 func (s *Service) flush() {
 	scrap, prune := s.writeDirty()
 	if len(scrap) > 0 {
@@ -729,6 +730,7 @@ func (s *Service) flush() {
 	}
 	if prune {
 		s.pruneLost()
+		s.refreshStorage()
 	}
 }
 
