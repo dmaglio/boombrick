@@ -21,6 +21,7 @@ type fake struct {
 	toggles, nexts, prevs, repeats int
 	shuffles                       []bool
 	seeks                          []time.Duration
+	speed                          float64
 }
 
 func (f *fake) State() player.State    { return f.st }
@@ -339,5 +340,40 @@ func TestL2AndR2SkipFifteenSecondsInABook(t *testing.T) {
 	}
 	if len(f.seeks) != 2 || f.seeks[0] != -15*time.Second || f.seeks[1] != 15*time.Second {
 		t.Fatalf("seeks %v, want -15s then +15s", f.seeks)
+	}
+}
+
+func (f *fake) BookSpeed() float64 {
+	if f.speed == 0 {
+		return 1
+	}
+	return f.speed
+}
+func (f *fake) SetBookSpeed(v float64) { f.speed = v }
+
+func TestXCyclesABooksSpeedAndSaysSo(t *testing.T) {
+	f := playing()
+	n := New(f)
+	var kept []float64
+	n.SetOnSpeed(func(v float64) { kept = append(kept, v) })
+	if n.Handle(press(input.X), t0) || f.speed != 0 {
+		t.Fatal("X sets a song's speed")
+	}
+	f.st.Track = player.Track{Path: "La casa.m4b"}
+	for _, want := range []float64{1.25, 1.5, 1.75, 2, 0.75, 1} {
+		if !n.Handle(press(input.X), t0) || f.speed != want {
+			t.Fatalf("speed %v, want %v", f.speed, want)
+		}
+	}
+	if len(kept) != 6 || kept[0] != 1.25 {
+		t.Fatalf("kept %v", kept)
+	}
+	f.speed = 1.5
+	var found bool
+	for _, h := range n.hints(f.st) {
+		found = found || h.Key == "X" && h.Label == "Speed 1.5×"
+	}
+	if !found {
+		t.Fatalf("hints %v don't say the speed", n.hints(f.st))
 	}
 }

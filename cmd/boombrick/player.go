@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -28,6 +29,9 @@ func newPlayer(db *sql.DB, prefs *settings.Settings, sp *spotify.Helper, online 
 	p := player.New(alsa.New(), decode.Open, log)
 	p.SetLevelling(prefs.Bool(settings.VolumeLevelling))
 	p.SetChapters(bookChapters())
+	if v, err := strconv.ParseFloat(prefs.String(settings.BookSpeed), 64); err == nil {
+		p.SetBookSpeed(v)
+	}
 	p.SetStreaming(func(ctx context.Context, t player.Track, frame int64, level bool) (audio.Source, error) {
 		// A song an import downloaded plays from its file: no key, no Wi-Fi.
 		if prefs.Bool(settings.PreferDownloaded) {

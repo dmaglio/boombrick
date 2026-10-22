@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +34,7 @@ import (
 	settingsscreen "github.com/ujjwal313/boombrick/internal/screens/settings"
 	spotifyscreen "github.com/ujjwal313/boombrick/internal/screens/spotify"
 	"github.com/ujjwal313/boombrick/internal/screens/youtube"
+	"github.com/ujjwal313/boombrick/internal/settings"
 	"github.com/ujjwal313/boombrick/internal/spotify"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
@@ -342,6 +344,9 @@ func New(opts Options) (*App, error) {
 	a.home.SetEmpty(opts.MusicDir, func() { a.rescan(); a.Toast(screens.Scanning) })
 	a.library = browse.New(a, opts.Player, opts.MusicDir, a.rescan)
 	a.library.SetRemote(opts.BookStart)
+	if opts.Prefs != nil {
+		a.nowPlaying.SetOnSpeed(func(v float64) { opts.Prefs.Set(settings.BookSpeed, strconv.FormatFloat(v, 'f', -1, 64)) })
+	}
 	a.loads = newLoader(opts.Load, opts.Progress, a.wake)
 	if opts.Scanned != nil {
 		go func() {

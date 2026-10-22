@@ -176,3 +176,6 @@ func TestPrefetchesWhenTheStreamedSongChanges(t *testing.T) {
 		t.Fatal("prefetched with nothing queued")
 	}
 }
+
+func (p *stillPlayer) BookSpeed() float64   { return 1 }
+func (p *stillPlayer) SetBookSpeed(float64) {}

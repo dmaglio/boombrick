@@ -504,3 +504,6 @@ func TestVolumeChangedWithTheScreenOffShowsNothing(t *testing.T) {
 		t.Fatal("the pill showed with the screen off, or the news was kept")
 	}
 }
+
+func (r *remote) BookSpeed() float64   { return 1 }
+func (r *remote) SetBookSpeed(float64) {}

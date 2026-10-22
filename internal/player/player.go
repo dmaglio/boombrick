@@ -6,11 +6,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/audio"
@@ -150,8 +152,9 @@ type Player struct {
 	failures    int  // streams in a row that wouldn't open
 	cancelOpen  context.CancelFunc
 	cancelPrime context.CancelFunc
-	retryTimer  stopper // tries a refused stream again
-	primeTimer  stopper // opens the stream to follow once cur nears its end
+	retryTimer  stopper       // tries a refused stream again
+	primeTimer  stopper       // opens the stream to follow once cur nears its end
+	speed       atomic.Uint64 // the books' speed, as a float64's bits
 	// chapters says where the chapters of a book start; nil if it can't.
 	chapters func(path string) []time.Duration
 }
@@ -160,6 +163,7 @@ type Player struct {
 func New(out audio.Output, open Opener, log *slog.Logger) *Player {
 	p := &Player{open: open, log: log, rng: rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 0)),
 		after: afterFunc, now: time.Now}
+	p.SetBookSpeed(1)
 	p.engine = audio.NewEngine(out, p.ended)
 	return p
 }
@@ -231,8 +235,23 @@ func (p *Player) openTrack(t Track, levelling, album bool) (audio.Source, error)
 	if db, peak, ok := levelGain(t, album); levelling && ok {
 		src = audio.WithGain(src, db, peak)
 	}
+	if t.IsBook() {
+		src = audio.NewTempo(src, p.bookSpeed)
+	}
 	return src, nil
 }
+
+// bookSpeed is the speed books play at, read as they play.
+func (p *Player) bookSpeed() float64 { return math.Float64frombits(p.speed.Load()) }
+
+// SetBookSpeed sets how fast books play, 1 being their own pace, at once and
+// without changing their pitch. It is kept between books, not between runs.
+func (p *Player) SetBookSpeed(s float64) {
+	p.speed.Store(math.Float64bits(min(max(s, audio.MinTempo), audio.MaxTempo)))
+}
+
+// BookSpeed is how fast books play.
+func (p *Player) BookSpeed() float64 { return p.bookSpeed() }
 
 // Play replaces the queue with tracks and starts at tracks[start].
 func (p *Player) Play(tracks []Track, start int) { p.PlayFrom(tracks, start, 0) }
