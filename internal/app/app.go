@@ -715,6 +715,7 @@ func (a *App) colours() colours {
 // showHome fills Home's rows from the index and the albums in progress.
 func (a *App) showHome(progress []resume.Progress) {
 	a.progress = progress
+	a.library.SetProgress(progress)
 	if a.ix == nil {
 		return
 	}

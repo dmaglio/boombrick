@@ -121,6 +121,9 @@ func TestIndexKeepsBooksApart(t *testing.T) {
 	if len(ix.Albums) != 2 || len(ix.Songs) != 3 {
 		t.Errorf("a book leaked into albums or songs: %d albums, %d songs", len(ix.Albums), len(ix.Songs))
 	}
+	if ix.Album("Georges Simenon", "La casa del giudice") == nil {
+		t.Error("Continue listening can't find the book")
+	}
 	for _, a := range ix.Artists {
 		if a.Name == "Georges Simenon" {
 			t.Error("a book's author is listed as an artist")

@@ -19,13 +19,14 @@ import (
 // stillPlayer is enough of a player for Now Playing and Lyrics.
 type stillPlayer struct{ st player.State }
 
-func (p *stillPlayer) State() player.State { return p.st }
-func (p *stillPlayer) Toggle()             {}
-func (p *stillPlayer) Next()               {}
-func (p *stillPlayer) Prev()               {}
-func (p *stillPlayer) SetShuffle(bool)     {}
-func (p *stillPlayer) CycleRepeat()        {}
-func (p *stillPlayer) Seek(time.Duration)  {}
+func (p *stillPlayer) State() player.State  { return p.st }
+func (p *stillPlayer) Toggle()              {}
+func (p *stillPlayer) Next()                {}
+func (p *stillPlayer) Prev()                {}
+func (p *stillPlayer) SeekBy(time.Duration) {}
+func (p *stillPlayer) SetShuffle(bool)      {}
+func (p *stillPlayer) CycleRepeat()         {}
+func (p *stillPlayer) Seek(time.Duration)   {}
 
 type noLyrics struct{}
 

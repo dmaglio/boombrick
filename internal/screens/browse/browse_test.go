@@ -10,6 +10,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
 	"github.com/ujjwal313/boombrick/internal/player"
+	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/screens"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui/anim"
@@ -27,6 +28,7 @@ func press(b input.Button) input.Event { return input.Event{Button: b, Kind: inp
 type fakePlayer struct {
 	played   []string // first path of each Play
 	start    []int
+	frames   []int64 // where each PlayFrom began
 	queued   [][]string
 	shuffled []bool
 	playing  string
@@ -37,6 +39,9 @@ func (p *fakePlayer) State() player.State {
 }
 func (p *fakePlayer) Play(ts []player.Track, start int) {
 	p.played, p.start = append(p.played, ts[0].Path), append(p.start, start)
+}
+func (p *fakePlayer) PlayFrom(ts []player.Track, start int, frame int64) {
+	p.played, p.start, p.frames = append(p.played, ts[0].Path), append(p.start, start), append(p.frames, frame)
 }
 func (p *fakePlayer) SetShuffle(on bool) { p.shuffled = append(p.shuffled, on) }
 func (p *fakePlayer) Enqueue(ts []player.Track) {
@@ -403,7 +408,13 @@ func TestBooksFilterPlaysTheBook(t *testing.T) {
 	}
 	l.filter = booksFilter
 	l.Handle(press(input.A), t0)
-	if len(p.played) != 1 || p.played[0] != "/m/Audiobooks/La casa.m4b" {
-		t.Fatalf("played %q", p.played)
+	if len(p.played) != 1 || p.played[0] != "/m/Audiobooks/La casa.m4b" || p.frames[0] != 0 {
+		t.Fatalf("played %q from %v", p.played, p.frames)
+	}
+	// Part-way through, it carries on from where it was left.
+	l.SetProgress([]resume.Progress{{Artist: "Georges Simenon", Album: "La casa del giudice", Path: "/m/Audiobooks/La casa.m4b", Frame: 123456}})
+	l.Handle(press(input.A), t0)
+	if len(p.played) != 2 || p.frames[1] != 123456 {
+		t.Fatalf("played %q from %v, want it to carry on from frame 123456", p.played, p.frames)
 	}
 }

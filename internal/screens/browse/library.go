@@ -7,6 +7,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
 	"github.com/ujjwal313/boombrick/internal/player"
+	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/screens"
 	"github.com/ujjwal313/boombrick/internal/theme"
 	"github.com/ujjwal313/boombrick/internal/ui"
@@ -41,8 +42,9 @@ type Library struct {
 	counts   [filterCount]string    // the filters' counts
 	rows     [filterCount][]listRow // the artists' and songs' rows, made as they first show
 	laidOut  bool
-	reading  bool            // the first scan is running with nothing indexed yet
-	state    widgets.Wrapped // the empty or reading state's description, wrapped
+	progress []resume.Progress // the albums and books part-way through
+	reading  bool              // the first scan is running with nothing indexed yet
+	state    widgets.Wrapped   // the empty or reading state's description, wrapped
 }
 
 // listRow is what an artist's or a song's row shows that takes making.
@@ -106,6 +108,10 @@ func refocus[T any, K comparable](old, now []T, f int, key func(T) K) int {
 	return f
 }
 
+// SetProgress tells the tab which albums and books are part-way through, for
+// a book to carry on from where it was left.
+func (l *Library) SetProgress(p []resume.Progress) { l.progress = p }
+
 // SetReading says the first scan is running and nothing is indexed yet;
 // until SetIndex the tab says the music is being read.
 func (l *Library) SetReading() { l.reading = true }
@@ -163,7 +169,8 @@ func (l *Library) open(i int) {
 		l.nav.Push(NewArtistPage(l.nav, l.p, l.ix.Artists[i]))
 	case booksFilter:
 		l.p.SetShuffle(false)
-		l.p.Play(screens.Tracks(l.ix.Books[i].Tracks), 0)
+		track, frame := l.placeIn(l.ix.Books[i])
+		l.p.PlayFrom(screens.Tracks(l.ix.Books[i].Tracks), track, frame)
 	case songsFilter:
 		songs := make([]player.Track, len(l.ix.Songs))
 		for j, s := range l.ix.Songs {
@@ -298,4 +305,18 @@ func (l *Library) hints() []widgets.Hint {
 		return songHints
 	}
 	return openHints
+}
+
+// placeIn is the track and frame to carry on a book from: where it was left
+// if it is part-way through, else the start.
+func (l *Library) placeIn(a *library.Album) (track int, frame int64) {
+	for _, pr := range l.progress {
+		if pr.Artist != a.Artist || pr.Album != a.Title {
+			continue
+		}
+		if i := slices.IndexFunc(a.Tracks, func(t library.Track) bool { return t.Path == pr.Path }); i >= 0 {
+			return i, pr.Frame
+		}
+	}
+	return 0, 0
 }

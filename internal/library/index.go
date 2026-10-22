@@ -46,6 +46,7 @@ func NewIndex(albums []Album) *Index {
 		a := &albums[i]
 		if a.IsBook() {
 			ix.Books = append(ix.Books, a)
+			ix.byKey[[2]string{a.Artist, a.Title}] = a // for Continue listening
 			continue
 		}
 		ix.Recent = append(ix.Recent, a)
