@@ -12,6 +12,15 @@ All notable changes to Boombrick. Versions match the release tags.
 - **Audible:** with the account's key in `audible/auth.json` in Boombrick's data folder (`audible-tui-export --with-account` puts it there), a book named `Title [ASIN].m4b` starts where you left it on the phone or the web player, if that is further on, and tells Audible where you stop every 30 seconds and when you pause. Without Wi-Fi or a key, the place stays on the card.
 - **Sign in to Audible on the Brick:** in the Books tab, A shows a QR code; a phone on the same Wi-Fi opens a page that sends it to Amazon's sign-in and takes back the address it ends on, and Boombrick registers itself as a device. No computer or other tool is needed.
 - In a book, L1 and R1 move by chapter (R1 goes to the next, L1 to the start of this one, or the one before when it has only just begun), and L2 and R2 skip 15 seconds back and on.
+## [v0.4.0-beta.2]
+
+A beta for testers: neither Settings nor the Pak Store offers it, and it is installed by hand.
+
+### Fixed
+
+- **Knulli:** Function, the Brick's Menu button, opens the quick menu, with Play in background and Quit. Boombrick took the button's own press for a second button and never opened it.
+- On Knulli, Function and Start together quit Boombrick, as they do Knulli's other ports, and the queue is saved.
+- The SD card's numbers count your music from the first launch, and again after every scan, instead of only once a download finishes.
 
 ## [v0.4.0-beta.1]
 
@@ -22,6 +31,12 @@ A beta for testers: neither Settings nor the Pak Store offers it, and it is inst
 - **Knulli:** `Boombrick-Knulli.zip` installs Boombrick under Ports. Unzip it at the root of the SHARE partition; your music goes in SHARE's `music` folder, and Boombrick's data and log stay in `roms/ports/boombrick`.
 - On Knulli the buttons follow Knulli's own mapping of the pad, so they match on the Brick and the Brick Pro. Power stays Knulli's: turn the screen off from the quick menu, and any button but A, L1 and R1 turns it back on.
 - Knulli's battery saver no longer mutes the music or puts the Brick to sleep while Boombrick is open or playing in the background.
+
+## [v0.3.3]
+
+### Fixed
+
+- Scrolling down Settings to the Downloader card no longer leaves the screen jumping up and down, and each row scrolls just into view instead of past it.
 
 ## [v0.3.2]
 

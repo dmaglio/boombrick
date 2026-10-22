@@ -85,6 +85,24 @@ func TestLabelledControllerButtons(t *testing.T) {
 	}
 }
 
+// The joystick buttons a mapping reads are its "bN" inputs: here the one
+// Knulli makes from its Brick Pro pad, Function at 15 included. Hats, axes
+// and the GUID and name before them aren't buttons.
+func TestMappedButtons(t *testing.T) {
+	brickPro := "030000005e0400008e02000014010000,TRIMUI Brick Pro Controller,platform:Linux," +
+		"a:b5,b:b6,dpdown:h0.4,guide:b15,leftx:a0,lefty:a1,rightx:a2,righty:a3,lefttrigger:b11," +
+		"leftstick:b16,dpleft:h0.8,rightshoulder:b10,leftshoulder:b9,righttrigger:b12,rightstick:b17," +
+		"dpright:h0.2,back:b13,start:b14,dpup:h0.1,x:b8,y:b7,"
+	want := map[uint8]bool{5: true, 6: true, 7: true, 8: true, 9: true, 10: true, 11: true,
+		12: true, 13: true, 14: true, 15: true, 16: true, 17: true}
+	if got := MappedButtons(brickPro); !reflect.DeepEqual(got, want) {
+		t.Fatalf("MappedButtons() = %v, want %v", got, want)
+	}
+	if got := MappedButtons("0300,b1 pad:b2,a:+a2,b:-a3,x:a4~,y:b300"); len(got) != 0 {
+		t.Fatalf("no buttons: %v", got)
+	}
+}
+
 func TestControllerTriggers(t *testing.T) {
 	var m Mapper
 	if got := m.ControllerAxis(4, 32767); !reflect.DeepEqual(got, []Event{{L2, Press}}) {

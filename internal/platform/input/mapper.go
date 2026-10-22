@@ -1,5 +1,10 @@
 package input
 
+import (
+	"strconv"
+	"strings"
+)
+
 // brickButtons is the Brick's joystick layout, from NextUI's tg5040
 // platform.h.
 var brickButtons = map[uint8]Button{
@@ -123,6 +128,24 @@ func (m *Mapper) ControllerAxis(axis uint8, value int16) []Event {
 		return trigger(&m.r2, R2, value)
 	}
 	return nil
+}
+
+// MappedButtons is the set of joystick buttons an SDL game controller
+// mapping, "GUID,name,a:b0,...", reads, by their numbers.
+func MappedButtons(mapping string) map[uint8]bool {
+	buttons := make(map[uint8]bool)
+	fields := strings.Split(mapping, ",")
+	for _, f := range fields[min(2, len(fields)):] { // past the GUID and name
+		_, in, _ := strings.Cut(f, ":")
+		n, ok := strings.CutPrefix(in, "b")
+		if !ok {
+			continue
+		}
+		if b, err := strconv.ParseUint(n, 10, 8); err == nil {
+			buttons[uint8(b)] = true
+		}
+	}
+	return buttons
 }
 
 // trigger turns a trigger's new value into a press or release of b, once

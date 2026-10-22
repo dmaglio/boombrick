@@ -405,6 +405,7 @@ func run(started time.Time) error {
 		Backlight:     light,
 		PowerOff:      powerOff,
 		FirmwarePower: prof.FirmwarePower(),
+		QuitChord:     prof.QuitChord(),
 		Pads:          prof.Pads(),
 		Version:       version.Version,
 		Device:        "TrimUI Brick",
