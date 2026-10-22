@@ -12,6 +12,12 @@ A beta for testers: neither Settings nor the Pak Store offers it, and it is inst
 - On Knulli the buttons follow Knulli's own mapping of the pad, so they match on the Brick and the Brick Pro. Power stays Knulli's: turn the screen off from the quick menu, and any button but A, L1 and R1 turns it back on.
 - Knulli's battery saver no longer mutes the music or puts the Brick to sleep while Boombrick is open or playing in the background.
 
+## [v0.3.3]
+
+### Fixed
+
+- Scrolling down Settings to the Downloader card no longer leaves the screen jumping up and down, and each row scrolls just into view instead of past it.
+
 ## [v0.3.2]
 
 ### Added
