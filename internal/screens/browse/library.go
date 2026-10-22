@@ -226,7 +226,7 @@ func (l *Library) Draw(u *ui.Context) {
 		}
 	}
 	widgets.StatusBar(u)
-	widgets.Tabs(u, 1)
+	widgets.Tabs(u, screens.LibraryTab)
 	widgets.HintBar(u, l.hints())
 }
 

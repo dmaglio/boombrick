@@ -353,7 +353,7 @@ func New(opts Options) (*App, error) {
 	a.shelf = browse.NewShelf(opts.Player)
 	a.shelf.SetRemote(opts.BookStart)
 	a.library.SetShelf(a.shelf)
-	var books screens.Screen = &screens.Placeholder{Tab: browse.BooksTab, Title: "Books"}
+	var books screens.Screen = &screens.Placeholder{Tab: screens.BooksTab, Title: "Books"}
 	if opts.Catalogue != nil {
 		a.books = browse.NewBooks(a, opts.Player, a.shelf, opts.Catalogue, opts.AudibleSetup)
 		books = a.books
@@ -395,7 +395,7 @@ func New(opts Options) (*App, error) {
 	if opts.MusicDir != "" {
 		screens.SetDownloadsDir(filepath.Join(opts.MusicDir, "Boombrick"))
 	}
-	var ytTab, dlTab screens.Screen = &screens.Placeholder{Tab: 4, Title: "YouTube"}, &screens.Placeholder{Tab: 5, Title: "Downloads"}
+	var ytTab, dlTab screens.Screen = &screens.Placeholder{Tab: screens.YouTubeTab, Title: "YouTube"}, &screens.Placeholder{Tab: screens.DownloadsTab, Title: "Downloads"}
 	var acts youtube.Downloads // stays nil without a queue
 	if opts.Downloads != nil {
 		acts = ytActions{dl: opts.Downloads, p: opts.Player, toast: a.Toast}

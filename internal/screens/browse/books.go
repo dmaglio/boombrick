@@ -19,9 +19,6 @@ import (
 	"github.com/ujjwal313/boombrick/internal/ui/widgets"
 )
 
-// BooksTab is the Books tab's place in the tab row.
-const BooksTab = 2
-
 // Catalogue is the listener's Audible library, as the Books tab shows it and
 // drives it. *audiobooks.Service is one.
 type Catalogue interface {
@@ -255,7 +252,7 @@ func (b *Books) Draw(u *ui.Context) {
 		u.PopClip()
 	}
 	widgets.StatusBar(u)
-	widgets.Tabs(u, BooksTab)
+	widgets.Tabs(u, screens.BooksTab)
 	widgets.HintBar(u, b.hints())
 }
 
