@@ -11,7 +11,7 @@ See [CHANGELOG.md](CHANGELOG.md) for what each release adds.
 ## Features
 
 - **Your music:** MP3, FLAC, Opus and M4A (AAC), gapless, with ReplayGain levelling. Browse by album, artist or song; the queue has shuffle and repeat and is kept between launches.
-- **Audiobooks:** `.m4b` files in `Music/Audiobooks` get their own Books filter in the Library. They carry on from where you left them, move by chapter with L1/R1 and skip 15 seconds with L2/R2.
+- **Audiobooks:** `.m4b` files in `Music/Audiobooks` get their own Books filter in the Library. They carry on from where you left them, move by chapter with L1/R1, skip 15 seconds with L2/R2 and play at 0.75× to 2× with X. Named `Title [ASIN].m4b`, as [audible-tui](https://github.com/dmaglio/audible-tui) names them, they also keep their place in step with Audible (see below).
 - **Covers** from the files, folder pictures or the Cover Art Archive.
 - **Synced lyrics** from the files, `.lrc` files or LRCLIB, with the line being sung highlighted.
 - **YouTube Music:** search, browse albums and artists, and download songs as tagged Opus files with covers and lyrics. A song that is still downloading plays as soon as it lands.
@@ -43,6 +43,10 @@ Betas are pre-releases: Settings never offers them, so they are only installed b
 Open Settings from the quick menu (Menu). When a newer release is out, the Boombrick card offers **Update Boombrick**. The update downloads, is checked, and is installed the next time Boombrick starts; choose **Quit now** and open it again.
 
 The Downloader card updates yt-dlp, which YouTube Music downloads use, the same way.
+
+### Audiobooks and Audible
+
+Books are `.m4b` files in `Music/Audiobooks`. To keep a book's place in step with Audible, put the account's registration in `audible/auth.json` in Boombrick's data folder (see Files): a JSON file with `adp_token`, `device_private_key` and `locale_code`, which `audible-tui-export --with-account` writes. It is a credential, so treat the card like a key. A `Title [ASIN].audible.json` beside the book holds its `acr`; without one Boombrick asks Audible for it.
 
 ## Controls
 
