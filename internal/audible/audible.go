@@ -1,8 +1,14 @@
 // Package audible keeps an audiobook's place in step with Audible: it reads
 // where the listener last stopped, on the phone or the web player, and writes
 // back where they stop here. It speaks to Audible's API as the Audible app
-// does, signing each request with the key a device registration gave, which
-// the user brings from their computer (see Load).
+// does, signing each request with the key a device registration gave (see
+// NewLogin and Load).
+//
+// The protocol, which Audible does not document, is the one the Python
+// library audible by mkb79 (https://github.com/mkb79/Audible, AGPL-3.0)
+// worked out and describes: the sign-in, the registration, the signature of
+// a request and the layout of auth.json. This package is written afresh in
+// Go and takes no code from it.
 package audible
 
 import (

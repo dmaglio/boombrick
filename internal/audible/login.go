@@ -32,7 +32,9 @@ const deviceType = "A2CZJZGLK2JJVM"
 // Login registers this device as one of the listener's Audible devices, the
 // way the iPhone app does. The listener signs in to Amazon in a browser, which
 // ends on a page that doesn't exist; its address holds an authorization code,
-// and Complete trades that for the device's keys.
+// and Complete trades that for the device's keys. The steps follow the iPhone
+// app's, as the Python library audible by mkb79
+// (https://github.com/mkb79/Audible) describes them.
 type Login struct {
 	locale, domain string
 	serial         string

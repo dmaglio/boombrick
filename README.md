@@ -56,6 +56,8 @@ To sign in, open the Books tab and press A. Boombrick shows a QR code and an add
 
 Boombrick registers itself as a new device on your Audible account and keeps the key in `audible/auth.json`; the Brick then lists your library and downloads books over its Wi-Fi. A book's place is kept in step with Audible from the next start. (If you already use [audible-tui](https://github.com/dmaglio/audible-tui), `audible-tui-export --with-account` copies its registration instead.) Audible grants a licence only to an account with an active plan or a purchase of that title; when it refuses, Boombrick says the reason Audible gave.
 
+Audible's API is not documented. Boombrick's sign-in, registration and request signing follow what [audible](https://github.com/mkb79/Audible), the Python library by mkb79, works out and describes; the code is written afresh in Go.
+
 ## Controls
 
 | Button | Action |
