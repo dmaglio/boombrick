@@ -151,3 +151,7 @@ func (p Profile) Pads() input.Layout {
 // FirmwarePower reports whether the firmware keeps Power for itself, as
 // Knulli suspends with it and shuts down when it is held.
 func (p Profile) FirmwarePower() bool { return p.Firmware == Knulli }
+
+// QuitChord reports whether Start pressed with Menu held quits, as Knulli's
+// ports quit with Function, the Brick's Menu, and Start.
+func (p Profile) QuitChord() bool { return p.Firmware == Knulli }

@@ -71,6 +71,32 @@ func TestControllersAndChordsOfMenu(t *testing.T) {
 	}
 }
 
+// With the quit chord, as under Knulli, where ports quit with Function and
+// Start, Start pressed while Menu is held quits; Start first doesn't. It
+// takes the chord on.
+func TestMenuWithStartQuits(t *testing.T) {
+	a, tab := darkApp(nil)
+	a.dispatch(press(input.Menu))
+	a.dispatch(press(input.Start))
+	if a.quit {
+		t.Fatal("quit without the chord")
+	}
+	a, tab = darkApp(nil)
+	a.opts.QuitChord = true
+	for _, e := range []input.Event{press(input.Start), press(input.Menu), release(input.Menu), release(input.Start)} {
+		a.dispatch(e)
+	}
+	if a.quit {
+		t.Fatal("Start, then Menu, quit")
+	}
+	tab.got = nil
+	a.dispatch(press(input.Menu))
+	a.dispatch(press(input.Start))
+	if !a.quit || slices.Contains(tab.got, input.Start) {
+		t.Fatalf("Menu, then Start: quit %v, the screen heard %v", a.quit, tab.got)
+	}
+}
+
 // Alt+F4 is how Batocera's hotkeys, which Knulli has, ask a port to quit.
 func TestAltF4Quits(t *testing.T) {
 	a, _ := darkApp(nil)

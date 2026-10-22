@@ -96,6 +96,9 @@ type Options struct {
 	// and shuts down when it is held. A screen turned off from the quick
 	// menu then comes back on with any button the music doesn't use.
 	FirmwarePower bool
+	// QuitChord quits when Start is pressed while Menu is held, as ports
+	// quit under Knulli.
+	QuitChord bool
 	// Pads is how the firmware hands over the Brick's buttons.
 	Pads input.Layout
 	// Version and Device are shown at the foot of Settings.
@@ -236,6 +239,7 @@ type App struct {
 	dark       bool      // the screen is off: nothing is drawn and only Power is heard
 	lightOff   bool      // the backlight was turned off, to be turned on again
 	powerAt    time.Time // when Power went down, while it is held
+	menuHeld   bool      // Menu is down, for the quit chord
 	scanEnded  bool      // a scan has ended, so an empty index is the library
 	wasAnim    bool
 	// Spotify: the session-expired dialog, whether it has opened since the
@@ -904,19 +908,11 @@ func openPads(controllers bool, log *slog.Logger) map[sdl.JoystickID]map[uint8]b
 		name, guid := sdl.JoystickNameForIndex(i), sdl.JoystickGetGUIDString(sdl.JoystickGetDeviceGUID(i))
 		if controllers && sdl.IsGameController(i) {
 			if c := sdl.GameControllerOpen(i); c != nil {
-				bound := make(map[uint8]bool)
-				for b := range int(sdl.CONTROLLER_BUTTON_MAX) {
-					if bind := c.BindForButton(sdl.GameControllerButton(b)); bind.Type() == sdl.CONTROLLER_BINDTYPE_BUTTON {
-						bound[uint8(bind.Button())] = true
-					}
-				}
-				for ax := range int(sdl.CONTROLLER_AXIS_MAX) {
-					if bind := c.BindForAxis(sdl.GameControllerAxis(ax)); bind.Type() == sdl.CONTROLLER_BINDTYPE_BUTTON {
-						bound[uint8(bind.Button())] = true
-					}
-				}
-				pads[c.Joystick().InstanceID()] = bound
-				log.Info("pad", "name", name, "guid", guid, "mapping", c.Mapping())
+				// The buttons are read from the mapping: go-sdl2's
+				// GameControllerButtonBind.Button misreads their numbers.
+				mapping := c.Mapping()
+				pads[c.Joystick().InstanceID()] = input.MappedButtons(mapping)
+				log.Info("pad", "name", name, "guid", guid, "mapping", mapping)
 				continue
 			}
 		}
@@ -953,6 +949,9 @@ func (a *App) dispatch(e input.Event) {
 	case input.Release:
 		a.repeat.Release(e.Button)
 	}
+	if e.Button == input.Menu {
+		a.menuHeld = e.Kind != input.Release
+	}
 	if e.Button == input.Power {
 		if !a.opts.FirmwarePower {
 			a.power(e, now)
@@ -961,6 +960,10 @@ func (a *App) dispatch(e input.Event) {
 	}
 	if a.handing.Load() {
 		return // the music is being handed over
+	}
+	if a.opts.QuitChord && a.menuHeld && e.Button == input.Start && e.Kind == input.Press {
+		a.quit = true
+		return
 	}
 	if a.dark {
 		// The screen is off: only Power and the music's buttons are heard,

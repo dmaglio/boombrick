@@ -61,7 +61,7 @@ The Downloader card updates yt-dlp, which YouTube Music downloads use, the same 
 
 With the screen off, L1 and R1 skip back and on, and A plays or pauses. Each screen shows its buttons along the bottom.
 
-On Knulli, Power is Knulli's own: a press puts the Brick to sleep and holding it shuts down. Turn the screen off from the quick menu instead; any button other than A, L1 and R1 turns it back on.
+On Knulli, Power is Knulli's own: a press puts the Brick to sleep and holding it shuts down. Turn the screen off from the quick menu instead; any button other than A, L1 and R1 turns it back on. Menu and Start together quit, as they do Knulli's other ports.
 
 ## Files
 
