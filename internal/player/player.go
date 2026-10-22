@@ -75,6 +75,9 @@ type State struct {
 	Elapsed, Duration time.Duration
 	Rate              int    // the current file's sample rate, 0 if unknown
 	Format            string // from the file extension: "MP3", "FLAC"
+	// Chapter and Chapters are, in a book with chapters, the one playing
+	// (from 1) and how many there are; both 0 otherwise.
+	Chapter, Chapters int
 	Shuffle           bool
 	Repeat            Repeat
 	Err               error  // the last output error, which paused playback
@@ -932,6 +935,7 @@ func (p *Player) State() State {
 				s.Duration = duration(p.curFrames, p.curRate)
 			}
 		}
+		p.chapterLocked(&s, t)
 		return s
 	}
 	s.Playing, s.Rate, s.Err = st.Playing, st.Rate, st.Err
@@ -942,7 +946,26 @@ func (p *Player) State() State {
 			s.Duration = duration(st.Frames, st.Rate)
 		}
 	}
+	p.chapterLocked(&s, t)
 	return s
+}
+
+// chapterLocked fills in which chapter of the book t, the current track, s is
+// in, from s.Elapsed.
+func (p *Player) chapterLocked(s *State, t Track) {
+	if p.chapters == nil || !t.IsBook() {
+		return
+	}
+	starts := p.chapters(t.Path)
+	if len(starts) == 0 {
+		return
+	}
+	s.Chapters, s.Chapter = len(starts), 1
+	for i, c := range starts {
+		if c <= s.Elapsed {
+			s.Chapter = i + 1
+		}
+	}
 }
 
 // playingLocked reports whether cur is playing. A source the engine hasn't

@@ -1492,3 +1492,25 @@ func TestABookKeepsItsPlaceLikeAnAlbum(t *testing.T) {
 		t.Fatal("a song on its own is kept as an album")
 	}
 }
+
+func TestStateSaysWhichChapter(t *testing.T) {
+	const hour = 48000 * 3600
+	p, _ := newPlayer(t, map[string]int64{"book.m4b": 12 * hour, "song.flac": 12 * hour})
+	p.SetChapters(func(path string) []time.Duration {
+		if path == "book.m4b" {
+			return []time.Duration{0, 3 * time.Hour, 6 * time.Hour}
+		}
+		return nil
+	})
+	p.Play(queue("book.m4b"), 0)
+	settled(t, p)
+	if s := p.State(); s.Chapters != 3 || s.Chapter != 1 {
+		t.Fatalf("at the start: chapter %d of %d", s.Chapter, s.Chapters)
+	}
+	p.Seek(7 * time.Hour)
+	eventually(t, "the last chapter", func() bool { s := p.State(); return s.Chapter == 3 })
+	p.Play(queue("song.flac"), 0)
+	if s := p.State(); s.Chapters != 0 || s.Chapter != 0 {
+		t.Fatalf("a song is in chapter %d of %d", s.Chapter, s.Chapters)
+	}
+}

@@ -97,6 +97,8 @@ type NowPlaying struct {
 	hintBar         []widgets.Hint
 	hintLabel       string // A's label in hintBar
 	hintBook        bool   // whether hintBar is an audiobook's
+	chapterOf       int    // the chapter chapterLine says
+	chapterLine     string
 }
 
 // formatKey is what formatLine depends on.
@@ -341,7 +343,7 @@ func (n *NowPlaying) Draw(u *ui.Context) {
 	y += titleH
 	u.Text(u.Fit(s.Track.Artist, artistStyle, w), artistStyle, x, y, theme.Paper)
 	y += artistH
-	u.Text(u.Fit(s.Track.Album, albumStyle, w), albumStyle, x, y, theme.Ink2)
+	u.Text(u.Fit(n.line3(s), albumStyle, w), albumStyle, x, y, theme.Ink2)
 	y += albumH + groupGap
 	f, left, right := n.progress(s)
 	drawProgress(u, f, left, right, x, y, w)
@@ -477,4 +479,15 @@ func (n *NowPlaying) hints(s player.State) []widgets.Hint {
 	}
 	n.hintBar, n.hintLabel, n.hintBook = hints, label, s.Track.IsBook()
 	return n.hintBar
+}
+
+// line3 is the line under the artist: the album, or a book's chapter.
+func (n *NowPlaying) line3(s player.State) string {
+	if s.Chapters == 0 {
+		return s.Track.Album
+	}
+	if s.Chapter != n.chapterOf {
+		n.chapterOf, n.chapterLine = s.Chapter, "Chapter "+strconv.Itoa(s.Chapter)+" of "+strconv.Itoa(s.Chapters)
+	}
+	return n.chapterLine
 }
