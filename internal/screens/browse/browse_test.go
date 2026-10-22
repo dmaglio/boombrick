@@ -418,3 +418,52 @@ func TestBooksFilterPlaysTheBook(t *testing.T) {
 		t.Fatalf("played %q from %v, want it to carry on from frame 123456", p.played, p.frames)
 	}
 }
+
+// signalPlayer reports each PlayFrom on a channel, for plays made off the
+// UI thread.
+type signalPlayer struct {
+	fakePlayer
+	from chan int64
+}
+
+func (p *signalPlayer) PlayFrom(ts []player.Track, start int, frame int64) { p.from <- frame }
+
+func TestBookAsksWhereElseItWasLeft(t *testing.T) {
+	ix := library.NewIndex([]library.Album{
+		{Artist: "Georges Simenon", Title: "La casa del giudice", Tracks: []library.Track{{Path: "/m/Audiobooks/La casa [B0GV1924QD].m4b", Title: "La casa del giudice"}}},
+	})
+	p := &signalPlayer{from: make(chan int64, 1)}
+	l := New(&fakeNav{}, p, "/m", nil)
+	l.SetIndex(ix)
+	l.filter = booksFilter
+	when := time.Unix(5000, 0)
+	l.SetProgress([]resume.Progress{{Artist: "Georges Simenon", Album: "La casa del giudice",
+		Path: "/m/Audiobooks/La casa [B0GV1924QD].m4b", Frame: 100, Updated: when}})
+	var asked struct {
+		frame int64
+		when  time.Time
+		has   bool
+	}
+	l.SetRemote(func(path string, frame int64, w time.Time, has bool) (int64, bool) {
+		asked.frame, asked.when, asked.has = frame, w, has
+		return 777, true
+	})
+	l.Handle(press(input.A), t0)
+	select {
+	case f := <-p.from:
+		if f != 777 {
+			t.Fatalf("started at %d, want the other device's 777", f)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the book never started")
+	}
+	if asked.frame != 100 || !asked.when.Equal(when) || !asked.has {
+		t.Fatalf("asked with %+v", asked)
+	}
+	// When nothing better is found the card's own place stands.
+	l.SetRemote(func(string, int64, time.Time, bool) (int64, bool) { return 0, false })
+	l.Handle(press(input.A), t0)
+	if f := <-p.from; f != 100 {
+		t.Fatalf("started at %d, want the card's 100", f)
+	}
+}

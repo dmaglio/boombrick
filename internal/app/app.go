@@ -54,9 +54,12 @@ type Options struct {
 	// progress moved on to another track or stopped.
 	Load     func() (*library.Index, error)
 	Progress func() ([]resume.Progress, error)
-	Rescan   func()
-	Scanned  <-chan ScanUpdate
-	Saved    <-chan struct{}
+	// BookStart, if set, says whether an audiobook was left further on
+	// elsewhere (see browse.Remote).
+	BookStart browse.Remote
+	Rescan    func()
+	Scanned   <-chan ScanUpdate
+	Saved     <-chan struct{}
 	// Status reads the battery, network and Bluetooth for the status bar; the
 	// app calls it on a goroutine every 10 s from start-up while the screen is
 	// on, and as it comes back on.
@@ -338,6 +341,7 @@ func New(opts Options) (*App, error) {
 	}
 	a.home.SetEmpty(opts.MusicDir, func() { a.rescan(); a.Toast(screens.Scanning) })
 	a.library = browse.New(a, opts.Player, opts.MusicDir, a.rescan)
+	a.library.SetRemote(opts.BookStart)
 	a.loads = newLoader(opts.Load, opts.Progress, a.wake)
 	if opts.Scanned != nil {
 		go func() {

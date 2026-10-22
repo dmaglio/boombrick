@@ -18,6 +18,7 @@ import (
 
 	"github.com/ujjwal313/boombrick/internal/app"
 	"github.com/ujjwal313/boombrick/internal/art"
+	"github.com/ujjwal313/boombrick/internal/audible"
 	"github.com/ujjwal313/boombrick/internal/audio/decode"
 	"github.com/ujjwal313/boombrick/internal/background"
 	"github.com/ujjwal313/boombrick/internal/download"
@@ -317,6 +318,25 @@ func run(started time.Time) error {
 		keepSaving(ctx, 5*time.Second, p.State, save, savedTrack)
 	}()
 
+	// Audiobooks keep their place in step with Audible when the device has a
+	// registration to sign in with (see internal/audible); without one, or
+	// without Wi-Fi, they keep it on the card alone.
+	var books *bookSync
+	if ac, err := audible.Load(filepath.Join(paths.Data, "audible", "auth.json"), web); err == nil {
+		books = newBookSync(ac, online, log)
+		log.Info("audible", "signed in", true)
+	} else if !errors.Is(err, audible.ErrNoAuth) {
+		log.Warn("audible", "err", err)
+	}
+	if books != nil {
+		booksDone := make(chan struct{})
+		go func() {
+			defer close(booksDone)
+			keepBooksSynced(ctx, syncEvery/3, p.State, books)
+		}()
+		defer func() { <-booksDone }()
+	}
+
 	// NextUI's volume keys change the volume NextUI keeps in a file, read for
 	// the volume pill; the app has it read when a button is pressed.
 	var volume *platform.VolumeWatcher
@@ -334,6 +354,7 @@ func run(started time.Time) error {
 		MusicDir:   paths.Music,
 		Load:       func() (*library.Index, error) { return library.Load(db.DB) },
 		Progress:   func() ([]resume.Progress, error) { return resume.Recent(db.DB, 200) },
+		BookStart:  bookStart(books),
 		Rescan:     rescan,
 		Scanned:    scanned,
 		Saved:      savedTrack,

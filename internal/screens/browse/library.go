@@ -43,6 +43,7 @@ type Library struct {
 	rows     [filterCount][]listRow // the artists' and songs' rows, made as they first show
 	laidOut  bool
 	progress []resume.Progress // the albums and books part-way through
+	remote   Remote            // asks where else a book was left; nil without Audible
 	reading  bool              // the first scan is running with nothing indexed yet
 	state    widgets.Wrapped   // the empty or reading state's description, wrapped
 }
@@ -108,6 +109,16 @@ func refocus[T any, K comparable](old, now []T, f int, key func(T) K) int {
 	return f
 }
 
+// Remote asks whether a book was left further on somewhere else, such as on
+// the phone, than where the card left it: localFrame as of localWhen, if
+// hasLocal. When it was, it gives that place's frame and true. It may take a
+// few seconds, and is called off the UI thread.
+type Remote func(path string, localFrame int64, localWhen time.Time, hasLocal bool) (frame int64, ok bool)
+
+// SetRemote makes books check where they were left elsewhere before they
+// start. A nil r turns it off.
+func (l *Library) SetRemote(r Remote) { l.remote = r }
+
 // SetProgress tells the tab which albums and books are part-way through, for
 // a book to carry on from where it was left.
 func (l *Library) SetProgress(p []resume.Progress) { l.progress = p }
@@ -169,8 +180,20 @@ func (l *Library) open(i int) {
 		l.nav.Push(NewArtistPage(l.nav, l.p, l.ix.Artists[i]))
 	case booksFilter:
 		l.p.SetShuffle(false)
-		track, frame := l.placeIn(l.ix.Books[i])
-		l.p.PlayFrom(screens.Tracks(l.ix.Books[i].Tracks), track, frame)
+		book := l.ix.Books[i]
+		track, frame, when, has := l.placeIn(book)
+		tracks := screens.Tracks(book.Tracks)
+		if l.remote == nil || len(tracks) != 1 {
+			l.p.PlayFrom(tracks, track, frame)
+			break
+		}
+		remote, p := l.remote, l.p
+		go func() { // asking Audible takes a moment; the card's place stands if it can't
+			if f, ok := remote(tracks[0].Path, frame, when, has); ok {
+				frame = f
+			}
+			p.PlayFrom(tracks, track, frame)
+		}()
 	case songsFilter:
 		songs := make([]player.Track, len(l.ix.Songs))
 		for j, s := range l.ix.Songs {
@@ -308,15 +331,16 @@ func (l *Library) hints() []widgets.Hint {
 }
 
 // placeIn is the track and frame to carry on a book from: where it was left
-// if it is part-way through, else the start.
-func (l *Library) placeIn(a *library.Album) (track int, frame int64) {
+// if it is part-way through, else the start, with when it was left (has is
+// false at the start).
+func (l *Library) placeIn(a *library.Album) (track int, frame int64, when time.Time, has bool) {
 	for _, pr := range l.progress {
 		if pr.Artist != a.Artist || pr.Album != a.Title {
 			continue
 		}
 		if i := slices.IndexFunc(a.Tracks, func(t library.Track) bool { return t.Path == pr.Path }); i >= 0 {
-			return i, pr.Frame
+			return i, pr.Frame, pr.Updated, true
 		}
 	}
-	return 0, 0
+	return 0, 0, time.Time{}, false
 }
