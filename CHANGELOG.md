@@ -2,6 +2,16 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.4.0-beta.2]
+
+A beta for testers: neither Settings nor the Pak Store offers it, and it is installed by hand.
+
+### Fixed
+
+- **Knulli:** Function, the Brick's Menu button, opens the quick menu, with Play in background and Quit. Boombrick took the button's own press for a second button and never opened it.
+- On Knulli, Function and Start together quit Boombrick, as they do Knulli's other ports, and the queue is saved.
+- The SD card's numbers count your music from the first launch, and again after every scan, instead of only once a download finishes.
+
 ## [v0.4.0-beta.1]
 
 A beta for testers: neither Settings nor the Pak Store offers it, and it is installed by hand.
