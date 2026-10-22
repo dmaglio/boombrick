@@ -245,7 +245,8 @@ func run(started time.Time) error {
 	// restore before the database closes under them.
 	ctx, cancel := context.WithCancel(context.Background())
 	scanDone, saved := make(chan struct{}), make(chan struct{})
-	defer func() { cancel(); <-scanDone; <-saved; <-restored }()
+	booksDone := make(chan struct{}) // closed once the Audible sync, if any, has stopped
+	defer func() { cancel(); <-scanDone; <-saved; <-restored; <-booksDone }()
 
 	// Scans run one at a time on their own goroutine: at start-up, then each
 	// time the app asks. Asking while a scan runs queues one more. The app
@@ -329,12 +330,12 @@ func run(started time.Time) error {
 		log.Warn("audible", "err", err)
 	}
 	if books != nil {
-		booksDone := make(chan struct{})
 		go func() {
 			defer close(booksDone)
 			keepBooksSynced(ctx, syncEvery/3, p.State, books)
 		}()
-		defer func() { <-booksDone }()
+	} else {
+		close(booksDone)
 	}
 
 	// NextUI's volume keys change the volume NextUI keeps in a file, read for
