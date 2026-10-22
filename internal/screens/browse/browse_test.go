@@ -270,7 +270,7 @@ func TestNewIndexRowsAreMadeAfresh(t *testing.T) {
 	if r := l.rows[songsFilter][0]; r.subtitle != "Marisol Vega · Salt & Static" || r.duration != "3:42" {
 		t.Fatalf("the first song's row: %q, %q", r.subtitle, r.duration)
 	}
-	if l.counts != [filterCount]string{"1", "1", "1"} {
+	if l.counts != [filterCount]string{"1", "1", "1", "0"} {
 		t.Fatalf("counts %q", l.counts)
 	}
 }
@@ -388,4 +388,22 @@ func TestLibraryAlbumsWithArt(t *testing.T) {
 		l.Draw(u)
 	}
 	uitest.Golden(t, "library-albums-art", off.Image())
+}
+
+func TestBooksFilterPlaysTheBook(t *testing.T) {
+	ix := library.NewIndex([]library.Album{
+		{Artist: "Georges Simenon", Title: "La casa del giudice", Tracks: []library.Track{{Path: "/m/Audiobooks/La casa.m4b", Title: "La casa del giudice"}}},
+		{Artist: "Odalys", Title: "Northbound", Tracks: []library.Track{{Path: "/m/n/1.flac", Title: "Salt"}}},
+	})
+	p := &fakePlayer{}
+	l := New(&fakeNav{}, p, "/m", nil)
+	l.SetIndex(ix)
+	if l.counts != [filterCount]string{"1", "1", "1", "1"} {
+		t.Fatalf("counts %q", l.counts)
+	}
+	l.filter = booksFilter
+	l.Handle(press(input.A), t0)
+	if len(p.played) != 1 || p.played[0] != "/m/Audiobooks/La casa.m4b" {
+		t.Fatalf("played %q", p.played)
+	}
 }

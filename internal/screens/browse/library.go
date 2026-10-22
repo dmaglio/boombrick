@@ -19,14 +19,15 @@ const (
 	albumsFilter = iota
 	artistsFilter
 	songsFilter
+	booksFilter
 	filterCount
 )
 
-var filterNames = [filterCount]string{"Albums", "Artists", "Songs"}
+var filterNames = [filterCount]string{"Albums", "Artists", "Songs", "Books"}
 
 const listTop = contentTop + widgets.FiltersHeight
 
-const emptyText = "Copy music to the Music folder on the SD card, or find something on YouTube Music."
+const emptyText = "Copy music to the Music folder on the SD card, or find something on YouTube Music. Audiobooks (.m4b) go in Music/Audiobooks."
 
 // Library is the Library tab: albums, artists or songs, chosen with L2 and R2.
 type Library struct {
@@ -55,6 +56,7 @@ type listRow struct {
 func New(nav screens.Nav, p Player, musicDir string, rescan func()) *Library {
 	l := &Library{nav: nav, p: p, musicDir: musicDir, rescan: rescan}
 	l.views[albumsFilter] = screens.AlbumGrid()
+	l.views[booksFilter] = screens.AlbumGrid()
 	for _, f := range []int{artistsFilter, songsFilter} {
 		l.views[f] = views.Grid{Cols: 1, CellW: theme.ScreenW - 2*side, CellH: widgets.RowHeight, Pad: pad,
 			ViewH: contentBot - listTop}
@@ -67,13 +69,14 @@ func New(nav screens.Nav, p Player, musicDir string, rescan func()) *Library {
 func (l *Library) SetIndex(ix *library.Index) {
 	old := l.ix
 	l.ix = ix
-	l.counts = [filterCount]string{screens.Count(len(ix.Albums)), screens.Count(len(ix.Artists)), screens.Count(len(ix.Songs))}
+	l.counts = [filterCount]string{screens.Count(len(ix.Albums)), screens.Count(len(ix.Artists)), screens.Count(len(ix.Songs)), screens.Count(len(ix.Books))}
 	l.rows[artistsFilter] = make([]listRow, len(ix.Artists))
 	l.rows[songsFilter] = make([]listRow, len(ix.Songs))
 	if old == nil {
 		l.views[albumsFilter].SetCount(len(ix.Albums))
 		l.views[artistsFilter].SetCount(len(ix.Artists))
 		l.views[songsFilter].SetCount(len(ix.Songs))
+		l.views[booksFilter].SetCount(len(ix.Books))
 		return
 	}
 	g := &l.views[albumsFilter]
@@ -85,6 +88,9 @@ func (l *Library) SetIndex(ix *library.Index) {
 	g = &l.views[songsFilter]
 	g.SetCountFocus(len(ix.Songs), refocus(old.Songs, ix.Songs, g.Focus(),
 		func(s *library.Track) string { return s.Path }))
+	g = &l.views[booksFilter]
+	g.SetCountFocus(len(ix.Books), refocus(old.Books, ix.Books, g.Focus(),
+		func(a *library.Album) [2]string { return [2]string{a.Artist, a.Title} }))
 }
 
 // refocus finds the item that was at f in old within now, by key; without it
@@ -104,7 +110,7 @@ func refocus[T any, K comparable](old, now []T, f int, key func(T) K) int {
 // until SetIndex the tab says the music is being read.
 func (l *Library) SetReading() { l.reading = true }
 
-func (l *Library) empty() bool { return l.ix != nil && len(l.ix.Albums) == 0 }
+func (l *Library) empty() bool { return l.ix != nil && len(l.ix.Albums) == 0 && len(l.ix.Books) == 0 }
 
 // Handle switches filters with L2/R2, moves with the D-pad, opens or plays
 // with A and queues with Y. The empty library rescans with Y.
@@ -155,6 +161,9 @@ func (l *Library) open(i int) {
 		l.nav.Push(NewAlbumPage(l.nav, l.p, l.ix.Albums[i]))
 	case artistsFilter:
 		l.nav.Push(NewArtistPage(l.nav, l.p, l.ix.Artists[i]))
+	case booksFilter:
+		l.p.SetShuffle(false)
+		l.p.Play(screens.Tracks(l.ix.Books[i].Tracks), 0)
 	case songsFilter:
 		songs := make([]player.Track, len(l.ix.Songs))
 		for j, s := range l.ix.Songs {
@@ -179,6 +188,9 @@ func (l *Library) tracksAt(i int) []player.Track {
 			}
 		}
 		return ts
+	}
+	if l.filter == booksFilter {
+		return screens.Tracks(l.ix.Books[i].Tracks)
 	}
 	return []player.Track{screens.TrackOf(l.ix.Songs[i])}
 }
@@ -241,6 +253,10 @@ func (l *Library) drawView(u *ui.Context) {
 		drawAlbums(u, g, l.ix.Albums, listTop, func(i int) string { return l.ix.Albums[i].Artist })
 		return
 	}
+	if l.filter == booksFilter {
+		drawAlbums(u, g, l.ix.Books, listTop, func(i int) string { return l.ix.Books[i].Artist })
+		return
+	}
 	playing := l.p.State().Track.Path
 	u.PushClip(screens.GlowArea)
 	g.Draw(u.Now, side, listTop, func(i int, x, y, k float32) {
@@ -278,7 +294,7 @@ func (l *Library) hints() []widgets.Hint {
 		return tabHints
 	case l.empty():
 		return rescanHints
-	case l.filter == songsFilter:
+	case l.filter == songsFilter, l.filter == booksFilter:
 		return songHints
 	}
 	return openHints
