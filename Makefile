@@ -55,7 +55,7 @@ KNULLI_DIR   := dist/knulli/roms/ports/boombrick
 .PHONY: device-image device pak crossmix knulli
 
 device-image:
-	docker build --build-arg GO_VERSION=$(GO_VERSION) -t $(DEVICE_IMAGE) build/docker
+	docker build --load --build-arg GO_VERSION=$(GO_VERSION) -t $(DEVICE_IMAGE) build/docker
 
 # Inside the container the checkout can belong to another user, which git
 # refuses to read; the version comes from VERSION, not from git. The Spotify
