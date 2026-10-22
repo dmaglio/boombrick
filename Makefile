@@ -78,6 +78,8 @@ define app
 	chmod +x $(1)/boombrick $(1)/$(3)
 	cp dist/qjs/qjs-linux-aarch64 $(1)/bin/qjs
 	cp dist/tg5040/boombrick-spotify $(1)/bin/
+	cp third_party/ffmpeg/ffmpeg-aarch64 $(1)/bin/ffmpeg
+	chmod +x $(1)/bin/ffmpeg
 	docker run --rm -v "$$(pwd)":/src $(DEVICE_IMAGE) sh -c \
 		'mkdir -p $(1)/lib && cd $$SYSROOT/usr/lib && cp -L libopus.so.0 libogg.so.0 libFLAC.so.8 libmpg123.so.0 \
 			/src/$(1)/lib/'

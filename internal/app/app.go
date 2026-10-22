@@ -59,9 +59,14 @@ type Options struct {
 	// BookStart, if set, says whether an audiobook was left further on
 	// elsewhere (see browse.Remote).
 	BookStart browse.Remote
-	Rescan    func()
-	Scanned   <-chan ScanUpdate
-	Saved     <-chan struct{}
+	// Catalogue is the Audible library for the Books tab, with the channel
+	// that says it has changed and the file a registration is read from.
+	Catalogue      browse.Catalogue
+	CatalogueReady <-chan struct{}
+	AudibleSetup   string
+	Rescan         func()
+	Scanned        <-chan ScanUpdate
+	Saved          <-chan struct{}
 	// Status reads the battery, network and Bluetooth for the status bar; the
 	// app calls it on a goroutine every 10 s from start-up while the screen is
 	// on, and as it comes back on.
@@ -218,7 +223,8 @@ type App struct {
 	nowPlaying *nowplaying.NowPlaying
 	music      transport // the player, for the buttons heard with the screen off
 	library    *browse.Library
-	books      *browse.Books
+	books      *browse.Books // nil without an Audible catalogue
+	shelf      *browse.Shelf
 	queue      *queue.Queue
 	shell      *shell
 	ix         *library.Index
@@ -344,8 +350,17 @@ func New(opts Options) (*App, error) {
 	}
 	a.home.SetEmpty(opts.MusicDir, func() { a.rescan(); a.Toast(screens.Scanning) })
 	a.library = browse.New(a, opts.Player, opts.MusicDir, a.rescan)
-	a.books = browse.NewBooks(a, opts.Player, opts.MusicDir)
-	a.books.SetRemote(opts.BookStart)
+	a.shelf = browse.NewShelf(opts.Player)
+	a.shelf.SetRemote(opts.BookStart)
+	a.library.SetShelf(a.shelf)
+	var books screens.Screen = &screens.Placeholder{Tab: browse.BooksTab, Title: "Books"}
+	if opts.Catalogue != nil {
+		a.books = browse.NewBooks(a, opts.Player, a.shelf, opts.Catalogue, opts.AudibleSetup)
+		books = a.books
+		if opts.CatalogueReady != nil {
+			a.forward(opts.CatalogueReady, &a.redraw)
+		}
+	}
 	if opts.Prefs != nil {
 		a.nowPlaying.SetOnSpeed(func(v float64) { opts.Prefs.Set(settings.BookSpeed, strconv.FormatFloat(v, 'f', -1, 64)) })
 	}
@@ -402,7 +417,7 @@ func New(opts Options) (*App, error) {
 	}
 	a.shell = newShell(a.home,
 		a.library,
-		a.books,
+		books,
 		spTab,
 		ytTab,
 		dlTab)
@@ -622,7 +637,9 @@ func (a *App) poll() {
 				if r.ix != nil {
 					a.ix = r.ix
 					a.library.SetIndex(r.ix)
-					a.books.SetIndex(r.ix)
+					if a.books != nil {
+						a.books.SetIndex(r.ix)
+					}
 					a.opts.Log.Info("loaded library", "albums", len(r.ix.Albums), "artists", len(r.ix.Artists),
 						"songs", len(r.ix.Songs), "in_progress", len(r.progress), "took", r.took.Round(time.Millisecond))
 				}
@@ -728,7 +745,7 @@ func (a *App) colours() colours {
 // showHome fills Home's rows from the index and the albums in progress.
 func (a *App) showHome(progress []resume.Progress) {
 	a.progress = progress
-	a.books.SetProgress(progress)
+	a.shelf.SetProgress(progress)
 	if a.ix == nil {
 		return
 	}

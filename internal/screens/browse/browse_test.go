@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ujjwal313/boombrick/internal/audible"
+	"github.com/ujjwal313/boombrick/internal/audiobooks"
 	"github.com/ujjwal313/boombrick/internal/fixture"
 	"github.com/ujjwal313/boombrick/internal/library"
 	"github.com/ujjwal313/boombrick/internal/platform/input"
@@ -275,7 +277,7 @@ func TestNewIndexRowsAreMadeAfresh(t *testing.T) {
 	if r := l.rows[songsFilter][0]; r.subtitle != "Marisol Vega · Salt & Static" || r.duration != "3:42" {
 		t.Fatalf("the first song's row: %q, %q", r.subtitle, r.duration)
 	}
-	if l.counts != [filterCount]string{"1", "1", "1"} {
+	if l.counts != [filterCount]string{"1", "1", "1", "0"} {
 		t.Fatalf("counts %q", l.counts)
 	}
 }
@@ -402,32 +404,120 @@ func bookIndex() *library.Index {
 	})
 }
 
-func TestBooksTabPlaysTheBookFromWhereItWasLeft(t *testing.T) {
+func TestLibraryBooksFilterPlaysFromWhereTheBookWasLeft(t *testing.T) {
 	p := &fakePlayer{}
-	b := NewBooks(&fakeNav{}, p, "/m")
-	b.SetIndex(bookIndex())
-	b.Handle(press(input.A), t0)
+	l := New(&fakeNav{}, p, "/m", nil)
+	shelf := NewShelf(p)
+	l.SetShelf(shelf)
+	l.SetIndex(bookIndex())
+	if l.counts != [filterCount]string{"1", "1", "1", "1"} {
+		t.Fatalf("counts %q", l.counts)
+	}
+	l.filter = booksFilter
+	l.Handle(press(input.A), t0)
 	if len(p.played) != 1 || p.played[0] != "/m/Audiobooks/La casa [B0GV1924QD].m4b" || p.frames[0] != 0 {
 		t.Fatalf("played %q from %v", p.played, p.frames)
 	}
-	b.SetProgress([]resume.Progress{{Artist: "Georges Simenon", Album: "La casa del giudice", Path: "/m/Audiobooks/La casa [B0GV1924QD].m4b", Frame: 123456}})
-	b.Handle(press(input.A), t0)
+	shelf.SetProgress([]resume.Progress{{Artist: "Georges Simenon", Album: "La casa del giudice", Path: "/m/Audiobooks/La casa [B0GV1924QD].m4b", Frame: 123456}})
+	l.Handle(press(input.A), t0)
 	if len(p.played) != 2 || p.frames[1] != 123456 {
 		t.Fatalf("played %q from %v, want it to carry on from frame 123456", p.played, p.frames)
 	}
-	b.Handle(press(input.Y), t0)
+}
+
+// fakeCatalogue is an Audible library with what each book is doing.
+type fakeCatalogue struct {
+	signedIn  bool
+	status    audiobooks.Status
+	msg       string
+	entries   []audiobooks.Entry
+	downloads []string
+	refreshes int
+}
+
+func (c *fakeCatalogue) SignedIn() bool                      { return c.signedIn }
+func (c *fakeCatalogue) Status() (audiobooks.Status, string) { return c.status, c.msg }
+func (c *fakeCatalogue) Entries() []audiobooks.Entry         { return c.entries }
+func (c *fakeCatalogue) Download(asin string)                { c.downloads = append(c.downloads, asin) }
+func (c *fakeCatalogue) Refresh()                            { c.refreshes++ }
+
+func entry(asin, title string, path string) audiobooks.Entry {
+	return audiobooks.Entry{Book: audible.Book{ASIN: asin, Title: title, Authors: "Georges Simenon", Length: 4*time.Hour + 9*time.Minute}, Path: path}
+}
+
+func TestBooksTabDownloadsWhatIsNotOnTheCardAndPlaysWhatIs(t *testing.T) {
+	p := &fakePlayer{}
+	nav := &fakeNav{}
+	cat := &fakeCatalogue{signedIn: true, status: audiobooks.OK, entries: []audiobooks.Entry{
+		entry("B0H764PGVH", "Firmato Picpus", ""),
+		entry("B0GV1924QD", "La casa del giudice", "/m/Audiobooks/La casa [B0GV1924QD].m4b"),
+	}}
+	b := NewBooks(nav, p, NewShelf(p), cat, "/data/audible/auth.json")
+	b.SetIndex(bookIndex())
+	b.Handle(press(input.A), t0) // the first book isn't on the card
+	if len(cat.downloads) != 1 || cat.downloads[0] != "B0H764PGVH" || len(p.played) != 0 {
+		t.Fatalf("downloads %v, played %v", cat.downloads, p.played)
+	}
+	b.Handle(press(input.Down), t0)
+	b.Handle(press(input.A), t0) // the second is
+	if len(p.played) != 1 || p.played[0] != "/m/Audiobooks/La casa [B0GV1924QD].m4b" || len(cat.downloads) != 1 {
+		t.Fatalf("downloads %v, played %v", cat.downloads, p.played)
+	}
+	b.Handle(press(input.Y), t0) // queue the book on the card
 	if len(p.queued) != 1 {
-		t.Fatalf("Y queued %v", p.queued)
+		t.Fatalf("queued %v", p.queued)
+	}
+	b.Handle(press(input.X), t0)
+	if cat.refreshes != 1 {
+		t.Fatalf("refreshes %d", cat.refreshes)
+	}
+	// A book already on its way isn't asked for twice.
+	cat.entries[0].State = audiobooks.Downloading
+	b.Handle(press(input.Up), t0)
+	b.Handle(press(input.A), t0)
+	if len(cat.downloads) != 1 {
+		t.Fatalf("downloads %v", cat.downloads)
 	}
 }
 
-func TestBooksTabIsEmptyWithoutBooks(t *testing.T) {
-	b := NewBooks(&fakeNav{}, &fakePlayer{}, "/m")
-	b.SetIndex(sampleIndex())
-	if !b.empty() || b.Handle(press(input.A), t0) {
-		t.Fatal("a library of songs has books")
+func TestBooksTabSaysWhyItIsEmpty(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cat  *fakeCatalogue
+		want string
+	}{
+		{"no account", &fakeCatalogue{}, "Audible isn't set up"},
+		{"reading", &fakeCatalogue{signedIn: true, status: audiobooks.Loading}, "Reading your Audible library"},
+		{"offline", &fakeCatalogue{signedIn: true, status: audiobooks.Offline}, "No network"},
+		{"broken", &fakeCatalogue{signedIn: true, status: audiobooks.Broken, msg: "401"}, "Couldn't read your library"},
+		{"none", &fakeCatalogue{signedIn: true, status: audiobooks.OK}, "Your Audible library is empty"},
+	} {
+		b := NewBooks(&fakeNav{}, &fakePlayer{}, NewShelf(&fakePlayer{}), c.cat, "/data/audible/auth.json")
+		b.sync()
+		if title, _, _, empty := b.emptyState(); !empty || title != c.want {
+			t.Errorf("%s: %q (empty %v), want %q", c.name, title, empty, c.want)
+		}
+		render(t, b, t0) // and it draws
 	}
-	render(t, b, t0) // the empty state draws
+}
+
+func TestBooksTabDrawsItsList(t *testing.T) {
+	cat := &fakeCatalogue{signedIn: true, status: audiobooks.OK, entries: []audiobooks.Entry{
+		entry("B0H764PGVH", "Firmato Picpus", ""),
+		{Book: audible.Book{ASIN: "B1", Title: "In arrivo", Authors: "X", Length: time.Hour}, State: audiobooks.Downloading, Progress: 0.42},
+		{Book: audible.Book{ASIN: "B2", Title: "Fallito", Authors: "X"}, State: audiobooks.Failed, Err: "Audible says wait a while, then try again"},
+	}}
+	b := NewBooks(&fakeNav{}, &fakePlayer{}, NewShelf(&fakePlayer{}), cat, "")
+	render(t, b, t0)
+	if r := rowOf(cat.entries[1], ""); r.Duration != "42%" {
+		t.Fatalf("progress shows %q", r.Duration)
+	}
+	if r := rowOf(cat.entries[0], ""); r.Subtitle != "Georges Simenon · 4 h 9 min" {
+		t.Fatalf("subtitle %q", r.Subtitle)
+	}
+	if r := rowOf(cat.entries[2], ""); r.Subtitle != "Audible says wait a while, then try again" {
+		t.Fatalf("failed row %q", r.Subtitle)
+	}
 }
 
 // signalPlayer reports each PlayFrom on a channel, for plays made off the
@@ -441,21 +531,21 @@ func (p *signalPlayer) PlayFrom(ts []player.Track, start int, frame int64) { p.f
 
 func TestBookAsksWhereElseItWasLeft(t *testing.T) {
 	p := &signalPlayer{from: make(chan int64, 1)}
-	l := NewBooks(&fakeNav{}, p, "/m")
-	l.SetIndex(bookIndex())
+	shelf := NewShelf(p)
+	book := bookIndex().Books[0]
 	when := time.Unix(5000, 0)
-	l.SetProgress([]resume.Progress{{Artist: "Georges Simenon", Album: "La casa del giudice",
+	shelf.SetProgress([]resume.Progress{{Artist: "Georges Simenon", Album: "La casa del giudice",
 		Path: "/m/Audiobooks/La casa [B0GV1924QD].m4b", Frame: 100, Updated: when}})
 	var asked struct {
 		frame int64
 		when  time.Time
 		has   bool
 	}
-	l.SetRemote(func(path string, frame int64, w time.Time, has bool) (int64, bool) {
+	shelf.SetRemote(func(path string, frame int64, w time.Time, has bool) (int64, bool) {
 		asked.frame, asked.when, asked.has = frame, w, has
 		return 777, true
 	})
-	l.Handle(press(input.A), t0)
+	shelf.Play(book)
 	select {
 	case f := <-p.from:
 		if f != 777 {
@@ -468,8 +558,8 @@ func TestBookAsksWhereElseItWasLeft(t *testing.T) {
 		t.Fatalf("asked with %+v", asked)
 	}
 	// When nothing better is found the card's own place stands.
-	l.SetRemote(func(string, int64, time.Time, bool) (int64, bool) { return 0, false })
-	l.Handle(press(input.A), t0)
+	shelf.SetRemote(func(string, int64, time.Time, bool) (int64, bool) { return 0, false })
+	shelf.Play(book)
 	if f := <-p.from; f != 100 {
 		t.Fatalf("started at %d, want the card's 100", f)
 	}

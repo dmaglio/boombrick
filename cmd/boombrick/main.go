@@ -20,6 +20,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/art"
 	"github.com/ujjwal313/boombrick/internal/audible"
 	"github.com/ujjwal313/boombrick/internal/audio/decode"
+	"github.com/ujjwal313/boombrick/internal/audiobooks"
 	"github.com/ujjwal313/boombrick/internal/background"
 	"github.com/ujjwal313/boombrick/internal/download"
 	"github.com/ujjwal313/boombrick/internal/importer"
@@ -323,12 +324,28 @@ func run(started time.Time) error {
 	// registration to sign in with (see internal/audible); without one, or
 	// without Wi-Fi, they keep it on the card alone.
 	var books *bookSync
+	var audibleClient *audible.Client
 	if ac, err := audible.Load(filepath.Join(paths.Data, "audible", "auth.json"), web); err == nil {
+		audibleClient = ac
 		books = newBookSync(ac, online, log)
 		log.Info("audible", "signed in", true)
 	} else if !errors.Is(err, audible.ErrNoAuth) {
 		log.Warn("audible", "err", err)
 	}
+	// The Books tab lists the Audible library and downloads from it, when
+	// there is a registration; without one it says how to set one up.
+	authFile := filepath.Join(paths.Data, "audible", "auth.json")
+	var api audiobooks.API
+	if audibleClient != nil {
+		api = audibleClient
+	}
+	catalogue := audiobooks.New(audiobooks.Options{
+		API: api, Dir: filepath.Join(paths.Music, "Audiobooks"), Cache: filepath.Join(paths.Data, "audible", "library.json"),
+		FFmpeg: filepath.Join(dir, "bin", "ffmpeg"), Online: online, Log: log,
+		Filed: func(string) { rescan() }, // the Library finds the book with the next scan
+	})
+	defer catalogue.Close()
+	catalogue.Refresh()
 	if books != nil {
 		go func() {
 			defer close(booksDone)
@@ -356,9 +373,10 @@ func run(started time.Time) error {
 		Load:       func() (*library.Index, error) { return library.Load(db.DB) },
 		Progress:   func() ([]resume.Progress, error) { return resume.Recent(db.DB, 200) },
 		BookStart:  bookStart(books),
-		Rescan:     rescan,
-		Scanned:    scanned,
-		Saved:      savedTrack,
+		Catalogue:  catalogue, CatalogueReady: catalogue.Ready(), AudibleSetup: authFile,
+		Rescan:  rescan,
+		Scanned: scanned,
+		Saved:   savedTrack,
 		Status: func() platform.Status {
 			st := platform.ReadStatus("/sys")
 			st.Bluetooth = bt.Connected()

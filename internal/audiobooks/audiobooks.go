@@ -409,7 +409,7 @@ func (s *Service) ffmpeg(ctx context.Context, in, out, key, iv string) error {
 	if key != "" {
 		args = append(args, "-audible_key", key, "-audible_iv", iv)
 	}
-	args = append(args, "-i", in, "-c", "copy", "-f", "mp4", out)
+	args = append(args, "-i", in, "-c", "copy", out)
 	if msg, err := exec.CommandContext(ctx, s.o.FFmpeg, args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg: %w: %s", err, strings.TrimSpace(string(msg)))
 	}
