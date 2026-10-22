@@ -249,7 +249,7 @@ func TestADeniedLicenceSaysWhy(t *testing.T) {
 	c, _ := New("T", pemKey, "it", Device{}, &http.Client{Transport: rewrite{srv.URL}})
 	_, err := c.License(context.Background(), "B0FH5CCLRJ")
 	var d *Denied
-	if !errors.As(err, &d) || !d.Throttled || !strings.Contains(d.Reason, "not part of any plans") {
+	if !errors.As(err, &d) || !d.Throttled || !d.NoPlan() || !strings.Contains(d.Reason, "not part of any plans") {
 		t.Fatalf("got %v", err)
 	}
 	if acr, err := c.ACR(context.Background(), "B0FH5CCLRJ"); err != nil || acr != "CR!1" {

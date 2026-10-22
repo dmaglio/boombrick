@@ -170,15 +170,19 @@ func (c *Client) License(ctx context.Context, asin string) (License, error) {
 		return License{}, err
 	}
 	if r.License.Status == "Denied" {
-		why := "Audible refused the download"
-		if len(r.License.Denials) > 0 {
-			why += ": " + r.License.Denials[0].Message
+		d := &Denied{}
+		for _, x := range r.License.Denials {
+			if strings.Contains(x.Message, "throttled") {
+				d.Throttled = true
+				continue
+			}
+			d.Reasons = append(d.Reasons, x.Message)
 		}
-		return License{}, &Denied{Reason: why, Throttled: slices.ContainsFunc(r.License.Denials, func(d struct {
-			Message string `json:"message"`
-		}) bool {
-			return strings.Contains(d.Message, "throttled")
-		})}
+		d.Reason = "Audible refused the download"
+		if len(d.Reasons) > 0 {
+			d.Reason += ": " + d.Reasons[0]
+		}
+		return License{}, d
 	}
 	l := License{ASIN: asin, URL: r.License.Meta.URL.Offline, ACR: cmp.Or(r.License.Meta.Ref.ACR, r.License.ACR)}
 	if l.URL == "" {
@@ -198,7 +202,16 @@ func (c *Client) License(ctx context.Context, asin string) (License, error) {
 // download, or too many were asked for lately (Throttled), which passes.
 type Denied struct {
 	Reason    string
-	Throttled bool
+	Reasons   []string // why, but for the throttling
+	Throttled bool     // one of the reasons is that too many were asked for lately
+}
+
+// NoPlan reports whether Audible says the account has no plan to download
+// the book under, or doesn't own it.
+func (d *Denied) NoPlan() bool {
+	return slices.ContainsFunc(d.Reasons, func(r string) bool {
+		return strings.Contains(r, "not part of any plans") || strings.Contains(r, "Ownership")
+	})
 }
 
 func (d *Denied) Error() string { return "audible: " + d.Reason }

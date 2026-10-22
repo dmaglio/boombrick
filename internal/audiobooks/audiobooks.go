@@ -323,10 +323,14 @@ func (s *Service) download(ctx context.Context, asin string) {
 func friendly(err error) string {
 	var d *audible.Denied
 	switch {
-	case errors.As(err, &d) && d.Throttled:
+	case errors.As(err, &d) && d.NoPlan():
+		return "Audible says this account has no plan or ownership for this book"
+	case errors.As(err, &d) && len(d.Reasons) == 0 && d.Throttled:
 		return "Audible says wait a while, then try again"
+	case errors.As(err, &d) && len(d.Reasons) > 0:
+		return d.Reasons[0]
 	case errors.As(err, &d):
-		return strings.TrimPrefix(d.Reason, "Audible refused the download: ")
+		return "Audible refused the download"
 	case errors.Is(err, io.ErrUnexpectedEOF):
 		return "the download was cut off"
 	}

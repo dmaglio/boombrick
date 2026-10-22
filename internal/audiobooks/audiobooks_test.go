@@ -163,7 +163,7 @@ func TestDownloadFilesTheBookWithItsSidecar(t *testing.T) {
 }
 
 func TestADeniedDownloadFailsWithAReasonAndCanBeTriedAgain(t *testing.T) {
-	api := &fakeAPI{books: []audible.Book{maigret}, body: "x", licErr: &audible.Denied{Reason: "Audible refused the download: throttled", Throttled: true}}
+	api := &fakeAPI{books: []audible.Book{maigret}, body: "x", licErr: &audible.Denied{Reason: "Audible refused the download", Throttled: true}}
 	s, _, filed := newService(t, api, nil)
 	s.Refresh()
 	waitFor(t, "the list", func() bool { st, _ := s.Status(); return st == OK })
@@ -211,5 +211,18 @@ func TestExistingFilesAreRecognised(t *testing.T) {
 	waitFor(t, "the list", func() bool { return len(s.Entries()) == 1 })
 	if e := s.Entries()[0]; e.Path != p {
 		t.Fatalf("path %q, want %q", e.Path, p)
+	}
+}
+
+func TestFriendlyTellsPlanFromThrottle(t *testing.T) {
+	plan := &audible.Denied{Reason: "x", Reasons: []string{"Customer is not part of any plans"}, Throttled: true}
+	if got := friendly(plan); !strings.Contains(got, "no plan") {
+		t.Errorf("a refusal for want of a plan, which also mentions throttling, says %q", got)
+	}
+	if got := friendly(&audible.Denied{Throttled: true}); !strings.Contains(got, "wait") {
+		t.Errorf("a refusal for throttling alone says %q", got)
+	}
+	if got := friendly(&audible.Denied{Reasons: []string{"Something else"}}); got != "Something else" {
+		t.Errorf("another reason says %q", got)
 	}
 }
