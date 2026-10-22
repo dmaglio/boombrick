@@ -2,6 +2,14 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [Unreleased]
+
+### Added
+
+- **Audiobooks:** `.m4b` files, such as the ones `audible-tui` makes, play as books. Put them in `Music/Audiobooks`; they get a Books filter in the Library (L2/R2) and stay out of Albums, Artists and Songs.
+- A book starts again where you left it, from the Library and from Continue listening, even after a restart.
+- In a book, L1 and R1 move by chapter (R1 goes to the next, L1 to the start of this one, or the one before when it has only just begun), and L2 and R2 skip 15 seconds back and on.
+
 ## [v0.4.0-beta.1]
 
 A beta for testers: neither Settings nor the Pak Store offers it, and it is installed by hand.

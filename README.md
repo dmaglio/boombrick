@@ -11,6 +11,7 @@ See [CHANGELOG.md](CHANGELOG.md) for what each release adds.
 ## Features
 
 - **Your music:** MP3, FLAC, Opus and M4A (AAC), gapless, with ReplayGain levelling. Browse by album, artist or song; the queue has shuffle and repeat and is kept between launches.
+- **Audiobooks:** `.m4b` files in `Music/Audiobooks` get their own Books filter in the Library. They carry on from where you left them, move by chapter with L1/R1 and skip 15 seconds with L2/R2.
 - **Covers** from the files, folder pictures or the Cover Art Archive.
 - **Synced lyrics** from the files, `.lrc` files or LRCLIB, with the line being sung highlighted.
 - **YouTube Music:** search, browse albums and artists, and download songs as tagged Opus files with covers and lyrics. A song that is still downloading plays as soon as it lands.
