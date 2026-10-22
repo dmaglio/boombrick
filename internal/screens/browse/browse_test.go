@@ -275,7 +275,7 @@ func TestNewIndexRowsAreMadeAfresh(t *testing.T) {
 	if r := l.rows[songsFilter][0]; r.subtitle != "Marisol Vega · Salt & Static" || r.duration != "3:42" {
 		t.Fatalf("the first song's row: %q, %q", r.subtitle, r.duration)
 	}
-	if l.counts != [filterCount]string{"1", "1", "1", "0"} {
+	if l.counts != [filterCount]string{"1", "1", "1"} {
 		t.Fatalf("counts %q", l.counts)
 	}
 }
@@ -395,28 +395,39 @@ func TestLibraryAlbumsWithArt(t *testing.T) {
 	uitest.Golden(t, "library-albums-art", off.Image())
 }
 
-func TestBooksFilterPlaysTheBook(t *testing.T) {
-	ix := library.NewIndex([]library.Album{
-		{Artist: "Georges Simenon", Title: "La casa del giudice", Tracks: []library.Track{{Path: "/m/Audiobooks/La casa.m4b", Title: "La casa del giudice"}}},
+func bookIndex() *library.Index {
+	return library.NewIndex([]library.Album{
+		{Artist: "Georges Simenon", Title: "La casa del giudice", Tracks: []library.Track{{Path: "/m/Audiobooks/La casa [B0GV1924QD].m4b", Title: "La casa del giudice"}}},
 		{Artist: "Odalys", Title: "Northbound", Tracks: []library.Track{{Path: "/m/n/1.flac", Title: "Salt"}}},
 	})
+}
+
+func TestBooksTabPlaysTheBookFromWhereItWasLeft(t *testing.T) {
 	p := &fakePlayer{}
-	l := New(&fakeNav{}, p, "/m", nil)
-	l.SetIndex(ix)
-	if l.counts != [filterCount]string{"1", "1", "1", "1"} {
-		t.Fatalf("counts %q", l.counts)
-	}
-	l.filter = booksFilter
-	l.Handle(press(input.A), t0)
-	if len(p.played) != 1 || p.played[0] != "/m/Audiobooks/La casa.m4b" || p.frames[0] != 0 {
+	b := NewBooks(&fakeNav{}, p, "/m")
+	b.SetIndex(bookIndex())
+	b.Handle(press(input.A), t0)
+	if len(p.played) != 1 || p.played[0] != "/m/Audiobooks/La casa [B0GV1924QD].m4b" || p.frames[0] != 0 {
 		t.Fatalf("played %q from %v", p.played, p.frames)
 	}
-	// Part-way through, it carries on from where it was left.
-	l.SetProgress([]resume.Progress{{Artist: "Georges Simenon", Album: "La casa del giudice", Path: "/m/Audiobooks/La casa.m4b", Frame: 123456}})
-	l.Handle(press(input.A), t0)
+	b.SetProgress([]resume.Progress{{Artist: "Georges Simenon", Album: "La casa del giudice", Path: "/m/Audiobooks/La casa [B0GV1924QD].m4b", Frame: 123456}})
+	b.Handle(press(input.A), t0)
 	if len(p.played) != 2 || p.frames[1] != 123456 {
 		t.Fatalf("played %q from %v, want it to carry on from frame 123456", p.played, p.frames)
 	}
+	b.Handle(press(input.Y), t0)
+	if len(p.queued) != 1 {
+		t.Fatalf("Y queued %v", p.queued)
+	}
+}
+
+func TestBooksTabIsEmptyWithoutBooks(t *testing.T) {
+	b := NewBooks(&fakeNav{}, &fakePlayer{}, "/m")
+	b.SetIndex(sampleIndex())
+	if !b.empty() || b.Handle(press(input.A), t0) {
+		t.Fatal("a library of songs has books")
+	}
+	render(t, b, t0) // the empty state draws
 }
 
 // signalPlayer reports each PlayFrom on a channel, for plays made off the
@@ -429,13 +440,9 @@ type signalPlayer struct {
 func (p *signalPlayer) PlayFrom(ts []player.Track, start int, frame int64) { p.from <- frame }
 
 func TestBookAsksWhereElseItWasLeft(t *testing.T) {
-	ix := library.NewIndex([]library.Album{
-		{Artist: "Georges Simenon", Title: "La casa del giudice", Tracks: []library.Track{{Path: "/m/Audiobooks/La casa [B0GV1924QD].m4b", Title: "La casa del giudice"}}},
-	})
 	p := &signalPlayer{from: make(chan int64, 1)}
-	l := New(&fakeNav{}, p, "/m", nil)
-	l.SetIndex(ix)
-	l.filter = booksFilter
+	l := NewBooks(&fakeNav{}, p, "/m")
+	l.SetIndex(bookIndex())
 	when := time.Unix(5000, 0)
 	l.SetProgress([]resume.Progress{{Artist: "Georges Simenon", Album: "La casa del giudice",
 		Path: "/m/Audiobooks/La casa [B0GV1924QD].m4b", Frame: 100, Updated: when}})

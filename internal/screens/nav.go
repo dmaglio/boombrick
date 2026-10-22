@@ -25,7 +25,7 @@ type Backer interface {
 }
 
 // DownloadsTab is the Downloads tab's place in the tab row.
-const DownloadsTab = 4
+const DownloadsTab = 5
 
 // Tabber is a Nav that can show another tab, as the app's does.
 type Tabber interface {

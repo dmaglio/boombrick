@@ -218,6 +218,7 @@ type App struct {
 	nowPlaying *nowplaying.NowPlaying
 	music      transport // the player, for the buttons heard with the screen off
 	library    *browse.Library
+	books      *browse.Books
 	queue      *queue.Queue
 	shell      *shell
 	ix         *library.Index
@@ -343,7 +344,8 @@ func New(opts Options) (*App, error) {
 	}
 	a.home.SetEmpty(opts.MusicDir, func() { a.rescan(); a.Toast(screens.Scanning) })
 	a.library = browse.New(a, opts.Player, opts.MusicDir, a.rescan)
-	a.library.SetRemote(opts.BookStart)
+	a.books = browse.NewBooks(a, opts.Player, opts.MusicDir)
+	a.books.SetRemote(opts.BookStart)
 	if opts.Prefs != nil {
 		a.nowPlaying.SetOnSpeed(func(v float64) { opts.Prefs.Set(settings.BookSpeed, strconv.FormatFloat(v, 'f', -1, 64)) })
 	}
@@ -378,7 +380,7 @@ func New(opts Options) (*App, error) {
 	if opts.MusicDir != "" {
 		screens.SetDownloadsDir(filepath.Join(opts.MusicDir, "Boombrick"))
 	}
-	var ytTab, dlTab screens.Screen = &screens.Placeholder{Tab: 3, Title: "YouTube"}, &screens.Placeholder{Tab: 4, Title: "Downloads"}
+	var ytTab, dlTab screens.Screen = &screens.Placeholder{Tab: 4, Title: "YouTube"}, &screens.Placeholder{Tab: 5, Title: "Downloads"}
 	var acts youtube.Downloads // stays nil without a queue
 	if opts.Downloads != nil {
 		acts = ytActions{dl: opts.Downloads, p: opts.Player, toast: a.Toast}
@@ -400,6 +402,7 @@ func New(opts Options) (*App, error) {
 	}
 	a.shell = newShell(a.home,
 		a.library,
+		a.books,
 		spTab,
 		ytTab,
 		dlTab)
@@ -619,6 +622,7 @@ func (a *App) poll() {
 				if r.ix != nil {
 					a.ix = r.ix
 					a.library.SetIndex(r.ix)
+					a.books.SetIndex(r.ix)
 					a.opts.Log.Info("loaded library", "albums", len(r.ix.Albums), "artists", len(r.ix.Artists),
 						"songs", len(r.ix.Songs), "in_progress", len(r.progress), "took", r.took.Round(time.Millisecond))
 				}
@@ -724,7 +728,7 @@ func (a *App) colours() colours {
 // showHome fills Home's rows from the index and the albums in progress.
 func (a *App) showHome(progress []resume.Progress) {
 	a.progress = progress
-	a.library.SetProgress(progress)
+	a.books.SetProgress(progress)
 	if a.ix == nil {
 		return
 	}

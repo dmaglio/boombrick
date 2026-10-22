@@ -11,7 +11,7 @@ import (
 )
 
 // spotifyTab is the Spotify tab's place in the tab row.
-const spotifyTab = 2
+const spotifyTab = 3
 
 // Spotify is the Spotify library: the tab's, Home's row's and Settings'.
 // *spotify.Library is one.
