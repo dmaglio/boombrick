@@ -226,3 +226,16 @@ func TestFriendlyTellsPlanFromThrottle(t *testing.T) {
 		t.Errorf("another reason says %q", got)
 	}
 }
+
+func TestSigningInGivesTheServiceItsLibrary(t *testing.T) {
+	s := New(Options{Dir: t.TempDir()})
+	defer s.Close()
+	s.SetAPI(&fakeAPI{books: []audible.Book{maigret}})
+	if !s.SignedIn() {
+		t.Fatal("not signed in after SetAPI")
+	}
+	waitFor(t, "the list", func() bool { st, _ := s.Status(); return st == OK })
+	if es := s.Entries(); len(es) != 1 || es[0].Title != maigret.Title {
+		t.Fatalf("entries %+v", es)
+	}
+}

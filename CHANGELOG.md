@@ -10,6 +10,7 @@ All notable changes to Boombrick. Versions match the release tags.
 - A book starts again where you left it, from the Library and from Continue listening, even after a restart.
 - **Speed:** X on Now Playing sets how fast a book plays, from 0.75× to 2× without changing the voice's pitch, and Boombrick remembers it. Now Playing says which chapter a book is in.
 - **Audible:** with the account's key in `audible/auth.json` in Boombrick's data folder (`audible-tui-export --with-account` puts it there), a book named `Title [ASIN].m4b` starts where you left it on the phone or the web player, if that is further on, and tells Audible where you stop every 30 seconds and when you pause. Without Wi-Fi or a key, the place stays on the card.
+- **Sign in to Audible on the Brick:** in the Books tab, A shows a QR code; a phone on the same Wi-Fi opens a page that sends it to Amazon's sign-in and takes back the address it ends on, and Boombrick registers itself as a device. No computer or other tool is needed.
 - In a book, L1 and R1 move by chapter (R1 goes to the next, L1 to the start of this one, or the one before when it has only just begun), and L2 and R2 skip 15 seconds back and on.
 
 ## [v0.4.0-beta.1]

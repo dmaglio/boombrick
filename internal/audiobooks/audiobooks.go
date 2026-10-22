@@ -148,7 +148,25 @@ func (s *Service) changed() {
 }
 
 // SignedIn reports whether the device has an Audible registration.
-func (s *Service) SignedIn() bool { return s.o.API != nil }
+func (s *Service) SignedIn() bool { return s.api() != nil }
+
+// api is the Audible API, or nil without a registration.
+func (s *Service) api() API {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.o.API
+}
+
+// SetAPI gives a device that had no registration one, as signing in does, and
+// reads the library with it.
+func (s *Service) SetAPI(a API) {
+	s.mu.Lock()
+	s.o.API = a
+	s.status, s.err = Loading, ""
+	s.mu.Unlock()
+	s.changed()
+	s.Refresh()
+}
 
 // Status says how the list stands, with the reason when it is Broken.
 func (s *Service) Status() (Status, string) {
@@ -174,7 +192,7 @@ func (s *Service) Entries() []Entry {
 
 // Refresh fetches the list of books again, in the background.
 func (s *Service) Refresh() {
-	if s.o.API == nil {
+	if s.api() == nil {
 		return
 	}
 	s.wg.Add(1)
@@ -196,7 +214,7 @@ func (s *Service) refresh() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
 	defer cancel()
-	books, err := s.o.API.Library(ctx)
+	books, err := s.api().Library(ctx)
 	s.mu.Lock()
 	if err != nil {
 		s.o.Log.Warn("audible library", "err", err)
@@ -215,7 +233,7 @@ func (s *Service) refresh() {
 // Download queues the book with that ASIN to be downloaded; one already on the
 // card, or in the queue, is left be.
 func (s *Service) Download(asin string) {
-	if s.o.API == nil {
+	if s.api() == nil {
 		return
 	}
 	s.mu.Lock()
@@ -340,7 +358,7 @@ func friendly(err error) string {
 // fetchBook downloads and opens a book, and files it with its sidecar.
 func (s *Service) fetchBook(ctx context.Context, b audible.Book) (string, error) {
 	lctx, cancel := context.WithTimeout(ctx, licenseTimeout)
-	lic, err := s.o.API.License(lctx, b.ASIN)
+	lic, err := s.api().License(lctx, b.ASIN)
 	cancel()
 	if err != nil {
 		return "", err
@@ -358,7 +376,7 @@ func (s *Service) fetchBook(ctx context.Context, b audible.Book) (string, error)
 	if err != nil {
 		return "", err
 	}
-	err = s.o.API.Fetch(ctx, lic, f, func(done, total int64) {
+	err = s.api().Fetch(ctx, lic, f, func(done, total int64) {
 		if total > 0 {
 			s.progress(b.ASIN, float64(done)/float64(total))
 		}

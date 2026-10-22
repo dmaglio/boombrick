@@ -48,13 +48,13 @@ The Downloader card updates yt-dlp, which YouTube Music downloads use, the same 
 
 Books are `.m4b` files in `Music/Audiobooks`. To keep a book's place in step with Audible, put the account's registration in `audible/auth.json` in Boombrick's data folder (see Files): a JSON file with `adp_token`, `device_private_key` and `locale_code`, which `audible-tui-export --with-account` writes. It is a credential, so treat the card like a key. A `Title [ASIN].audible.json` beside the book holds its `acr`; without one Boombrick asks Audible for it.
 
-To sign in and download, from a computer:
+To sign in, open the Books tab and press A. Boombrick shows a QR code and an address on the Brick's Wi-Fi:
 
-1. `audible-tui-login` prints an Amazon sign-in address. Open it in a browser, sign in (a one-time code or a captcha is fine) and paste back the address of the page you land on, which is blank or says the page was not found. This registers a new device on your Audible account and saves its key to `~/.config/audible-tui/auth.json`.
-2. In `audible-tui`, press `d` on a book to download it: it asks Audible for a licence, downloads the file and unlocks it into an `.m4b` with chapters and cover.
-3. `audible-tui-export /path/to/SDCARD --with-account` copies the books, their `.audible.json` files and the account key to the card.
+1. On a phone on the same Wi-Fi, scan the code (or open the address).
+2. Choose your Audible country and open Amazon's sign-in; sign in as you would on the Audible site, with a one-time code or a captcha if it asks.
+3. You end on a page that is blank or says it wasn't found. That is expected. Copy its address from the browser's address bar, paste it into the Boombrick page and tap *Sign in*.
 
-Boombrick's Books tab can also download over the Brick's Wi-Fi with the same key. Audible grants a licence only to an account with an active plan or a purchase of that title; when it refuses, Boombrick says the reason Audible gave.
+Boombrick registers itself as a new device on your Audible account and keeps the key in `audible/auth.json`; the Brick then lists your library and downloads books over its Wi-Fi. A book's place is kept in step with Audible from the next start. (If you already use [audible-tui](https://github.com/dmaglio/audible-tui), `audible-tui-export --with-account` copies its registration instead.) Audible grants a licence only to an account with an active plan or a purchase of that title; when it refuses, Boombrick says the reason Audible gave.
 
 ## Controls
 

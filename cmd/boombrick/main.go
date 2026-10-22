@@ -33,6 +33,8 @@ import (
 	"github.com/ujjwal313/boombrick/internal/player"
 	"github.com/ujjwal313/boombrick/internal/release"
 	"github.com/ujjwal313/boombrick/internal/resume"
+	"github.com/ujjwal313/boombrick/internal/screens"
+	audibleui "github.com/ujjwal313/boombrick/internal/screens/audible"
 	"github.com/ujjwal313/boombrick/internal/selfupdate"
 	"github.com/ujjwal313/boombrick/internal/settings"
 	"github.com/ujjwal313/boombrick/internal/space"
@@ -346,6 +348,17 @@ func run(started time.Time) error {
 	})
 	defer catalogue.Close()
 	catalogue.Refresh()
+	// A phone signs the device in from the Books tab. The library and the
+	// downloads work at once; the places start to be kept in step with Audible
+	// the next time Boombrick starts.
+	var nav screens.Nav // the app, once it exists
+	signIn := func() screens.Screen {
+		si := audible.NewSignIn(authFile, web, func(c *audible.Client) {
+			log.Info("audible", "signed in", true)
+			catalogue.SetAPI(c)
+		})
+		return audibleui.NewSignIn(nav, si)
+	}
 	if books != nil {
 		go func() {
 			defer close(booksDone)
@@ -373,7 +386,7 @@ func run(started time.Time) error {
 		Load:       func() (*library.Index, error) { return library.Load(db.DB) },
 		Progress:   func() ([]resume.Progress, error) { return resume.Recent(db.DB, 200) },
 		BookStart:  bookStart(books),
-		Catalogue:  catalogue, CatalogueReady: catalogue.Ready(), AudibleSetup: authFile,
+		Catalogue:  catalogue, CatalogueReady: catalogue.Ready(), AudibleSetup: authFile, AudibleSignIn: signIn,
 		Rescan:  rescan,
 		Scanned: scanned,
 		Saved:   savedTrack,
@@ -421,6 +434,7 @@ func run(started time.Time) error {
 		return err
 	}
 	defer a.Close()
+	nav = a
 	// The volume watcher stops before the app and SDL close under it.
 	if volume != nil {
 		vol, stop := context.WithCancel(context.Background())

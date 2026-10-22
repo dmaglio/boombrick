@@ -64,9 +64,12 @@ type Options struct {
 	Catalogue      browse.Catalogue
 	CatalogueReady <-chan struct{}
 	AudibleSetup   string
-	Rescan         func()
-	Scanned        <-chan ScanUpdate
-	Saved          <-chan struct{}
+	// AudibleSignIn makes the page that signs in to Audible with a phone; nil
+	// leaves the Books tab asking for the registration file.
+	AudibleSignIn func() screens.Screen
+	Rescan        func()
+	Scanned       <-chan ScanUpdate
+	Saved         <-chan struct{}
 	// Status reads the battery, network and Bluetooth for the status bar; the
 	// app calls it on a goroutine every 10 s from start-up while the screen is
 	// on, and as it comes back on.
@@ -356,6 +359,7 @@ func New(opts Options) (*App, error) {
 	var books screens.Screen = &screens.Placeholder{Tab: screens.BooksTab, Title: "Books"}
 	if opts.Catalogue != nil {
 		a.books = browse.NewBooks(a, opts.Player, a.shelf, opts.Catalogue, opts.AudibleSetup)
+		a.books.SetSignIn(opts.AudibleSignIn)
 		books = a.books
 		if opts.CatalogueReady != nil {
 			a.forward(opts.CatalogueReady, &a.redraw)

@@ -43,7 +43,8 @@ type Books struct {
 	p       Player
 	shelf   *Shelf
 	cat     Catalogue
-	setup   string // where the Audible registration goes, for the tab to say
+	setup   string                // where the Audible registration goes, for the tab to say
+	signIn  func() screens.Screen // the page that signs in to Audible, or nil
 	ix      *library.Index
 	entries []audiobooks.Entry
 	view    views.Grid
@@ -56,6 +57,10 @@ func NewBooks(nav screens.Nav, p Player, shelf *Shelf, cat Catalogue, setup stri
 	return &Books{nav: nav, p: p, shelf: shelf, cat: cat, setup: setup,
 		view: views.Grid{Cols: 1, CellW: theme.ScreenW - 2*side, CellH: widgets.RowHeight, Pad: pad, ViewH: contentBot - contentTop}}
 }
+
+// SetSignIn gives the tab the page A opens when the device isn't signed in to
+// Audible.
+func (b *Books) SetSignIn(f func() screens.Screen) { b.signIn = f }
 
 // SetIndex tells the tab what the library holds, to play the books on the card.
 func (b *Books) SetIndex(ix *library.Index) { b.ix = ix }
@@ -84,6 +89,10 @@ func (b *Books) Handle(ev input.Event, now time.Time) bool {
 			}
 			return true
 		case input.A, input.Y:
+			if !b.cat.SignedIn() && b.signIn != nil && ev.Button == input.A {
+				b.nav.Push(b.signIn())
+				return true
+			}
 			if len(b.entries) == 0 {
 				return false
 			}
@@ -259,6 +268,9 @@ func (b *Books) Draw(u *ui.Context) {
 // emptyState says what to show in place of the list, if the list can't be.
 func (b *Books) emptyState() (title, body, detail string, ok bool) {
 	if !b.cat.SignedIn() {
+		if b.signIn != nil {
+			return "Audible isn't set up", "Press A to sign in with your phone, to see your books here.", "", true
+		}
 		return "Audible isn't set up", "Copy your Audible registration, the file auth.json, to this folder to see your books here.", b.setup, true
 	}
 	if len(b.entries) > 0 {
@@ -276,6 +288,9 @@ func (b *Books) emptyState() (title, body, detail string, ok bool) {
 }
 
 func (b *Books) hints() []widgets.Hint {
+	if !b.cat.SignedIn() && b.signIn != nil {
+		return []widgets.Hint{{Key: "A", Label: "Sign in"}, {Key: "L1/R1", Label: "Tabs"}}
+	}
 	if !b.cat.SignedIn() || len(b.entries) == 0 {
 		return []widgets.Hint{{Key: "X", Label: "Refresh"}, {Key: "L1/R1", Label: "Tabs"}}
 	}

@@ -18,6 +18,12 @@ type Nav interface {
 	Toast(msg string)
 }
 
+// Closer is a screen that has something to stop when its page closes, as the
+// Audible sign-in has the web page it serves.
+type Closer interface {
+	Close()
+}
+
 // Backer is a screen that sometimes uses B itself, as the Queue does to
 // cancel a move. Back reports whether it did; if not, B goes back as usual.
 type Backer interface {

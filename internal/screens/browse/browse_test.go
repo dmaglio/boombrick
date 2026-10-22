@@ -3,6 +3,7 @@ package browse
 import (
 	"image"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/ujjwal313/boombrick/internal/resume"
 	"github.com/ujjwal313/boombrick/internal/screens"
 	"github.com/ujjwal313/boombrick/internal/theme"
+	"github.com/ujjwal313/boombrick/internal/ui"
 	"github.com/ujjwal313/boombrick/internal/ui/anim"
 	"github.com/ujjwal313/boombrick/internal/ui/uitest"
 	"github.com/ujjwal313/boombrick/internal/ui/widgets"
@@ -564,3 +566,35 @@ func TestBookAsksWhereElseItWasLeft(t *testing.T) {
 		t.Fatalf("started at %d, want the card's 100", f)
 	}
 }
+
+func TestBooksTabOffersToSignIn(t *testing.T) {
+	nav := &fakeNav{}
+	b := NewBooks(nav, &fakePlayer{}, NewShelf(&fakePlayer{}), &fakeCatalogue{}, "/data/audible/auth.json")
+	if title, body, detail, _ := b.emptyState(); title != "Audible isn't set up" || !strings.Contains(body, "Copy your Audible") || detail == "" {
+		t.Fatalf("without a sign-in page: %q %q %q", title, body, detail)
+	}
+	page := &fakeScreen{}
+	b.SetSignIn(func() screens.Screen { return page })
+	if _, body, _, _ := b.emptyState(); !strings.Contains(body, "Press A to sign in") {
+		t.Fatalf("body %q", body)
+	}
+	if hs := b.hints(); hs[0].Key != "A" || hs[0].Label != "Sign in" {
+		t.Fatalf("hints %v", hs)
+	}
+	render(t, b, t0)
+	if !b.Handle(press(input.A), t0) || len(nav.pushed) != 1 || nav.pushed[0] != screens.Screen(page) {
+		t.Fatalf("A pushed %v", nav.pushed)
+	}
+	// Once signed in, the tab is the library's, and A downloads.
+	b.cat = &fakeCatalogue{signedIn: true, status: audiobooks.OK, entries: []audiobooks.Entry{entry("B1", "Un libro", "")}}
+	b.Handle(press(input.A), t0)
+	if len(nav.pushed) != 1 {
+		t.Fatal("A opened the sign-in page while signed in")
+	}
+}
+
+type fakeScreen struct{}
+
+func (*fakeScreen) Handle(input.Event, time.Time) bool { return false }
+func (*fakeScreen) Draw(*ui.Context)                   {}
+func (*fakeScreen) Animating(time.Time) bool           { return false }
