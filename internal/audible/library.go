@@ -1,0 +1,272 @@
+package audible
+
+import (
+	"cmp"
+	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"html"
+	"io"
+	"net/http"
+	"net/url"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Book is a book in the listener's Audible library.
+type Book struct {
+	ASIN      string
+	Title     string
+	Authors   string
+	Narrators string
+	Series    string
+	Sequence  string
+	Length    time.Duration
+	Percent   float64 // how far through, 0 to 100, as Audible counts it
+	Finished  bool
+	Cover     string // a link to the cover
+}
+
+// libraryGroups are what Audible is asked of each book.
+const libraryGroups = "product_desc,product_attrs,contributors,series,media,is_finished,listening_status,percent_complete"
+
+// Library lists the books of the listener's library, newest purchase first.
+func (c *Client) Library(ctx context.Context) ([]Book, error) {
+	var books []Book
+	for page := 1; ; page++ {
+		out, err := c.do(ctx, "GET", "/1.0/library", url.Values{
+			"num_results":     {"1000"},
+			"page":            {strconv.Itoa(page)},
+			"response_groups": {libraryGroups},
+			"sort_by":         {"-PurchaseDate"},
+		}, nil)
+		if err != nil {
+			return nil, err
+		}
+		got, err := parseLibrary(out)
+		if err != nil {
+			return nil, err
+		}
+		books = append(books, got...)
+		if len(got) < 1000 {
+			return books, nil
+		}
+	}
+}
+
+var tags = regexp.MustCompile(`<[^>]+>`)
+
+func parseLibrary(b []byte) ([]Book, error) {
+	var r struct {
+		Items []struct {
+			ASIN    string `json:"asin"`
+			Title   string `json:"title"`
+			Authors []struct {
+				Name string `json:"name"`
+			} `json:"authors"`
+			Narrators []struct {
+				Name string `json:"name"`
+			} `json:"narrators"`
+			Series []struct {
+				Title    string `json:"title"`
+				Sequence string `json:"sequence"`
+			} `json:"series"`
+			Minutes  int     `json:"runtime_length_min"`
+			Percent  float64 `json:"percent_complete"`
+			Finished bool    `json:"is_finished"`
+			Status   struct {
+				Percent  float64 `json:"percent_complete"`
+				Finished bool    `json:"is_finished"`
+			} `json:"listening_status"`
+			Images map[string]string `json:"product_images"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(b, &r); err != nil {
+		return nil, err
+	}
+	books := make([]Book, 0, len(r.Items))
+	for _, i := range r.Items {
+		bk := Book{ASIN: i.ASIN, Title: html.UnescapeString(tags.ReplaceAllString(i.Title, "")),
+			Length: time.Duration(i.Minutes) * time.Minute, Percent: i.Percent, Finished: i.Finished || i.Status.Finished,
+			Cover: biggest(i.Images)}
+		if bk.Percent == 0 {
+			bk.Percent = i.Status.Percent
+		}
+		var names []string
+		for _, a := range i.Authors {
+			names = append(names, a.Name)
+		}
+		bk.Authors = strings.Join(names, ", ")
+		names = names[:0]
+		for _, a := range i.Narrators {
+			names = append(names, a.Name)
+		}
+		bk.Narrators = strings.Join(names, ", ")
+		if len(i.Series) > 0 {
+			bk.Series, bk.Sequence = i.Series[0].Title, i.Series[0].Sequence
+		}
+		if bk.ASIN != "" {
+			books = append(books, bk)
+		}
+	}
+	return books, nil
+}
+
+// biggest is the link of the largest of the covers, keyed by their size.
+func biggest(images map[string]string) string {
+	best, link := -1, ""
+	for k, v := range images {
+		if n, err := strconv.Atoi(k); err == nil && n > best {
+			best, link = n, v
+		}
+	}
+	return link
+}
+
+// License is what Audible grants for downloading a book once: where the
+// encrypted file is, and the key and IV that open it.
+type License struct {
+	ASIN, URL, ACR string
+	Key, IV        string // hex, as ffmpeg takes them; empty if the file isn't sealed
+}
+
+// License asks for the right to download a book.
+func (c *Client) License(ctx context.Context, asin string) (License, error) {
+	out, err := c.do(ctx, "POST", "/1.0/content/"+asin+"/licenserequest", nil, map[string]any{
+		"supported_drm_types": []string{"Mpeg", "Adrm"}, "quality": "High", "consumption_type": "Download",
+		"response_groups": "last_position_heard,content_reference,chapter_info",
+	})
+	if err != nil {
+		return License{}, err
+	}
+	var r struct {
+		License struct {
+			ASIN    string `json:"asin"`
+			ACR     string `json:"acr"`
+			Status  string `json:"status_code"`
+			Denials []struct {
+				Message string `json:"message"`
+			} `json:"license_denial_reasons"`
+			Response string `json:"license_response"`
+			Meta     struct {
+				URL struct {
+					Offline string `json:"offline_url"`
+				} `json:"content_url"`
+				Ref struct {
+					ACR string `json:"acr"`
+				} `json:"content_reference"`
+			} `json:"content_metadata"`
+		} `json:"content_license"`
+	}
+	if err := json.Unmarshal(out, &r); err != nil {
+		return License{}, err
+	}
+	if r.License.Status == "Denied" {
+		why := "Audible refused the download"
+		if len(r.License.Denials) > 0 {
+			why += ": " + r.License.Denials[0].Message
+		}
+		return License{}, &Denied{Reason: why, Throttled: slices.ContainsFunc(r.License.Denials, func(d struct {
+			Message string `json:"message"`
+		}) bool {
+			return strings.Contains(d.Message, "throttled")
+		})}
+	}
+	l := License{ASIN: asin, URL: r.License.Meta.URL.Offline, ACR: cmp.Or(r.License.Meta.Ref.ACR, r.License.ACR)}
+	if l.URL == "" {
+		return License{}, errors.New("audible: the licence has no download link")
+	}
+	if r.License.Response != "" {
+		key, iv, err := c.openVoucher(r.License.ASIN, r.License.Response)
+		if err != nil {
+			return License{}, err
+		}
+		l.Key, l.IV = key, iv
+	}
+	return l, nil
+}
+
+// Denied is Audible's refusal of a licence: the book isn't the listener's to
+// download, or too many were asked for lately (Throttled), which passes.
+type Denied struct {
+	Reason    string
+	Throttled bool
+}
+
+func (d *Denied) Error() string { return "audible: " + d.Reason }
+
+var voucherFields = regexp.MustCompile(`^\{"key":"(.*?)","iv":"(.*?)",`)
+
+// openVoucher decrypts the voucher of a licence. Audible seals it with AES in
+// CBC mode, under a key made of the device's type and serial number, its
+// owner and the book.
+func (c *Client) openVoucher(asin, voucher string) (key, iv string, err error) {
+	sum := sha256.Sum256([]byte(c.dev.Type + c.dev.Serial + c.dev.CustomerID + asin))
+	raw, err := base64.StdEncoding.DecodeString(voucher)
+	if err != nil || len(raw) == 0 || len(raw)%aes.BlockSize != 0 {
+		return "", "", errors.New("audible: the voucher is damaged")
+	}
+	blk, err := aes.NewCipher(sum[:16])
+	if err != nil {
+		return "", "", err
+	}
+	cipher.NewCBCDecrypter(blk, sum[16:]).CryptBlocks(raw, raw)
+	plain := strings.TrimRight(string(raw), "\x00")
+	var v struct{ Key, IV string }
+	if json.Unmarshal([]byte(plain), &v) != nil {
+		m := voucherFields.FindStringSubmatch(plain)
+		if m == nil {
+			return "", "", errors.New("audible: the voucher can't be read; is the device registration complete?")
+		}
+		v.Key, v.IV = m[1], m[2]
+	}
+	return v.Key, v.IV, nil
+}
+
+// Fetch downloads the licensed file to w, calling progress with the bytes
+// written and the total (0 if unknown) as it goes.
+func (c *Client) Fetch(ctx context.Context, l License, w io.Writer, progress func(done, total int64)) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", l.URL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("audible: download: %s", resp.Status)
+	}
+	total := resp.ContentLength
+	buf := make([]byte, 256<<10)
+	var done int64
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			done += int64(n)
+			progress(done, max(total, 0))
+		}
+		if err == io.EOF {
+			if total > 0 && done != total {
+				return io.ErrUnexpectedEOF
+			}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}

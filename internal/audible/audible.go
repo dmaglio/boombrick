@@ -39,12 +39,20 @@ var ErrNoAuth = errors.New("audible: not signed in")
 // userAgent is what the Audible app calls itself; the API serves it.
 const userAgent = "Audible/671 CFNetwork/1240.0.4 Darwin/20.6.0"
 
+// Device is what a registration says of the device and its owner. Audible
+// seals a book's key to the three together, so downloading needs them; keeping
+// a place does not.
+type Device struct {
+	Serial, Type, CustomerID string
+}
+
 // Client talks to Audible as a registered device.
 type Client struct {
 	http *http.Client
 	host string
 	adp  string
 	key  *rsa.PrivateKey
+	dev  Device
 	now  func() time.Time
 }
 
@@ -53,6 +61,13 @@ type auth struct {
 	ADPToken string `json:"adp_token"`
 	Key      string `json:"device_private_key"`
 	Locale   string `json:"locale_code"`
+	Device   struct {
+		Serial string `json:"device_serial_number"`
+		Type   string `json:"device_type"`
+	} `json:"device_info"`
+	Customer struct {
+		UserID string `json:"user_id"`
+	} `json:"customer_info"`
 }
 
 // Load reads the registration at path: a JSON file with the device's
@@ -70,12 +85,13 @@ func Load(path string, hc *http.Client) (*Client, error) {
 	if err := json.Unmarshal(b, &a); err != nil {
 		return nil, fmt.Errorf("audible: %s: %w", path, err)
 	}
-	return New(a.ADPToken, a.Key, a.Locale, hc)
+	dev := Device{Serial: a.Device.Serial, Type: a.Device.Type, CustomerID: a.Customer.UserID}
+	return New(a.ADPToken, a.Key, a.Locale, dev, hc)
 }
 
-// New makes a client from a registration's adp token, its RSA key in PEM and
-// the marketplace's code, such as "it".
-func New(adpToken, keyPEM, locale string, hc *http.Client) (*Client, error) {
+// New makes a client from a registration's adp token, its RSA key in PEM, the
+// marketplace's code, such as "it", and the device it was made for.
+func New(adpToken, keyPEM, locale string, dev Device, hc *http.Client) (*Client, error) {
 	d, ok := domains[strings.ToLower(locale)]
 	if !ok || adpToken == "" || keyPEM == "" {
 		return nil, ErrNoAuth
@@ -84,7 +100,7 @@ func New(adpToken, keyPEM, locale string, hc *http.Client) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{http: hc, host: "api.audible." + d, adp: adpToken, key: key, now: time.Now}, nil
+	return &Client{http: hc, host: "api.audible." + d, adp: adpToken, key: key, dev: dev, now: time.Now}, nil
 }
 
 func parseKey(s string) (*rsa.PrivateKey, error) {
@@ -228,6 +244,7 @@ func (c *Client) ACR(ctx context.Context, asin string) (string, error) {
 	}
 	var r struct {
 		License struct {
+			ACR  string `json:"acr"` // also in a refusal
 			Meta struct {
 				Ref struct {
 					ACR string `json:"acr"`
@@ -238,10 +255,14 @@ func (c *Client) ACR(ctx context.Context, asin string) (string, error) {
 	if err := json.Unmarshal(out, &r); err != nil {
 		return "", err
 	}
-	if r.License.Meta.Ref.ACR == "" {
+	acr := r.License.Meta.Ref.ACR
+	if acr == "" {
+		acr = r.License.ACR
+	}
+	if acr == "" {
 		return "", errors.New("audible: the licence has no content reference")
 	}
-	return r.License.Meta.Ref.ACR, nil
+	return acr, nil
 }
 
 var asinInName = regexp.MustCompile(`\[([A-Z0-9]{10})\]\.m4b$`)
