@@ -142,6 +142,11 @@ var migrations = []string{
 	// reads tracks by artist and album.
 	`CREATE INDEX downloads_spotify ON downloads (spotify_id) WHERE spotify_id != '';
 	DROP INDEX tracks_album`,
+	// A song's genres, ";"-separated. The next scan reads every file's tags
+	// again to fill them in: no file is -1 bytes. The mtime stays, as it orders
+	// albums added by one scan in Recent while this one runs.
+	`ALTER TABLE tracks ADD COLUMN genres TEXT NOT NULL DEFAULT '';
+	UPDATE tracks SET size = -1`,
 }
 
 func migrate(db *sql.DB) error {

@@ -27,7 +27,7 @@ It includes or links the following third-party components:
   faad2                        GPL-2.0-or-later      https://github.com/knik0/faad2 (2.11.1)
                                Code from FAAD2 is copyright (c) Nero AG, www.nero.com
   speexdsp resampler           BSD-3-Clause          https://speex.org (SpeexDSP-1.2.1)
-  dhowden/tag                  BSD-2-Clause          https://github.com/dhowden/tag
+  dhowden/tag (modified)       BSD-2-Clause          https://github.com/dhowden/tag
   godbus/dbus                  BSD-2-Clause          https://github.com/godbus/dbus (v5.2.0)
   rsc.io/qr                    BSD-3-Clause          https://github.com/rsc/qr (v0.2.0)
   ALSA library (libasound)     LGPL-2.1              https://www.alsa-project.org

@@ -44,3 +44,5 @@ require (
 replace github.com/xlab/vorbis-go => ./third_party/novorbis
 
 replace github.com/srwiley/oksvg => ./third_party/oksvg
+
+replace github.com/dhowden/tag => ./third_party/tag
