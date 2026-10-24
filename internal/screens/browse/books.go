@@ -74,7 +74,8 @@ func (b *Books) sync() {
 }
 
 // Handle moves with the D-pad, downloads or plays a book with A, adds one on
-// the card to the queue with Y, and asks for the list again with X.
+// the card to the queue with Y, asks for the list again with X, and opens a
+// book's page with Right.
 func (b *Books) Handle(ev input.Event, now time.Time) bool {
 	if ev.Kind == input.Release {
 		return false
@@ -88,6 +89,12 @@ func (b *Books) Handle(ev input.Event, now time.Time) bool {
 				b.nav.Toast("Reading your Audible library")
 			}
 			return true
+		case input.Right:
+			if b.cat.SignedIn() && len(b.entries) > 0 {
+				b.nav.Push(NewBookPage(b, b.entries[b.view.Focus()].ASIN))
+				return true
+			}
+			return false
 		case input.A, input.Y:
 			if !b.cat.SignedIn() && b.signIn != nil && ev.Button == input.A {
 				b.nav.Push(b.signIn())
@@ -307,5 +314,6 @@ func (b *Books) hints() []widgets.Hint {
 	if queue {
 		hs = append(hs, widgets.Hint{Key: "Y", Label: "Add to queue"})
 	}
-	return append(hs, widgets.Hint{Key: "X", Label: "Refresh"}, widgets.Hint{Key: "L1/R1", Label: "Tabs"})
+	return append(hs, widgets.Hint{Key: "Right", Label: "Details"}, widgets.Hint{Key: "X", Label: "Refresh"},
+		widgets.Hint{Key: "L1/R1", Label: "Tabs"})
 }

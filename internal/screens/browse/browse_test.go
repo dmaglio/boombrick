@@ -792,3 +792,44 @@ type fakeScreen struct{}
 func (*fakeScreen) Handle(input.Event, time.Time) bool { return false }
 func (*fakeScreen) Draw(*ui.Context)                   {}
 func (*fakeScreen) Animating(time.Time) bool           { return false }
+
+// Right on a book opens its page, which does what A and Y do in the tab and
+// scrolls a long description.
+func TestBookPage(t *testing.T) {
+	p, nav := &fakePlayer{}, &fakeNav{}
+	long := strings.Repeat("Una storia lunga, con un caso difficile per l'ispettore. ", 60)
+	e := entry("B0H764PGVH", "Firmato Picpus", "")
+	e.Narrators, e.Series, e.Sequence, e.Percent, e.Summary = "Moro Silo", "Maigret", "7", 12, long
+	cat := &fakeCatalogue{signedIn: true, status: audiobooks.OK, entries: []audiobooks.Entry{e}}
+	b := NewBooks(nav, p, NewShelf(p), cat, "/data/audible/auth.json")
+	b.SetIndex(bookIndex())
+	if !b.Handle(press(input.Right), t0) || len(nav.pushed) != 1 {
+		t.Fatalf("Right pushed %v", nav.pushed)
+	}
+	pg, ok := nav.pushed[0].(*BookPage)
+	if !ok {
+		t.Fatalf("Right opened %T", nav.pushed[0])
+	}
+	render(t, pg, t0)
+	if pg.limit == 0 || !pg.Handle(press(input.Down), t0) || pg.scroll != 1 {
+		t.Fatalf("a long description scrolls: limit %d, scroll %d", pg.limit, pg.scroll)
+	}
+	if !pg.Handle(press(input.Up), t0) || pg.Handle(press(input.Up), t0) {
+		t.Fatal("Up scrolls back to the top and stops there")
+	}
+	pg.Handle(press(input.A), t0)
+	if len(cat.downloads) != 1 || cat.downloads[0] != "B0H764PGVH" {
+		t.Fatalf("A downloaded %v", cat.downloads)
+	}
+	if got := facts(e); !slices.Equal(got, []string{"Read by Moro Silo", "Maigret, book 7", "4 h 9 min", "12% listened"}) {
+		t.Fatalf("facts %q", got)
+	}
+	cat.entries[0].Path = "/m/Audiobooks/x [B0H764PGVH].m4b"
+	render(t, pg, t0)
+	cat.entries = nil // gone from the catalogue: the page still draws
+	render(t, pg, t0)
+	empty := NewBooks(nav, p, NewShelf(p), &fakeCatalogue{}, "")
+	if empty.Handle(press(input.Right), t0) {
+		t.Fatal("Right with no account should do nothing")
+	}
+}
