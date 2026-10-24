@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -351,6 +353,19 @@ func friendly(err error) string {
 		return "Audible refused the download"
 	case errors.Is(err, io.ErrUnexpectedEOF):
 		return "the download was cut off"
+	}
+	var dns *net.DNSError
+	var ne net.Error
+	switch {
+	case errors.As(err, &dns):
+		return "couldn't reach Audible: check the Wi-Fi, then try again"
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &ne) && ne.Timeout(),
+		strings.Contains(err.Error(), "timeout"): // an http2 or TLS timeout isn't always a net.Error
+		return "Audible didn't answer in time: check the Wi-Fi, then try again"
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) { // not the address, which says nothing to the listener
+		return "couldn't reach Audible: " + ue.Err.Error()
 	}
 	return err.Error()
 }

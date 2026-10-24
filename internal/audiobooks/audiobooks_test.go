@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,6 +223,23 @@ func TestFriendlyTellsPlanFromThrottle(t *testing.T) {
 	}
 	if got := friendly(&audible.Denied{Throttled: true}); !strings.Contains(got, "wait") {
 		t.Errorf("a refusal for throttling alone says %q", got)
+	}
+	// A timeout or a missing name says what is wrong, not the address asked.
+	post := func(err error) error {
+		return &url.Error{Op: "Post", URL: "https://api.audible.it/1.0/content/B0FVG8SMPP/licenserequest", Err: err}
+	}
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{post(errors.New("http2: timeout awaiting response headers")), "didn't answer in time"},
+		{post(context.DeadlineExceeded), "didn't answer in time"},
+		{post(&net.DNSError{Err: "i/o timeout", Name: "api.audible.it", IsTimeout: true}), "check the Wi-Fi"},
+		{post(errors.New("connection refused")), "couldn't reach Audible: connection refused"},
+	} {
+		if got := friendly(c.err); !strings.Contains(got, c.want) || strings.Contains(got, "licenserequest") || strings.Contains(got, "https") {
+			t.Errorf("friendly(%v) = %q, want it to say %q and no address", c.err, got, c.want)
+		}
 	}
 	if got := friendly(&audible.Denied{Reasons: []string{"Something else"}}); got != "Something else" {
 		t.Errorf("another reason says %q", got)
