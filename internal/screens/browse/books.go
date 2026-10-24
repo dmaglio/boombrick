@@ -217,6 +217,15 @@ func length(d time.Duration) string {
 	return fmt.Sprintf("%d h %d min", m/60, m%60)
 }
 
+// seriesOf is a book's series and its place in it: "Maigret, book 7", or the
+// series alone when Audible gives no number.
+func seriesOf(e audiobooks.Entry) string {
+	if e.Sequence == "" {
+		return e.Series
+	}
+	return e.Series + ", book " + e.Sequence
+}
+
 // rowOf is what a book's row shows.
 func rowOf(e audiobooks.Entry, playing string) widgets.Row {
 	spec := widgets.SpecFor(e.Title)
@@ -224,6 +233,9 @@ func rowOf(e audiobooks.Entry, playing string) widgets.Row {
 		spec.Cover = media.Cover{URL: e.Cover}
 	}
 	sub := e.Authors
+	if e.Series != "" {
+		sub += " · " + seriesOf(e)
+	}
 	if l := length(e.Length); l != "" {
 		sub += " · " + l
 	}

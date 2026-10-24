@@ -824,6 +824,9 @@ func TestBookPage(t *testing.T) {
 	if got := facts(e); !slices.Equal(got, []string{"Read by Moro Silo", "Maigret, book 7", "4 h 9 min", "12% listened"}) {
 		t.Fatalf("facts %q", got)
 	}
+	if r := rowOf(e, ""); r.Subtitle != "Georges Simenon · Maigret, book 7 · 4 h 9 min · 12% listened" {
+		t.Fatalf("row %q", r.Subtitle)
+	}
 	cat.entries[0].Path = "/m/Audiobooks/x [B0H764PGVH].m4b"
 	render(t, pg, t0)
 	cat.entries = nil // gone from the catalogue: the page still draws

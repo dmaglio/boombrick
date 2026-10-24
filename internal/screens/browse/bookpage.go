@@ -87,11 +87,7 @@ func facts(e audiobooks.Entry) []string {
 		fs = append(fs, "Read by "+e.Narrators)
 	}
 	if e.Series != "" {
-		s := e.Series
-		if e.Sequence != "" {
-			s += ", book " + e.Sequence
-		}
-		fs = append(fs, s)
+		fs = append(fs, seriesOf(e))
 	}
 	if l := length(e.Length); l != "" {
 		fs = append(fs, l)
