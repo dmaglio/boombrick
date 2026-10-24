@@ -83,11 +83,11 @@ func (pg *BookPage) Animating(now time.Time) bool {
 // description.
 func facts(e audiobooks.Entry) []string {
 	var fs []string
-	if e.Narrators != "" {
-		fs = append(fs, "Read by "+e.Narrators)
-	}
 	if e.Series != "" {
 		fs = append(fs, seriesOf(e))
+	}
+	if e.Narrators != "" {
+		fs = append(fs, "Read by "+e.Narrators)
 	}
 	if l := length(e.Length); l != "" {
 		fs = append(fs, l)

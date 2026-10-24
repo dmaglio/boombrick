@@ -821,7 +821,7 @@ func TestBookPage(t *testing.T) {
 	if len(cat.downloads) != 1 || cat.downloads[0] != "B0H764PGVH" {
 		t.Fatalf("A downloaded %v", cat.downloads)
 	}
-	if got := facts(e); !slices.Equal(got, []string{"Read by Moro Silo", "Maigret, book 7", "4 h 9 min", "12% listened"}) {
+	if got := facts(e); !slices.Equal(got, []string{"Maigret, book 7", "Read by Moro Silo", "4 h 9 min", "12% listened"}) {
 		t.Fatalf("facts %q", got)
 	}
 	if r := rowOf(e, ""); r.Subtitle != "Georges Simenon · Maigret, book 7 · 4 h 9 min · 12% listened" {
