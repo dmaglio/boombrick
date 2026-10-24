@@ -42,6 +42,14 @@ var domains = map[string]string{
 // ErrNoAuth means no usable registration was found: Audible is not set up.
 var ErrNoAuth = errors.New("audible: not signed in")
 
+// ErrOldDevice means the registration is of the older iPhone profile, which
+// Audible refuses licences to (see appVersion in login.go). It is an
+// ErrNoAuth too: the listener has to sign in again, which makes a new one.
+var ErrOldDevice = fmt.Errorf("%w: the device was registered with the older iPhone profile, which Audible refuses; sign in again", ErrNoAuth)
+
+// oldSerial matches the serial of that profile: 32 uppercase hex digits.
+var oldSerial = regexp.MustCompile(`^[0-9A-F]{32}$`)
+
 // userAgent is what the Audible app calls itself; the API serves it.
 const userAgent = "Audible/671 CFNetwork/1240.0.4 Darwin/20.6.0"
 
@@ -90,6 +98,9 @@ func Load(path string, hc *http.Client) (*Client, error) {
 	var a auth
 	if err := json.Unmarshal(b, &a); err != nil {
 		return nil, fmt.Errorf("audible: %s: %w", path, err)
+	}
+	if oldSerial.MatchString(a.Device.Serial) {
+		return nil, ErrOldDevice
 	}
 	dev := Device{Serial: a.Device.Serial, Type: a.Device.Type, CustomerID: a.Customer.UserID}
 	return New(a.ADPToken, a.Key, a.Locale, dev, hc)

@@ -331,6 +331,8 @@ func run(started time.Time) error {
 		audibleClient = ac
 		books = newBookSync(ac, online, log)
 		log.Info("audible", "signed in", true)
+	} else if errors.Is(err, audible.ErrOldDevice) {
+		log.Warn("audible", "err", err) // the Books tab asks to sign in again
 	} else if !errors.Is(err, audible.ErrNoAuth) {
 		log.Warn("audible", "err", err)
 	}

@@ -123,6 +123,19 @@ func TestLoad(t *testing.T) {
 	if c, err := Load(path, nil); err != nil || c.host != "api.audible.it" {
 		t.Fatalf("got %+v, %v", c, err)
 	}
+	// A registration of the older iPhone profile is refused, as not signed in.
+	old, _ := json.Marshal(map[string]any{"adp_token": "T", "device_private_key": pemKey, "locale_code": "it",
+		"device_info": map[string]string{"device_serial_number": "BFD2B5BFA3A36DDC2C15FE487A8A9E4B"}})
+	os.WriteFile(path, old, 0o600)
+	if _, err := Load(path, nil); !errors.Is(err, ErrOldDevice) || !errors.Is(err, ErrNoAuth) {
+		t.Fatalf("an old-profile registration gave %v", err)
+	}
+	cur, _ := json.Marshal(map[string]any{"adp_token": "T", "device_private_key": pemKey, "locale_code": "it",
+		"device_info": map[string]string{"device_serial_number": "xK3mQ9vRt2LpZa7WnB4cYe8HdU5sJf1GgTo6iNqA"}})
+	os.WriteFile(path, cur, 0o600)
+	if _, err := Load(path, nil); err != nil {
+		t.Fatalf("a new-profile registration gave %v", err)
+	}
 	if _, err := New("T", pemKey, "xx", Device{}, nil); err != ErrNoAuth {
 		t.Fatalf("an unknown marketplace gave %v", err)
 	}
