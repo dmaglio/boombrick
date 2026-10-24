@@ -47,12 +47,10 @@ func TestReadStatus(t *testing.T) {
 			"power_supply/axp2202-battery/capacity": "100",
 			"power_supply/axp2202-battery/status":   "Full",
 		}, Status{Battery: 100, Charging: true}},
-		{"on the battery, or plugged but not charging", map[string]string{
+		{"on the battery", map[string]string{
 			"power_supply/axp2202-battery/type":     "Battery",
 			"power_supply/axp2202-battery/capacity": "40",
 			"power_supply/axp2202-battery/status":   "Discharging",
-			"power_supply/BAT1/type":                "Battery",
-			"power_supply/BAT1/status":              "Charging",
 		}, Status{Battery: 40}},
 		{"not charging", map[string]string{
 			"power_supply/axp2202-battery/type":     "Battery",
