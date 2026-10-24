@@ -3,11 +3,13 @@ package audiobooks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,20 +23,42 @@ type fakeAPI struct {
 	licErr   error
 	licenses int
 	body     string
+
+	licFails int     // the first licence requests that time out
+	cuts     []int   // each Fetch gives this many bytes of the file, then is cut off, in turn
+	noResume bool    // a Fetch from the middle says the server won't
+	froms    []int64 // where each Fetch started
 }
 
 func (f *fakeAPI) Library(context.Context) ([]audible.Book, error) { return f.books, f.err }
 func (f *fakeAPI) License(_ context.Context, asin string) (audible.License, error) {
 	f.licenses++
+	if f.licenses <= f.licFails {
+		return audible.License{}, fmt.Errorf("Post: %w", context.DeadlineExceeded)
+	}
 	if f.licErr != nil {
 		return audible.License{}, f.licErr
 	}
 	return audible.License{ASIN: asin, URL: "http://x/" + asin, ACR: "CR!" + asin, Key: "aa", IV: "bb"}, nil
 }
-func (f *fakeAPI) Fetch(_ context.Context, _ audible.License, w io.Writer, progress func(done, total int64)) error {
-	for i := 1; i <= 4; i++ {
-		io.WriteString(w, f.body)
-		progress(int64(i*len(f.body)), int64(4*len(f.body)))
+func (f *fakeAPI) Fetch(_ context.Context, _ audible.License, w io.Writer, from int64, progress func(done, total int64)) error {
+	f.froms = append(f.froms, from)
+	file := strings.Repeat(f.body, 4)
+	if from > 0 && f.noResume {
+		return audible.ErrNoResume
+	}
+	rest := file[from:]
+	if len(f.cuts) > 0 {
+		n := min(f.cuts[0], len(rest))
+		f.cuts = f.cuts[1:]
+		io.WriteString(w, rest[:n])
+		progress(from+int64(n), int64(len(file)))
+		return io.ErrUnexpectedEOF
+	}
+	for i := 0; i < 4; i++ {
+		part := rest[i*len(rest)/4 : (i+1)*len(rest)/4]
+		io.WriteString(w, part)
+		progress(from+int64((i+1)*len(rest)/4), int64(len(file)))
 	}
 	return nil
 }
@@ -121,6 +145,108 @@ func TestABrokenFetchSaysWhy(t *testing.T) {
 	s, _, _ := newService(t, &fakeAPI{err: errors.New("audible: GET /1.0/library: 401 Unauthorized")}, nil)
 	s.Refresh()
 	waitFor(t, "the failure", func() bool { st, msg := s.Status(); return st == Broken && strings.Contains(msg, "401") })
+}
+
+// download runs a download of the book on api and says how it ended: the
+// path it was filed at, or the failure shown.
+func download(t *testing.T, api *fakeAPI) (path, failure string) {
+	t.Helper()
+	api.books = []audible.Book{maigret}
+	s, _, filed := newService(t, api, func(o *Options) { o.retry = time.Millisecond })
+	s.Refresh()
+	waitFor(t, "the list", func() bool { st, _ := s.Status(); return st == OK })
+	s.Download(maigret.ASIN)
+	for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(2 * time.Millisecond) {
+		select {
+		case path = <-filed:
+			return path, ""
+		default:
+		}
+		for _, e := range s.Entries() {
+			if e.State == Failed {
+				return "", e.Err
+			}
+		}
+	}
+	t.Fatal("the download neither finished nor failed")
+	return
+}
+
+// A download that is cut off carries on from the bytes it has, with the
+// licence it has, and the book comes out whole.
+func TestDownloadResumesAfterACut(t *testing.T) {
+	api := &fakeAPI{body: "0123456789", cuts: []int{15, 5}}
+	path, failure := download(t, api)
+	if failure != "" {
+		t.Fatalf("failed: %s", failure)
+	}
+	b, _ := os.ReadFile(path)
+	if want := "M4B:" + strings.Repeat("0123456789", 4); string(b) != want {
+		t.Fatalf("the book is %q, want %q", b, want)
+	}
+	if api.licenses != 1 || !slices.Equal(api.froms, []int64{0, 15, 20}) {
+		t.Fatalf("%d licences, fetches from %v; want one licence and fetches from 0, 15 and 20", api.licenses, api.froms)
+	}
+}
+
+// A server that won't resume gets the file from the start again.
+func TestDownloadStartsAgainWhereTheServerWontResume(t *testing.T) {
+	api := &fakeAPI{body: "0123456789", cuts: []int{15}, noResume: true}
+	path, failure := download(t, api)
+	if failure != "" {
+		t.Fatalf("failed: %s", failure)
+	}
+	b, _ := os.ReadFile(path)
+	if want := "M4B:" + strings.Repeat("0123456789", 4); string(b) != want {
+		t.Fatalf("the book is %q, want %q", b, want)
+	}
+	if !slices.Equal(api.froms, []int64{0, 15, 0}) {
+		t.Fatalf("fetches from %v, want 0, 15, 0", api.froms)
+	}
+}
+
+// After a few cuts in a row the failure is shown, with no more tries.
+func TestDownloadGivesUpAfterSomeTries(t *testing.T) {
+	api := &fakeAPI{body: "0123456789", cuts: []int{1, 1, 1, 1, 1, 1}}
+	_, failure := download(t, api)
+	if failure == "" || len(api.froms) != tries {
+		t.Fatalf("failure %q after %d fetches, want one after %d", failure, len(api.froms), tries)
+	}
+}
+
+// A licence that timed out is asked for once more; a refusal isn't asked
+// again.
+func TestLicenceTimeoutIsAskedAgainButARefusalIsNot(t *testing.T) {
+	api := &fakeAPI{body: "0123456789", licFails: 1}
+	if _, failure := download(t, api); failure != "" || api.licenses != 2 {
+		t.Fatalf("a timed-out licence: failure %q, %d requests, want none and 2", failure, api.licenses)
+	}
+	api = &fakeAPI{body: "0123456789", licErr: &audible.Denied{Throttled: true}}
+	if _, failure := download(t, api); failure == "" || api.licenses != 1 {
+		t.Fatalf("a refused licence: failure %q, %d requests, want one and 1", failure, api.licenses)
+	}
+}
+
+func TestTransient(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{io.ErrUnexpectedEOF, true},
+		{audible.ErrStalled, true},
+		{context.DeadlineExceeded, true},
+		{&net.DNSError{Err: "i/o timeout", IsTimeout: true}, true},
+		{errors.New("http2: timeout awaiting response headers"), true},
+		{&audible.StatusError{Code: 503, Status: "503 Service Unavailable"}, true},
+		{&audible.StatusError{Code: 403, Status: "403 Forbidden"}, false},
+		{&audible.Denied{Throttled: true}, false},
+		{context.Canceled, false},
+		{errors.New("no space left on device"), false},
+	} {
+		if got := transient(c.err); got != c.want {
+			t.Errorf("transient(%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
 }
 
 func TestDownloadFilesTheBookWithItsSidecar(t *testing.T) {

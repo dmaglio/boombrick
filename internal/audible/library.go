@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"html"
 	"io"
 	"net/http"
@@ -255,27 +254,65 @@ func (c *Client) openVoucher(asin, voucher string) (key, iv string, err error) {
 	return v.Key, v.IV, nil
 }
 
-// Fetch downloads the licensed file to w, calling progress with the bytes
-// written and the total (0 if unknown) as it goes.
-func (c *Client) Fetch(ctx context.Context, l License, w io.Writer, progress func(done, total int64)) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", l.URL, nil)
+// ErrNoResume means the server won't carry on a download from where it
+// stopped: it sent the whole file again, or said the place was out of range.
+// Fetch it again from the start.
+var ErrNoResume = errors.New("audible: the server doesn't resume downloads")
+
+// ErrStalled means the file stopped coming, with no byte for stallAfter.
+var ErrStalled = errors.New("audible: the download stalled")
+
+// stallAfter is how long a download may go without a byte before it is given
+// up; a variable for the tests.
+var stallAfter = 30 * time.Second
+
+// StatusError is a refusal from the file's server.
+type StatusError struct {
+	Code   int
+	Status string
+}
+
+func (e *StatusError) Error() string { return "audible: download: " + e.Status }
+
+// Fetch downloads the licensed file to w, from byte from on (0 for all of it),
+// calling progress with the bytes written, counted from the start of the file,
+// and the file's size (0 if unknown) as it goes. A download that stops can be
+// carried on by asking for the bytes after those written; if the server
+// won't, the error is ErrNoResume.
+func (c *Client) Fetch(ctx context.Context, l License, w io.Writer, from int64, progress func(done, total int64)) error {
+	rctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stall := time.AfterFunc(stallAfter, cancel)
+	defer stall.Stop()
+	req, err := http.NewRequestWithContext(rctx, "GET", l.URL, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("User-Agent", userAgent)
+	if from > 0 {
+		req.Header.Set("Range", "bytes="+strconv.FormatInt(from, 10)+"-")
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return stalled(ctx, rctx, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("audible: download: %s", resp.Status)
+	switch {
+	case from > 0 && resp.StatusCode == http.StatusRequestedRangeNotSatisfiable,
+		from > 0 && resp.StatusCode == http.StatusOK:
+		return ErrNoResume
+	case resp.StatusCode/100 != 2:
+		return &StatusError{Code: resp.StatusCode, Status: resp.Status}
 	}
 	total := resp.ContentLength
+	if total > 0 {
+		total += from
+	}
 	buf := make([]byte, 256<<10)
-	var done int64
+	done := from
 	for {
 		n, err := resp.Body.Read(buf)
+		stall.Reset(stallAfter)
 		if n > 0 {
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				return werr
@@ -290,7 +327,16 @@ func (c *Client) Fetch(ctx context.Context, l License, w io.Writer, progress fun
 			return nil
 		}
 		if err != nil {
-			return err
+			return stalled(ctx, rctx, err)
 		}
 	}
+}
+
+// stalled is err, or ErrStalled when it is only that the download was given up
+// for want of bytes, while the caller still wants it.
+func stalled(ctx, rctx context.Context, err error) error {
+	if ctx.Err() == nil && rctx.Err() != nil {
+		return ErrStalled
+	}
+	return err
 }

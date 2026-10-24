@@ -26,13 +26,18 @@ import (
 const (
 	listTimeout    = 30 * time.Second
 	licenseTimeout = 30 * time.Second
+
+	// tries is how many times a licence or a file is asked for before the
+	// failure is shown; each wait is twice the one before, from Options.retry.
+	tries      = 4
+	retryAfter = 3 * time.Second
 )
 
 // API is what the service needs of Audible. *audible.Client is one.
 type API interface {
 	Library(ctx context.Context) ([]audible.Book, error)
 	License(ctx context.Context, asin string) (audible.License, error)
-	Fetch(ctx context.Context, l audible.License, w io.Writer, progress func(done, total int64)) error
+	Fetch(ctx context.Context, l audible.License, w io.Writer, from int64, progress func(done, total int64)) error
 }
 
 // State is what is being done with a book.
@@ -79,6 +84,8 @@ type Options struct {
 	// Open turns the downloaded file at in into the book at out, given its key
 	// and IV. Nil uses FFmpeg.
 	Open func(ctx context.Context, in, out, key, iv string) error
+
+	retry time.Duration // the first wait before a try again; tests shorten it
 }
 
 // Service keeps the library and runs downloads, one at a time.
@@ -106,6 +113,9 @@ type job struct {
 // New makes a service and starts its downloader; Close stops it. The list kept
 // from the last run is available at once.
 func New(o Options) *Service {
+	if o.retry == 0 {
+		o.retry = retryAfter
+	}
 	if o.Log == nil {
 		o.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -351,8 +361,8 @@ func friendly(err error) string {
 		return d.Reasons[0]
 	case errors.As(err, &d):
 		return "Audible refused the download"
-	case errors.Is(err, io.ErrUnexpectedEOF):
-		return "the download was cut off"
+	case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, audible.ErrStalled):
+		return "the download was cut off: check the Wi-Fi, then try again"
 	}
 	var dns *net.DNSError
 	var ne net.Error
@@ -370,11 +380,97 @@ func friendly(err error) string {
 	return err.Error()
 }
 
+// license asks for a book's licence, once more after a pause if the answer
+// didn't come: a request that timed out wasn't granted, so asking again costs
+// nothing.
+func (s *Service) license(ctx context.Context, asin string) (audible.License, error) {
+	var lic audible.License
+	var err error
+	for try := 0; ; try++ {
+		lctx, cancel := context.WithTimeout(ctx, licenseTimeout)
+		lic, err = s.api().License(lctx, asin)
+		cancel()
+		if err == nil || try == 1 || ctx.Err() != nil || !transient(err) {
+			return lic, err
+		}
+		s.o.Log.Warn("audible licence, asking again", "asin", asin, "err", err)
+		if !s.wait(ctx, s.o.retry) {
+			return lic, err
+		}
+	}
+}
+
+// fetch downloads the file into f. When it stops short, on a timeout, a cut
+// connection or a server error, it carries on from the bytes already in f,
+// after a pause that doubles each time, with the licence it has; a server that
+// won't resume gets the file from the start.
+func (s *Service) fetch(ctx context.Context, asin string, lic audible.License, f *os.File) error {
+	wait := s.o.retry
+	for try := 1; ; try++ {
+		from, err := f.Seek(0, io.SeekEnd)
+		if err != nil {
+			return err
+		}
+		err = s.api().Fetch(ctx, lic, f, from, func(done, total int64) {
+			if total > 0 {
+				s.progress(asin, float64(done)/float64(total))
+			}
+		})
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, audible.ErrNoResume):
+			if err := f.Truncate(0); err != nil {
+				return err
+			}
+			continue // from the start; the server's refusal isn't a failed try
+		case try == tries || ctx.Err() != nil || !transient(err):
+			return err
+		}
+		s.o.Log.Warn("audible download, carrying on", "asin", asin, "at", from, "try", try, "err", err)
+		if !s.wait(ctx, wait) {
+			return err
+		}
+		wait *= 2
+	}
+}
+
+// wait pauses for d; it reports false if ctx ended first.
+func (s *Service) wait(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// transient reports whether err is the network's doing, which asking again
+// may get past: a timeout, a connection cut or never made, a stalled
+// download, a short file or a server error. A refusal from Audible, a missing
+// file or a full card is not.
+func transient(err error) bool {
+	var d *audible.Denied
+	var se *audible.StatusError
+	var ne net.Error
+	switch {
+	case err == nil, errors.As(err, &d), errors.Is(err, context.Canceled):
+		return false
+	case errors.As(err, &se):
+		return se.Code >= 500 || se.Code == 429
+	case errors.Is(err, audible.ErrStalled), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, context.DeadlineExceeded),
+		errors.As(err, &ne):
+		return true
+	}
+	// An http2 or TLS timeout isn't always a net.Error.
+	return strings.Contains(err.Error(), "timeout")
+}
+
 // fetchBook downloads and opens a book, and files it with its sidecar.
 func (s *Service) fetchBook(ctx context.Context, b audible.Book) (string, error) {
-	lctx, cancel := context.WithTimeout(ctx, licenseTimeout)
-	lic, err := s.api().License(lctx, b.ASIN)
-	cancel()
+	lic, err := s.license(ctx, b.ASIN)
 	if err != nil {
 		return "", err
 	}
@@ -391,11 +487,7 @@ func (s *Service) fetchBook(ctx context.Context, b audible.Book) (string, error)
 	if err != nil {
 		return "", err
 	}
-	err = s.api().Fetch(ctx, lic, f, func(done, total int64) {
-		if total > 0 {
-			s.progress(b.ASIN, float64(done)/float64(total))
-		}
-	})
+	err = s.fetch(ctx, b.ASIN, lic, f)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

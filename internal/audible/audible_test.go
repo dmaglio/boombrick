@@ -242,7 +242,7 @@ func TestLicenseAndFetch(t *testing.T) {
 	}
 	var got strings.Builder
 	var last int64
-	if err := c.Fetch(context.Background(), l, &got, func(done, total int64) { last = done }); err != nil || got.String() != "0123456789" || last != 10 {
+	if err := c.Fetch(context.Background(), l, &got, 0, func(done, total int64) { last = done }); err != nil || got.String() != "0123456789" || last != 10 {
 		t.Fatalf("fetched %q (%d), %v", got.String(), last, err)
 	}
 }
@@ -272,5 +272,75 @@ func TestADeniedLicenceSaysWhy(t *testing.T) {
 	}
 	if acr, err := c.ACR(context.Background(), "B0FH5CCLRJ"); err != nil || acr != "CR!1" {
 		t.Fatalf("a refusal still names the book's content reference: %q %v", acr, err)
+	}
+}
+
+// A download carries on from the bytes written when the server honours Range;
+// when it sends the whole file again or has gone away, Fetch says so.
+func TestFetchResumes(t *testing.T) {
+	const body = "0123456789"
+	mode := "range"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch mode {
+		case "whole":
+			io.WriteString(w, body)
+		case "416":
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+		case "503":
+			w.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			http.ServeContent(w, r, "f.aax", time.Time{}, strings.NewReader(body))
+		}
+	}))
+	defer srv.Close()
+	_, pemKey := testKey(t)
+	c, _ := New("T", pemKey, "it", Device{}, srv.Client())
+	l := License{URL: srv.URL + "/f.aax"}
+	var got strings.Builder
+	var last, total int64
+	if err := c.Fetch(context.Background(), l, &got, 4, func(d, n int64) { last, total = d, n }); err != nil || got.String() != "456789" || last != 10 || total != 10 {
+		t.Fatalf("resumed %q (%d of %d), %v", got.String(), last, total, err)
+	}
+	for _, m := range []string{"whole", "416"} {
+		mode = m
+		if err := c.Fetch(context.Background(), l, io.Discard, 4, func(int64, int64) {}); !errors.Is(err, ErrNoResume) {
+			t.Fatalf("%s: %v, want ErrNoResume", m, err)
+		}
+	}
+	mode = "503"
+	var se *StatusError
+	if err := c.Fetch(context.Background(), l, io.Discard, 0, func(int64, int64) {}); !errors.As(err, &se) || se.Code != 503 {
+		t.Fatalf("503: %v", err)
+	}
+}
+
+// A download whose bytes stop coming is given up as stalled, and one that the
+// caller cancels is not.
+func TestFetchStalls(t *testing.T) {
+	defer func(d time.Duration) { stallAfter = d }(stallAfter)
+	stallAfter = 50 * time.Millisecond
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "10")
+		io.WriteString(w, "01234")
+		w.(http.Flusher).Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	_, pemKey := testKey(t)
+	c, _ := New("T", pemKey, "it", Device{}, srv.Client())
+	l := License{URL: srv.URL}
+	var got strings.Builder
+	if err := c.Fetch(context.Background(), l, &got, 0, func(int64, int64) {}); !errors.Is(err, ErrStalled) || got.String() != "01234" {
+		t.Fatalf("stalled download gave %q, %v", got.String(), err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := c.Fetch(ctx, l, io.Discard, 0, func(int64, int64) {}); errors.Is(err, ErrStalled) {
+		t.Fatalf("a cancelled download is not stalled: %v", err)
 	}
 }
