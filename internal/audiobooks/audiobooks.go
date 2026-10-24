@@ -221,7 +221,7 @@ func (s *Service) refresh() {
 	if err != nil {
 		s.o.Log.Warn("audible library", "err", err)
 		if len(s.books) == 0 {
-			s.status, s.err = Broken, err.Error()
+			s.status, s.err = Broken, friendly(err)
 		}
 	} else {
 		s.books, s.status, s.err = books, OK, ""
