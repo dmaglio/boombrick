@@ -87,8 +87,9 @@ func parseLibrary(b []byte) ([]Book, error) {
 				Percent  float64 `json:"percent_complete"`
 				Finished bool    `json:"is_finished"`
 			} `json:"listening_status"`
-			Images  map[string]string `json:"product_images"`
-			Summary string            `json:"publisher_summary"`
+			Images    map[string]string `json:"product_images"`
+			Summary   string            `json:"merchandising_summary"` // what Audible shows as the description
+			Publisher string            `json:"publisher_summary"`     // often empty
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(b, &r); err != nil {
@@ -102,7 +103,7 @@ func parseLibrary(b []byte) ([]Book, error) {
 		if bk.Percent == 0 {
 			bk.Percent = i.Status.Percent
 		}
-		bk.Summary = plain(i.Summary)
+		bk.Summary = plain(cmp.Or(i.Summary, i.Publisher))
 		var names []string
 		for _, a := range i.Authors {
 			names = append(names, a.Name)

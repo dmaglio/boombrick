@@ -164,7 +164,7 @@ func TestParseLibrary(t *testing.T) {
 	 {"asin":"B0FH5CCLRJ","title":"La chiusa n.1 &amp; altro","authors":[{"name":"Georges Simenon"}],"narrators":[{"name":"A"},{"name":"B"}],
 	  "series":[{"title":"Maigret","sequence":"3"}],"runtime_length_min":251,"percent_complete":12.5,
 	  "listening_status":{"is_finished":false},"product_images":{"500":"http://x/500.jpg","1024":"http://x/1024.jpg","bad":"http://x/bad.jpg"},
-	  "publisher_summary":"<p>Un caso <b>difficile</b>.</p><p>Per l&apos;ispettore.<br />Fine.</p>"},
+	  "merchandising_summary":"<p>Un caso <b>difficile</b>.</p><p>Per l&apos;ispettore.<br />Fine.</p>"},
 	 {"asin":"B0GV1924QD","title":"Finito","runtime_length_min":60,"listening_status":{"percent_complete":100,"is_finished":true}},
 	 {"title":"senza asin"}]}`))
 	if err != nil || len(books) != 2 {
@@ -175,6 +175,9 @@ func TestParseLibrary(t *testing.T) {
 		b.Sequence != "3" || b.Length != 251*time.Minute || b.Percent != 12.5 || b.Cover != "http://x/1024.jpg" ||
 		b.Summary != "Un caso difficile. Per l'ispettore. Fine." {
 		t.Fatalf("book %+v", b)
+	}
+	if f := books[1]; f.Summary != "" {
+		t.Fatalf("a summary out of nowhere: %q", f.Summary)
 	}
 	if f := books[1]; !f.Finished || f.Percent != 100 {
 		t.Fatalf("finished book %+v", f)
