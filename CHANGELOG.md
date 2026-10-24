@@ -2,6 +2,24 @@
 
 All notable changes to Boombrick. Versions match the release tags.
 
+## [v0.4.0]
+
+### Added
+
+- **Genres:** the Library has a Genres filter after Songs (L2/R2), listing the genres your songs are tagged with, each with its number of songs and their time. A opens a genre's songs, by artist, with Play and Shuffle; Y adds them to the queue. A song tagged with several genres is in each of them. Without genre tags, the filter isn't shown.
+- **Shuffle an artist:** X shuffles all of an artist's songs, on their page and in the Library's Artists list. In the Genres list, X shuffles a genre.
+- **Knulli:** Boombrick now runs on Knulli as well as NextUI and CrossMix. `Boombrick-Knulli.zip` installs it under Ports. Unzip it at the root of the SHARE partition; your music goes in SHARE's `music` folder, and Boombrick's data and log stay in `roms/ports/boombrick`.
+- On Knulli the buttons follow Knulli's own mapping of the pad, so they match on the Brick and the Brick Pro. Function, the Brick's Menu button, opens the quick menu, and Function and Start together quit, as in Knulli's other ports. Power stays Knulli's: turn the screen off from the quick menu, and any button but A, L1 and R1 turns it back on.
+- Knulli's battery saver no longer mutes the music or puts the Brick to sleep while Boombrick is open or playing in the background.
+
+### Changed
+
+- The first launch after updating reads every song's tags again to find its genres. On a big card this takes about as long as the first scan, and the Library works meanwhile.
+
+### Fixed
+
+- The SD card's numbers count your music from the first launch, and again after every scan, instead of only once a download finishes.
+
 ## [v0.4.0-beta.2]
 
 A beta for testers: neither Settings nor the Pak Store offers it, and it is installed by hand.

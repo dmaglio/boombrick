@@ -28,7 +28,7 @@ You need a TrimUI Brick or Brick Pro with NextUI, CrossMix or Knulli. Wi-Fi is u
 1. Download the zip for your firmware:
    - **NextUI:** `Boombrick.pak.zip` from the [latest release](https://github.com/ujjwal313/boombrick/releases/latest).
    - **CrossMix:** `Boombrick-CrossMix.zip` from the same release.
-   - **Knulli (beta):** `Boombrick-Knulli.zip` from the latest beta on the [releases page](https://github.com/ujjwal313/boombrick/releases).
+   - **Knulli:** `Boombrick-Knulli.zip` from the same release.
 
    `Boombrick-PakStore.zip` holds the same NextUI app for the Pak Store, which unzips it into the app's folder; it isn't for the root of the card.
 2. Unzip it at the root of the SD card; on Knulli, at the root of the SHARE partition. It goes to `Tools/tg5040/Boombrick.pak` on NextUI, `Apps/Boombrick` on CrossMix, and `roms/ports` on Knulli.
