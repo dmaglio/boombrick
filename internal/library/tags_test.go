@@ -1,10 +1,15 @@
 package library
 
 import (
+	"bytes"
+	"encoding/binary"
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/dhowden/tag"
 )
@@ -42,8 +47,108 @@ func TestReadTags(t *testing.T) {
 				t.Errorf("album gain %v peak %v, want %v %v", tags.AlbumGain, tags.AlbumPeak, want.AlbumGain, want.AlbumPeak)
 			}
 			tags.AlbumGain, tags.AlbumPeak = want.AlbumGain, want.AlbumPeak
-			if tags != want {
+			if !reflect.DeepEqual(tags, want) {
 				t.Fatalf("ReadTags = %+v\nwant        %+v", tags, want)
+			}
+		})
+	}
+}
+
+// flacWith is a FLAC file of an empty stream info block and a Vorbis comment
+// block holding comments, each "KEY=value".
+func flacWith(comments ...string) []byte {
+	le := func(n int) []byte { return binary.LittleEndian.AppendUint32(nil, uint32(n)) }
+	vc := append(le(0), le(len(comments))...)
+	for _, c := range comments {
+		vc = append(append(vc, le(len(c))...), c...)
+	}
+	b := append([]byte("fLaC\x00\x00\x00\x22"), make([]byte, 34)...)
+	b = append(b, 0x84, byte(len(vc)>>16), byte(len(vc)>>8), byte(len(vc)))
+	return append(b, vc...)
+}
+
+// id3With is an ID3v2.3 or 2.4 tag holding one TCON frame of body, in text
+// encoding enc.
+func id3With(version, enc byte, body []byte) []byte {
+	size := func(n int, syncsafe bool) []byte {
+		if syncsafe {
+			return []byte{byte(n >> 21 & 0x7f), byte(n >> 14 & 0x7f), byte(n >> 7 & 0x7f), byte(n & 0x7f)}
+		}
+		return binary.BigEndian.AppendUint32(nil, uint32(n))
+	}
+	data := append([]byte{enc}, body...)
+	frame := append(append([]byte("TCON"), size(len(data), version == 4)...), 0, 0)
+	frame = append(frame, data...)
+	return append(append([]byte{'I', 'D', '3', version, 0, 0}, size(len(frame), true)...), frame...)
+}
+
+// mp4With is an M4A's file type and an ilst holding one atom, name, of data in
+// class class: 1 is text, 0 is read by the atom's name.
+func mp4With(name string, class byte, data []byte) []byte {
+	atom := func(name string, body ...[]byte) []byte {
+		b := bytes.Join(body, nil)
+		return append(append(binary.BigEndian.AppendUint32(nil, uint32(8+len(b))), name...), b...)
+	}
+	ilst := atom("ilst", atom(name, atom("data", []byte{0, 0, 0, class, 0, 0, 0, 0}, data)))
+	moov := atom("moov", atom("udta", atom("meta", []byte{0, 0, 0, 0}, ilst)))
+	return append(atom("ftyp", []byte("M4A \x00\x00\x00\x00M4A ")), moov...)
+}
+
+// utf16List is ss in UTF-16 as an ID3 frame of encoding 1 lists them: each
+// with a little-endian byte order mark, separated by a two-byte NUL.
+func utf16List(ss ...string) []byte {
+	var b []byte
+	for i, s := range ss {
+		if i > 0 {
+			b = append(b, 0, 0)
+		}
+		b = append(b, 0xff, 0xfe)
+		for _, u := range utf16.Encode([]rune(s)) {
+			b = binary.LittleEndian.AppendUint16(b, u)
+		}
+	}
+	return b
+}
+
+// A song's genres are every GENRE comment, every value of an ID3v2.4 list,
+// ID3's and MP4's numbered genres by name and an ID3v2.3 genre's own text,
+// each split at ";", trimmed, and kept once whatever its case. "/" doesn't
+// split, as in iTunes' "Hip-Hop/Rap".
+func TestReadTagsGenres(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		file []byte
+		want []string
+	}{
+		{"two GENRE comments", flacWith("TITLE=Rust", "GENRE=Rock", "GENRE=Pop"), []string{"Rock", "Pop"}},
+		{"a list in one comment", flacWith("GENRE=Rock; Pop;rock;"), []string{"Rock", "Pop"}},
+		{"a genre with a slash", flacWith("genre=Hip-Hop/Rap"), []string{"Hip-Hop/Rap"}},
+		{"no genre", flacWith("TITLE=Rust"), nil},
+		{"an ID3v2.4 list", id3With(4, 3, []byte("Rock\x00Pop\x00")), []string{"Rock", "Pop"}},
+		{"an ID3v2.4 list in UTF-16", id3With(4, 1, utf16List("Rock", "Jazz")), []string{"Rock", "Jazz"}},
+		{"an ID3v2.4 numbered genre", id3With(4, 3, []byte("17\x00Jazz")), []string{"Rock", "Jazz"}},
+		{"an ID3v2.3 numbered genre", id3With(3, 0, []byte("(17)")), []string{"Rock"}},
+		{"an ID3v2.3 list", id3With(3, 0, []byte("Rock;Pop")), []string{"Rock", "Pop"}},
+		{"ID3v2.3 numbered genres", id3With(3, 0, []byte("(17)(26)")), []string{"Rock", "Ambient"}},
+		{"an ID3v2.3 numbered genre named again", id3With(3, 0, []byte("(17)Rock")), []string{"Rock"}},
+		{"an ID3v2.3 numbered genre refined", id3With(3, 0, []byte("(4)Eurodisco")), []string{"Disco", "Eurodisco"}},
+		{"an ID3v2.3 refinement in brackets", id3With(3, 0, []byte("(RX)((Live)")), []string{"Remix", "(Live)"}},
+		{"ID3v2.4 remix and cover", id3With(4, 3, []byte("RX\x00CR\x00Electronic")), []string{"Remix", "Cover", "Electronic"}},
+		{"a genre with a number in brackets", id3With(3, 0, []byte("Top 40 (80s)")), []string{"Top 40 (80s)"}},
+		{"an MP4 genre", mp4With("\xa9gen", 1, []byte("Rock;Pop")), []string{"Rock", "Pop"}},
+		{"an MP4 preset genre", mp4With("gnre", 0, []byte{0, 18}), []string{"Rock"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "x")
+			if err := os.WriteFile(path, c.file, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			tags, err := ReadTags(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(tags.Genres, c.want) {
+				t.Fatalf("genres %q, want %q", tags.Genres, c.want)
 			}
 		})
 	}

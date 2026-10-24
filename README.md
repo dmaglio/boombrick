@@ -10,7 +10,7 @@ See [CHANGELOG.md](CHANGELOG.md) for what each release adds.
 
 ## Features
 
-- **Your music:** MP3, FLAC, Opus and M4A (AAC), gapless, with ReplayGain levelling. Browse by album, artist or song; the queue has shuffle and repeat and is kept between launches.
+- **Your music:** MP3, FLAC, Opus and M4A (AAC), gapless, with ReplayGain levelling. Browse by album, artist, song or genre; the queue has shuffle and repeat and is kept between launches.
 - **Audiobooks:** `.m4b` files in `Music/Audiobooks` get their own Books filter in the Library. They carry on from where you left them, move by chapter with L1/R1, skip 15 seconds with L2/R2 and play at 0.75× to 2× with X. Named `Title [ASIN].m4b`, as [audible-tui](https://github.com/dmaglio/audible-tui) names them, they also keep their place in step with Audible (see below).
 - **Covers** from the files, folder pictures or the Cover Art Archive.
 - **Synced lyrics** from the files, `.lrc` files or LRCLIB, with the line being sung highlighted.
@@ -29,7 +29,7 @@ You need a TrimUI Brick or Brick Pro with NextUI, CrossMix or Knulli. Wi-Fi is u
 1. Download the zip for your firmware:
    - **NextUI:** `Boombrick.pak.zip` from the [latest release](https://github.com/ujjwal313/boombrick/releases/latest).
    - **CrossMix:** `Boombrick-CrossMix.zip` from the same release.
-   - **Knulli (beta):** `Boombrick-Knulli.zip` from the latest beta on the [releases page](https://github.com/ujjwal313/boombrick/releases).
+   - **Knulli:** `Boombrick-Knulli.zip` from the same release.
 
    `Boombrick-PakStore.zip` holds the same NextUI app for the Pak Store, which unzips it into the app's folder; it isn't for the root of the card.
 2. Unzip it at the root of the SD card; on Knulli, at the root of the SHARE partition. It goes to `Tools/tg5040/Boombrick.pak` on NextUI, `Apps/Boombrick` on CrossMix, and `roms/ports` on Knulli.
@@ -65,7 +65,7 @@ Audible's API is not documented. Boombrick's sign-in, registration and request s
 | D-pad | Move |
 | A | Play or open |
 | B | Back |
-| X | Download (YouTube Music) |
+| X | Download (YouTube Music); shuffle an artist or a genre (Library) |
 | Y | Add to the queue; on Now Playing, lyrics |
 | L1, R1 | Switch tabs; on Now Playing, previous and next track |
 | L2, R2 | Filters in the Library and YouTube Music |

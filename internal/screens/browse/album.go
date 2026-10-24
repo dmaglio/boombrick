@@ -1,7 +1,6 @@
 package browse
 
 import (
-	"math/rand/v2"
 	"strconv"
 	"time"
 
@@ -32,12 +31,14 @@ const (
 	pillCount
 )
 
-// AlbumPage shows an album's tracks. Focus starts on the Play pill.
+// AlbumPage shows an album's tracks, or a genre's songs laid out the same
+// way. Focus starts on the Play pill.
 type AlbumPage struct {
 	nav    screens.Nav
 	p      Player
-	album  *library.Album
-	who    string // the artist, and the year when known
+	art    widgets.ArtSpec
+	title  string
+	who    string // the artist and the year when known, or a genre's artist count
 	length string // the songs and their time
 	tracks []player.Track
 	rows   []widgets.Row
@@ -49,22 +50,43 @@ type AlbumPage struct {
 
 // NewAlbumPage opens album a.
 func NewAlbumPage(nav screens.Nav, p Player, a *library.Album) *AlbumPage {
-	pg := &AlbumPage{nav: nav, p: p, album: a, tracks: screens.Tracks(a.Tracks), who: a.Artist,
-		length: screens.SongsAndTime(len(a.Tracks), a.Duration)}
+	who := a.Artist
 	if a.Year > 0 {
-		pg.who += " · " + strconv.Itoa(a.Year)
+		who += " · " + strconv.Itoa(a.Year)
 	}
+	return newPage(nav, p, screens.AlbumArt(a), a.Title, who, screens.SongsAndTime(len(a.Tracks), a.Duration),
+		screens.Tracks(a.Tracks))
+}
+
+// NewGenrePage opens genre g: its songs, each with its artist.
+func NewGenrePage(nav screens.Nav, p Player, g *library.Genre) *AlbumPage {
+	who := screens.Count(g.Artists) + " artists"
+	if g.Artists == 1 {
+		who = "1 artist"
+	}
+	pg := newPage(nav, p, screens.GenreArt(g), g.Name, who, screens.SongsAndTime(len(g.Songs), g.Duration),
+		songTracks(g.Songs))
+	for i, s := range g.Songs {
+		pg.rows[i].Subtitle = s.Artist
+	}
+	return pg
+}
+
+// newPage makes a page of tracks: art, title and two lines of details in
+// the left column, the tracks numbered on the right.
+func newPage(nav screens.Nav, p Player, art widgets.ArtSpec, title, who, length string, tracks []player.Track) *AlbumPage {
+	pg := &AlbumPage{nav: nav, p: p, art: art, title: title, who: who, length: length, tracks: tracks,
+		rows: make([]widgets.Row, len(tracks))}
 	pg.list = views.Grid{Cols: 1, CellW: theme.ScreenW - side - listX, CellH: widgets.RowHeight, Pad: pad,
 		ViewH: contentBot - contentTop}
-	pg.list.SetCount(len(a.Tracks))
+	pg.list.SetCount(len(tracks))
 	pg.list.SetActive(false, time.Time{})
 	pg.pills[playPill].Set(1)
-	for i, t := range a.Tracks {
-		r := widgets.Row{Index: strconv.Itoa(i + 1), Title: t.Title}
+	for i, t := range tracks {
+		pg.rows[i] = widgets.Row{Index: strconv.Itoa(i + 1), Title: t.Title}
 		if t.Duration > 0 {
-			r.Duration = screens.Clock(t.Duration)
+			pg.rows[i].Duration = screens.Clock(t.Duration)
 		}
-		pg.rows = append(pg.rows, r)
 	}
 	return pg
 }
@@ -134,8 +156,7 @@ func (pg *AlbumPage) play() {
 		pg.p.SetShuffle(false)
 		pg.p.Play(pg.tracks, 0)
 	default:
-		pg.p.SetShuffle(true)
-		pg.p.Play(pg.tracks, rand.IntN(len(pg.tracks)))
+		shuffle(pg.p, pg.tracks)
 	}
 }
 
@@ -160,12 +181,11 @@ func (pg *AlbumPage) Animating(now time.Time) bool {
 // Draw renders the frame.
 func (pg *AlbumPage) Draw(u *ui.Context) {
 	now := u.Now
-	a := pg.album
 	widgets.DrawBackground(u, widgets.TabGround)
 
-	widgets.Art(u, screens.AlbumArt(a), albumArt, widgets.CardRadius, gfx.Rect{X: side, Y: albumTop, W: albumArt, H: albumArt})
+	widgets.Art(u, pg.art, albumArt, widgets.CardRadius, gfx.Rect{X: side, Y: albumTop, W: albumArt, H: albumArt})
 	y := float32(albumTop + albumArt + pad)
-	u.Text(u.Fit(a.Title, text.Heading, albumArt), text.Heading, side, y, theme.Paper)
+	u.Text(u.Fit(pg.title, text.Heading, albumArt), text.Heading, side, y, theme.Paper)
 	y += u.LineHeight(text.Heading)
 	u.Text(u.Fit(pg.who, text.Meta, albumArt), text.Meta, side, y, theme.Ink2)
 	y += u.LineHeight(text.Meta)

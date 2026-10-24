@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestCompare(t *testing.T) {
@@ -59,6 +60,44 @@ func TestIndexOrders(t *testing.T) {
 	}
 	if ix.Album("Kenji Arata", "Afterhours") != ix.Recent[1] || ix.Album("Nobody", "Nothing") != nil {
 		t.Error("Album lookup is wrong")
+	}
+}
+
+// Genres are sorted by name, one whatever its case, as first spelled; each
+// holds its songs by artist, the artist's albums oldest first, then track.
+func TestIndexGenres(t *testing.T) {
+	song := func(artist, title string, genres ...string) Track {
+		return Track{Artist: artist, Title: title, Duration: time.Minute, Genres: genres}
+	}
+	albums := []Album{ // as Albums returns them: newest first
+		{Artist: "Odalys", Title: "Copper Season", Year: 2019, Tracks: []Track{song("Odalys", "Rust", "rock", "Pop"),
+			song("Odalys", "Ember"), song("Odalys & Mira", "Tin Roof", "Rock")}},
+		{Artist: "Kenji Arata", Title: "Afterhours", Year: 2021, Tracks: []Track{song("Kenji Arata", "Neon", "Jazz", "ROCK")}},
+		{Artist: "Odalys", Title: "Northbound", Year: 2016, Tracks: []Track{song("Odalys", "Salt", "Rock")}},
+	}
+	ix := NewIndex(albums)
+	var names []string
+	for _, g := range ix.Genres {
+		names = append(names, g.Name)
+	}
+	if !equal(names, "Jazz", "Pop", "ROCK") {
+		t.Fatalf("Genres = %v", names)
+	}
+	rock := ix.Genres[2]
+	var songs []string
+	for _, s := range rock.Songs {
+		songs = append(songs, s.Title)
+	}
+	// Artists counts who each song is by, as the genre's page lists them, not
+	// the album artists.
+	if !equal(songs, "Neon", "Salt", "Rust", "Tin Roof") || rock.Duration != 4*time.Minute || rock.Artists != 3 {
+		t.Fatalf("Rock's songs %v, %v long, by %d artists", songs, rock.Duration, rock.Artists)
+	}
+	if rock.Songs[0] != &ix.Recent[1].Tracks[0] {
+		t.Error("a genre's songs should point into the albums")
+	}
+	if len(NewIndex(albums[1:2:2]).Genres) != 2 || len(NewIndex(nil).Genres) != 0 {
+		t.Error("genres of one album, or of none")
 	}
 }
 

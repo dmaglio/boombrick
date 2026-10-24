@@ -1,6 +1,7 @@
 package browse
 
 import (
+	"fmt"
 	"image"
 	"slices"
 	"strings"
@@ -31,6 +32,7 @@ func press(b input.Button) input.Event { return input.Event{Button: b, Kind: inp
 // fakePlayer records what the screens ask of the player.
 type fakePlayer struct {
 	played   []string // first path of each Play
+	lists    [][]string
 	start    []int
 	frames   []int64 // where each PlayFrom began
 	queued   [][]string
@@ -43,17 +45,21 @@ func (p *fakePlayer) State() player.State {
 }
 func (p *fakePlayer) Play(ts []player.Track, start int) {
 	p.played, p.start = append(p.played, ts[0].Path), append(p.start, start)
+	p.lists = append(p.lists, paths(ts))
 }
 func (p *fakePlayer) PlayFrom(ts []player.Track, start int, frame int64) {
 	p.played, p.start, p.frames = append(p.played, ts[0].Path), append(p.start, start), append(p.frames, frame)
+	p.lists = append(p.lists, paths(ts))
 }
-func (p *fakePlayer) SetShuffle(on bool) { p.shuffled = append(p.shuffled, on) }
-func (p *fakePlayer) Enqueue(ts []player.Track) {
+func (p *fakePlayer) SetShuffle(on bool)        { p.shuffled = append(p.shuffled, on) }
+func (p *fakePlayer) Enqueue(ts []player.Track) { p.queued = append(p.queued, paths(ts)) }
+
+func paths(ts []player.Track) []string {
 	var paths []string
 	for _, t := range ts {
 		paths = append(paths, t.Path)
 	}
-	p.queued = append(p.queued, paths)
+	return paths
 }
 
 // fakeNav records pushes and toasts.
@@ -67,12 +73,29 @@ func (n *fakeNav) Pop()                  {}
 func (n *fakeNav) Toast(msg string)      { n.toasts = append(n.toasts, msg) }
 
 // sampleIndex is a small library with names from the design.
-func sampleIndex() *library.Index {
+func sampleIndex() *library.Index { return library.NewIndex(sampleAlbums()) }
+
+// genreIndex is sampleIndex with genres tagged: Folk, Jazz, Pop and Rock.
+func genreIndex() *library.Index {
+	albums := sampleAlbums()
+	tag := func(album, track int, genres ...string) { albums[album].Tracks[track].Genres = genres }
+	tag(0, 0, "Rock")         // Rust
+	tag(0, 1, "Rock", "Pop")  // Ember
+	tag(0, 2, "Folk")         // Tin Roof
+	tag(1, 0, "Jazz", "Rock") // Neon
+	tag(2, 0, "Folk")         // Salt
+	return library.NewIndex(albums)
+}
+
+// rockSongs are genreIndex's Rock songs, by artist.
+var rockSongs = []string{"/m/a/1.flac", "/m/Copper Season/Rust.flac", "/m/Copper Season/Ember.flac"}
+
+func sampleAlbums() []library.Album {
 	track := func(album, title string, n int, d time.Duration) library.Track {
 		return library.Track{Path: "/m/" + album + "/" + title + ".flac", Title: title, Artist: "Odalys", Album: album,
 			Number: n, Duration: d}
 	}
-	albums := []library.Album{
+	return []library.Album{
 		{Artist: "Odalys", Title: "Copper Season", Year: 2019, Duration: 15 * time.Minute, Tracks: []library.Track{
 			track("Copper Season", "Rust", 1, 222*time.Second), track("Copper Season", "Ember", 2, 245*time.Second),
 			track("Copper Season", "Tin Roof", 3, 178*time.Second), track("Copper Season", "Low Tide", 4, 210*time.Second),
@@ -84,7 +107,6 @@ func sampleIndex() *library.Index {
 			{Path: "/m/n/1.flac", Title: "Salt", Artist: "Odalys", Album: "Northbound"},
 		}},
 	}
-	return library.NewIndex(albums)
 }
 
 func render(t *testing.T, s screens.Screen, now time.Time) *image.NRGBA {
@@ -176,9 +198,176 @@ func TestArtistPage(t *testing.T) {
 	if len(nav.pushed) != 1 {
 		t.Fatal("A should open the album")
 	}
-	if ap, ok := nav.pushed[0].(*AlbumPage); !ok || ap.album.Title != "Copper Season" {
+	if ap, ok := nav.pushed[0].(*AlbumPage); !ok || ap.title != "Copper Season" {
 		t.Fatalf("opened %+v", nav.pushed[0])
 	}
+}
+
+// odalysSongs are Odalys's songs in sampleIndex, albums oldest first.
+var odalysSongs = []string{"/m/n/1.flac", "/m/Copper Season/Rust.flac", "/m/Copper Season/Ember.flac",
+	"/m/Copper Season/Tin Roof.flac", "/m/Copper Season/Low Tide.flac"}
+
+// shuffledAll fails unless p's one Play was songs, from any of them, with
+// shuffle turned on.
+func shuffledAll(t *testing.T, p *fakePlayer, songs []string) {
+	t.Helper()
+	if !slices.Equal(p.shuffled, []bool{true}) || len(p.lists) != 1 || !slices.Equal(p.lists[0], songs) {
+		t.Fatalf("shuffle %v, played %q; want shuffle on and %q", p.shuffled, p.lists, songs)
+	}
+	if s := p.start[0]; s < 0 || s >= len(songs) {
+		t.Fatalf("started at %d of %d", s, len(songs))
+	}
+}
+
+// X on an artist's page shuffles all their songs, whichever album is focused.
+func TestArtistPageShufflesAll(t *testing.T) {
+	p := &fakePlayer{}
+	pg := NewArtistPage(&fakeNav{}, p, sampleIndex().Artists[1])
+	pg.Handle(press(input.Right), t0)
+	if !pg.Handle(press(input.X), t0) {
+		t.Fatal("X should be taken")
+	}
+	shuffledAll(t, p, odalysSongs)
+	if got := pg.hints()[1]; got.Key != "X" || got.Label != "Shuffle all" {
+		t.Fatalf("the second hint is %+v", got)
+	}
+}
+
+// X on an artist in the Library shuffles all their songs; it does nothing on
+// albums or songs.
+func TestLibraryShufflesAnArtist(t *testing.T) {
+	p := &fakePlayer{}
+	l := New(&fakeNav{}, p, "/m", nil)
+	l.SetIndex(sampleIndex())
+	if l.Handle(press(input.X), t0) || len(p.lists) != 0 {
+		t.Fatal("X on an album should do nothing")
+	}
+	l.Handle(press(input.R2), t0)
+	l.Handle(press(input.Down), t0) // Odalys
+	if !l.Handle(press(input.X), t0) {
+		t.Fatal("X on an artist should be taken")
+	}
+	shuffledAll(t, p, odalysSongs)
+	if got := l.hints()[1]; got.Key != "X" || got.Label != "Shuffle" {
+		t.Fatalf("the second hint is %+v", got)
+	}
+	l.Handle(press(input.R2), t0)
+	if l.Handle(press(input.X), t0) || len(p.lists) != 1 {
+		t.Fatal("X on a song should do nothing")
+	}
+}
+
+// With songs tagged, Genres comes after Songs and before Books: A opens a
+// genre, X shuffles it and Y queues it.
+func TestLibraryGenres(t *testing.T) {
+	p, nav := &fakePlayer{}, &fakeNav{}
+	l := New(nav, p, "/m", nil)
+	l.SetIndex(genreIndex())
+	for range 3 {
+		l.Handle(press(input.R2), t0)
+	}
+	if l.filter != genresFilter {
+		t.Fatal("R2 from Songs should show the genres")
+	}
+	for range 3 {
+		l.Handle(press(input.Down), t0) // Folk, Jazz, Pop, Rock
+	}
+	if got := l.hints()[1]; got.Key != "X" || got.Label != "Shuffle" {
+		t.Fatalf("the second hint is %+v", got)
+	}
+	l.Handle(press(input.Y), t0)
+	if len(p.queued) != 1 || !slices.Equal(p.queued[0], rockSongs) || len(nav.toasts) != 1 {
+		t.Fatalf("Y on Rock queued %q, toasts %v", p.queued, nav.toasts)
+	}
+	l.Handle(press(input.X), t0)
+	shuffledAll(t, p, rockSongs)
+	l.Handle(press(input.A), t0)
+	if pg, ok := nav.pushed[0].(*AlbumPage); !ok || pg.title != "Rock" {
+		t.Fatalf("A on Rock opened %+v", nav.pushed)
+	}
+	uitest.Golden(t, "library-genres", render(t, l, t0.Add(anim.Focus)))
+}
+
+// A library without genre tags has no Genres filter, so Books follows Songs;
+// one whose genres go while it shows shows the songs instead.
+func TestLibraryHidesGenresWithoutTags(t *testing.T) {
+	l := New(&fakeNav{}, &fakePlayer{}, "/m", nil)
+	l.SetIndex(sampleIndex())
+	l.Handle(press(input.R2), t0)
+	l.Handle(press(input.R2), t0)
+	if !l.Handle(press(input.R2), t0) || l.filter != booksFilter || l.Handle(press(input.R2), t0) {
+		t.Fatal("R2 on Songs should skip to Books, the last filter, without genres")
+	}
+	if !l.Handle(press(input.L2), t0) || l.filter != songsFilter {
+		t.Fatal("L2 on Books should go back to Songs without genres")
+	}
+	l.SetIndex(genreIndex())
+	if !l.Handle(press(input.R2), t0) || l.filter != genresFilter {
+		t.Fatal("R2 on Songs should show the genres once there are some")
+	}
+	l.SetIndex(sampleIndex())
+	if l.filter != songsFilter {
+		t.Fatalf("filter %d once the genres went, want the songs", l.filter)
+	}
+	render(t, l, t0)
+}
+
+// When the filters' counts don't all fit, only the chosen filter shows its
+// count.
+func TestLibraryCountsThatDontFit(t *testing.T) {
+	var albums []library.Album
+	for i := range 1000 {
+		a := library.Album{Artist: fmt.Sprintf("Artist %d", i%100), Title: fmt.Sprintf("Album %d", i)}
+		for j := range 10 {
+			a.Tracks = append(a.Tracks, library.Track{Path: fmt.Sprintf("/m/%d/%d.flac", i, j),
+				Title: fmt.Sprintf("Song %d", j), Genres: []string{fmt.Sprintf("Genre %d", (i+j)%30)}})
+		}
+		albums = append(albums, a)
+	}
+	l := New(&fakeNav{}, &fakePlayer{}, "/m", nil)
+	l.SetIndex(library.NewIndex(albums))
+	l.Handle(press(input.R2), t0)
+	img := render(t, l, t0.Add(anim.Focus))
+	if l.allCounts {
+		t.Fatal("1,000 albums, 100 artists, 10,000 songs and 30 genres can't all show their counts")
+	}
+	l.SetIndex(sampleIndex())
+	render(t, l, t0)
+	if !l.allCounts {
+		t.Fatal("a small library's counts all fit")
+	}
+	uitest.Golden(t, "library-one-count", img)
+}
+
+// A genre's page is laid out as an album's, its songs each with their artist.
+func TestGenrePage(t *testing.T) {
+	p := &fakePlayer{playing: "/m/Copper Season/Ember.flac"}
+	pg := NewGenrePage(&fakeNav{}, p, genreIndex().Genres[3])
+	if pg.title != "Rock" || pg.who != "2 artists" || pg.length != "3 songs · 11 min" || pg.rows[0].Subtitle != "Kenji Arata" {
+		t.Fatalf("page %q, %q, %q; first row %+v", pg.title, pg.who, pg.length, pg.rows[0])
+	}
+	pg.Handle(press(input.A), t0) // Play
+	pg.Handle(press(input.Right), t0)
+	pg.Handle(press(input.A), t0) // Shuffle
+	pg.Handle(press(input.Right), t0)
+	pg.Handle(press(input.Down), t0)
+	pg.Handle(press(input.A), t0) // the second song
+	if !slices.Equal(p.shuffled, []bool{false, true, false}) || p.start[0] != 0 || p.start[2] != 1 {
+		t.Fatalf("shuffle %v, starts %v", p.shuffled, p.start)
+	}
+	for _, l := range p.lists {
+		if !slices.Equal(l, rockSongs) {
+			t.Fatalf("played %q, want %q", l, rockSongs)
+		}
+	}
+	pg.Handle(press(input.Y), t0)
+	if len(p.queued) != 1 || !slices.Equal(p.queued[0], rockSongs[1:2]) {
+		t.Fatalf("Y on the second song queued %q", p.queued)
+	}
+	if pg := NewGenrePage(&fakeNav{}, p, genreIndex().Genres[1]); pg.who != "1 artist" {
+		t.Fatalf("Jazz is by %q", pg.who)
+	}
+	uitest.Golden(t, "genre", render(t, NewGenrePage(&fakeNav{}, p, genreIndex().Genres[3]), t0))
 }
 
 func TestPageHintsFit(t *testing.T) {
@@ -207,7 +396,7 @@ func TestLibraryFilters(t *testing.T) {
 	// Between the Albums and Artists filters, down to the first card.
 	fadesSoftly(t, img, image.Pt(300, 150), image.Pt(300, 216))
 	l.Handle(press(input.A), t0)
-	if ap, ok := nav.pushed[0].(*AlbumPage); !ok || ap.album != ix.Albums[0] {
+	if ap, ok := nav.pushed[0].(*AlbumPage); !ok || ap.title != ix.Albums[0].Title {
 		t.Fatalf("A on the first album opened %+v", nav.pushed)
 	}
 	if !l.Handle(press(input.R2), t0) || l.filter != artistsFilter {
@@ -247,7 +436,7 @@ func TestFramesDrawnAgainAllocateNothing(t *testing.T) {
 	u, _ := uitest.NewContext(t, theme.DeviceW, theme.DeviceH)
 	u.Status = fixture.Status()
 	u.Now = t0
-	ix := sampleIndex()
+	ix := genreIndex()
 	draw := func(name string, s screens.Screen) {
 		t.Helper()
 		s.Draw(u)
@@ -263,6 +452,7 @@ func TestFramesDrawnAgainAllocateNothing(t *testing.T) {
 	}
 	draw("an artist's page", NewArtistPage(&fakeNav{}, &fakePlayer{}, ix.Artists[0]))
 	draw("an album's page", NewAlbumPage(&fakeNav{}, &fakePlayer{}, ix.Albums[0]))
+	draw("a genre's page", NewGenrePage(&fakeNav{}, &fakePlayer{}, ix.Genres[0]))
 }
 
 // A new index's rows are made afresh.
@@ -279,7 +469,7 @@ func TestNewIndexRowsAreMadeAfresh(t *testing.T) {
 	if r := l.rows[songsFilter][0]; r.subtitle != "Marisol Vega · Salt & Static" || r.duration != "3:42" {
 		t.Fatalf("the first song's row: %q, %q", r.subtitle, r.duration)
 	}
-	if l.counts != [filterCount]string{"1", "1", "1", "0"} {
+	if l.counts != [filterCount]string{"1", "1", "1", "0", "0"} {
 		t.Fatalf("counts %q", l.counts)
 	}
 }
@@ -323,7 +513,7 @@ func TestLibraryWhileReading(t *testing.T) {
 func TestLibraryHintsFit(t *testing.T) {
 	u, _ := uitest.NewContext(t, 64, 64)
 	l := New(&fakeNav{}, &fakePlayer{}, "", nil)
-	l.SetIndex(sampleIndex())
+	l.SetIndex(genreIndex())
 	for f := range filterCount {
 		l.filter = f
 		if w := widgets.HintsWidth(u, l.hints()); w > widgets.MaxHintsWidth {
@@ -353,11 +543,11 @@ func TestSongCounts(t *testing.T) {
 	}
 }
 
-// A reload that inserts albums, artists and songs ahead of the focused ones
-// keeps focus on the same items.
+// A reload that inserts albums, artists, songs and genres ahead of the
+// focused ones keeps focus on the same items.
 func TestLibraryKeepsFocusAcrossReloads(t *testing.T) {
 	l := New(&fakeNav{}, &fakePlayer{}, "/m", nil)
-	ix := sampleIndex()
+	ix := genreIndex()
 	l.SetIndex(ix)
 	render(t, l, t0) // lays out the album grid
 	for f := range filterCount {
@@ -365,9 +555,10 @@ func TestLibraryKeepsFocusAcrossReloads(t *testing.T) {
 		l.views[f].SetFocus(l.views[f].Count()-1, t0)
 	}
 	album, artist, song := ix.Albums[len(ix.Albums)-1], ix.Artists[len(ix.Artists)-1], ix.Songs[len(ix.Songs)-1]
+	genre := ix.Genres[len(ix.Genres)-1]
 
 	more := []library.Album{{Artist: "Aaron", Title: "Aardvark", Tracks: []library.Track{
-		{Path: "/m/aa/1.flac", Title: "Aa", Artist: "Aaron", Album: "Aardvark"},
+		{Path: "/m/aa/1.flac", Title: "Aa", Artist: "Aaron", Album: "Aardvark", Genres: []string{"Ambient"}},
 	}}}
 	for _, a := range ix.Recent {
 		more = append(more, *a)
@@ -382,6 +573,9 @@ func TestLibraryKeepsFocusAcrossReloads(t *testing.T) {
 	}
 	if s := ix2.Songs[l.views[songsFilter].Focus()]; s.Path != song.Path {
 		t.Errorf("song focus moved to %q, want %q", s.Path, song.Path)
+	}
+	if g := ix2.Genres[l.views[genresFilter].Focus()]; g.Name != genre.Name {
+		t.Errorf("genre focus moved to %q, want %q", g.Name, genre.Name)
 	}
 }
 
@@ -412,7 +606,7 @@ func TestLibraryBooksFilterPlaysFromWhereTheBookWasLeft(t *testing.T) {
 	shelf := NewShelf(p)
 	l.SetShelf(shelf)
 	l.SetIndex(bookIndex())
-	if l.counts != [filterCount]string{"1", "1", "1", "1"} {
+	if l.counts != [filterCount]string{"1", "1", "1", "0", "1"} {
 		t.Fatalf("counts %q", l.counts)
 	}
 	l.filter = booksFilter

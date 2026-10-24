@@ -29,6 +29,39 @@ var marketplaces = map[string]string{
 // deviceType is what the iPhone Audible app calls itself when it registers.
 const deviceType = "A2CZJZGLK2JJVM"
 
+// The iPhone profile a registration presents: app 4.60 on iOS 26.2, as audible
+// 0.13's newer profile does. Audible refuses licences (Denied, with
+// CustomerThrottled) to devices registered as the app 3.56.2 on iOS 15 with a
+// 32-character hex serial, which is why these and the serial's shape matter.
+const (
+	appVersion      = "4.60"
+	osVersion       = "26.2"
+	softwareVersion = "46000856"
+)
+
+// serialLetters are what a device serial is made of.
+const serialLetters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+// newSerial makes a random 40-character serial of letters and digits.
+func newSerial() (string, error) {
+	b := make([]byte, 40)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	for i, c := range b {
+		// 248 is the biggest multiple of 62 a byte holds; above it would skew.
+		for c >= 248 {
+			var r [1]byte
+			if _, err := rand.Read(r[:]); err != nil {
+				return "", err
+			}
+			c = r[0]
+		}
+		b[i] = serialLetters[int(c)%len(serialLetters)]
+	}
+	return string(b), nil
+}
+
 // Login registers this device as one of the listener's Audible devices, the
 // way the iPhone app does. The listener signs in to Amazon in a browser, which
 // ends on a page that doesn't exist; its address holds an authorization code,
@@ -51,17 +84,17 @@ func NewLogin(locale string) (*Login, error) {
 		return nil, fmt.Errorf("audible: no marketplace %q", locale)
 	}
 	v := make([]byte, 32)
-	s := make([]byte, 16)
 	if _, err := rand.Read(v); err != nil {
 		return nil, err
 	}
-	if _, err := rand.Read(s); err != nil {
+	serial, err := newSerial()
+	if err != nil {
 		return nil, err
 	}
 	return &Login{
 		locale: locale, domain: domain,
 		verifier: base64.RawURLEncoding.EncodeToString(v),
-		serial:   strings.ToUpper(hex.EncodeToString(s)),
+		serial:   serial,
 	}, nil
 }
 
@@ -142,10 +175,10 @@ func (l *Login) Complete(ctx context.Context, hc *http.Client, address string) (
 		"requested_token_type": []string{"bearer", "mac_dms", "website_cookies", "store_authentication_cookie"},
 		"cookies":              map[string]any{"website_cookies": []any{}, "domain": ".amazon." + l.domain},
 		"registration_data": map[string]string{
-			"domain": "Device", "app_version": "3.56.2", "device_serial": l.serial,
+			"domain": "Device", "app_version": appVersion, "device_serial": l.serial,
 			"device_type": deviceType,
 			"device_name": "%FIRST_NAME%%FIRST_NAME_POSSESSIVE_STRING%%DUPE_STRATEGY_1ST%Audible for iPhone",
-			"os_version":  "15.0.0", "software_version": "35602678", "device_model": "iPhone", "app_name": "Audible",
+			"os_version":  osVersion, "software_version": softwareVersion, "device_model": "iPhone", "app_name": "Audible",
 		},
 		"auth_data": map[string]string{
 			"client_id": l.clientID(), "authorization_code": code, "code_verifier": l.verifier,

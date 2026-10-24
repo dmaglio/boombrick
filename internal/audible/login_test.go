@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,24 @@ func TestLoginURLAsksForADeviceOnTheMarketplace(t *testing.T) {
 	}
 	if got := q.Get("openid.oa2.client_id"); !strings.HasPrefix(got, "device:") {
 		t.Errorf("client id %q", got)
+	}
+}
+
+// Audible denies licences to devices registered with the older iPhone profile
+// (a 32-character hex serial, app 3.56.2 on iOS 15), so a registration must
+// present the newer one.
+func TestLoginProfile(t *testing.T) {
+	for range 32 {
+		l, err := NewLogin("it")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !regexp.MustCompile(`^[A-Za-z0-9]{40}$`).MatchString(l.serial) {
+			t.Fatalf("serial %q is not 40 letters and digits", l.serial)
+		}
+	}
+	if appVersion != "4.60" || osVersion != "26.2" || softwareVersion != "46000856" {
+		t.Errorf("profile %s, %s, %s", appVersion, osVersion, softwareVersion)
 	}
 }
 
@@ -114,8 +133,10 @@ func TestCompleteRegistersTheDevice(t *testing.T) {
 	if auth["authorization_code"] != "CODE9" || auth["code_verifier"] != l.verifier || auth["client_id"] != l.clientID() {
 		t.Errorf("auth_data %v", auth)
 	}
-	if got["registration_data"].(map[string]any)["device_serial"] != l.serial {
-		t.Errorf("registration_data %v", got["registration_data"])
+	rd := got["registration_data"].(map[string]any)
+	if rd["device_serial"] != l.serial || rd["app_version"] != appVersion ||
+		rd["os_version"] != osVersion || rd["software_version"] != softwareVersion {
+		t.Errorf("registration_data %v", rd)
 	}
 	if reg.ADPToken != "ADP" || reg.DeviceKey != "KEY" || reg.Locale != "it" || reg.WebsiteCookies["session-id"] != "123" {
 		t.Errorf("registration %+v", reg)

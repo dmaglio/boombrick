@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -16,6 +17,15 @@ type Artist struct {
 	Songs  int
 }
 
+// Genre is the songs tagged with one genre: by album artist, each artist's
+// albums oldest first as on their page, then by disc and track.
+type Genre struct {
+	Name     string
+	Songs    []*Track
+	Artists  int           // how many artists the songs are by, each song's own
+	Duration time.Duration // the songs' lengths added up
+}
+
 // Index is the library sorted for browsing. It isn't changed once built, so
 // the goroutine that loads it can hand it to the UI.
 type Index struct {
@@ -23,6 +33,7 @@ type Index struct {
 	Recent  []*Album  // most recently added first
 	Artists []*Artist // by name
 	Songs   []*Track  // by title
+	Genres  []*Genre  // by name
 	Books   []*Album  // audiobooks, by author and title; they are in no other list
 	byKey   map[[2]string]*Album
 	spotify map[string]*Track // the files imports downloaded, by Spotify ID
@@ -82,7 +93,44 @@ func NewIndex(albums []Album) *Index {
 	slices.SortStableFunc(ix.Songs, func(x, y *Track) int {
 		return cmp.Or(Compare(x.Title, y.Title), Compare(x.Artist, y.Artist))
 	})
+	ix.Genres = genresOf(ix.Artists)
 	return ix
+}
+
+// genresOf groups the artists' songs by genre, as one genre whatever its
+// case, named as it is first spelled.
+func genresOf(artists []*Artist) []*Genre {
+	var genres []*Genre
+	byName := map[string]*Genre{}
+	type byArtist struct {
+		g      *Genre
+		artist string
+	}
+	counted := map[byArtist]bool{}
+	for _, ar := range artists {
+		for _, a := range ar.Albums {
+			for j := range a.Tracks {
+				t := &a.Tracks[j]
+				for _, name := range t.Genres {
+					k := strings.ToLower(name)
+					g := byName[k]
+					if g == nil {
+						g = &Genre{Name: name}
+						byName[k] = g
+						genres = append(genres, g)
+					}
+					g.Songs = append(g.Songs, t)
+					g.Duration += t.Duration
+					if k := (byArtist{g, t.Artist}); !counted[k] {
+						counted[k] = true
+						g.Artists++
+					}
+				}
+			}
+		}
+	}
+	slices.SortStableFunc(genres, func(x, y *Genre) int { return Compare(x.Name, y.Name) })
+	return genres
 }
 
 // Album finds an album by its artist and title, or returns nil.

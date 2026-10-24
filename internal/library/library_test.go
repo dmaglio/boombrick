@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -275,6 +276,37 @@ func id3(frames map[string]string) string {
 	}
 	n := len(body)
 	return "ID3\x03\x00\x00" + string([]byte{byte(n >> 21 & 0x7f), byte(n >> 14 & 0x7f), byte(n >> 7 & 0x7f), byte(n & 0x7f)}) + string(body)
+}
+
+// A scan keeps each file's genres, and a rescan of a retagged file replaces
+// them.
+func TestScanStoresGenres(t *testing.T) {
+	db, root := openDB(t), t.TempDir()
+	path := touch(t, root, "Odalys/Copper Season/01 Rust.mp3", id3(map[string]string{"TCON": "Rock;Pop"}))
+	touch(t, root, "Odalys/Copper Season/02 Ember.mp3", id3(map[string]string{"TIT2": "Ember"}))
+	genres := func() [][]string {
+		t.Helper()
+		if _, err := Scan(context.Background(), db, root, formats); err != nil {
+			t.Fatal(err)
+		}
+		albums, err := Albums(db)
+		if err != nil || len(albums) != 1 {
+			t.Fatalf("albums %+v, %v", albums, err)
+		}
+		var gs [][]string
+		for _, tr := range albums[0].Tracks {
+			gs = append(gs, tr.Genres)
+		}
+		return gs
+	}
+	if gs := genres(); !reflect.DeepEqual(gs, [][]string{{"Rock", "Pop"}, nil}) {
+		t.Fatalf("genres %q", gs)
+	}
+	os.WriteFile(path, []byte(id3(map[string]string{"TCON": "Jazz"})), 0o644)
+	os.Chtimes(path, time.Now(), time.Now().Add(time.Hour))
+	if gs := genres(); !reflect.DeepEqual(gs, [][]string{{"Jazz"}, nil}) {
+		t.Fatalf("genres after retagging %q", gs)
+	}
 }
 
 func TestTagsKeepFolderDisc(t *testing.T) {

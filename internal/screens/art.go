@@ -27,6 +27,9 @@ func ArtistArt(ar *library.Artist) widgets.ArtSpec {
 	return s
 }
 
+// GenreArt is a genre's art: the placeholder made from its name.
+func GenreArt(g *library.Genre) widgets.ArtSpec { return widgets.SpecFor(g.Name) }
+
 // SongArt is the art of a song's album.
 func SongArt(t *library.Track) widgets.ArtSpec {
 	s := widgets.SpecFor(t.Album)

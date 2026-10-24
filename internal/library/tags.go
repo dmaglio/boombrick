@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/dhowden/tag"
 )
@@ -18,7 +20,8 @@ type Tags struct {
 	HasGain                           bool
 	AlbumGain, AlbumPeak              float64 // ReplayGain album gain in dB and sample peak
 	HasAlbumGain                      bool
-	SpotifyID                         string // BOOMBRICK_SPOTIFY_ID, on a song an import downloaded
+	SpotifyID                         string   // BOOMBRICK_SPOTIFY_ID, on a song an import downloaded
+	Genres                            []string // nil when untagged
 }
 
 // SpotifyIDTag names the tag holding the Spotify ID of a song an import
@@ -64,7 +67,23 @@ func ReadTags(path string) (t Tags, err error) {
 	}
 	t.Gain, t.Peak, t.HasGain, t.AlbumGain, t.AlbumPeak, t.HasAlbumGain = replayGains(m.Raw())
 	t.SpotifyID = rawText(m.Raw(), SpotifyIDTag)
+	t.Genres = genres(m.Genre())
 	return t, nil
+}
+
+// genres splits a genre tag into its genres. The tag package separates a
+// list's values with NULs (third_party/tag), and people type ";" between
+// them. Each is trimmed, of the byte order marks UTF-16 lists repeat too,
+// and kept once whatever its case.
+func genres(s string) []string {
+	var out []string
+	for _, g := range strings.FieldsFunc(s, func(r rune) bool { return r == 0 || r == ';' }) {
+		g = strings.TrimFunc(g, func(r rune) bool { return unicode.IsSpace(r) || r == 0xfeff })
+		if g != "" && !slices.ContainsFunc(out, func(o string) bool { return strings.EqualFold(o, g) }) {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 // ReadTag reads the one tag named key, ignoring case, from the file at path,
