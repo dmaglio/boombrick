@@ -2,6 +2,7 @@ package browse
 
 import (
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ujjwal313/boombrick/internal/library"
@@ -19,32 +20,38 @@ const (
 	albumsFilter = iota
 	artistsFilter
 	songsFilter
+	genresFilter
 	filterCount
 )
 
-var filterNames = [filterCount]string{"Albums", "Artists", "Songs"}
+var filterNames = [filterCount]string{"Albums", "Artists", "Songs", "Genres"}
 
 const listTop = contentTop + widgets.FiltersHeight
 
 const emptyText = "Copy music to the Music folder on the SD card, or find something on YouTube Music."
 
-// Library is the Library tab: albums, artists or songs, chosen with L2 and R2.
+// Library is the Library tab: albums, artists, songs or genres, chosen with
+// L2 and R2. Genres shows only when some song is tagged with one.
 type Library struct {
-	nav      screens.Nav
-	p        Player
-	musicDir string
-	rescan   func()
-	ix       *library.Index
-	filter   int
-	views    [filterCount]views.Grid
-	counts   [filterCount]string    // the filters' counts
-	rows     [filterCount][]listRow // the artists' and songs' rows, made as they first show
-	laidOut  bool
-	reading  bool            // the first scan is running with nothing indexed yet
-	state    widgets.Wrapped // the empty or reading state's description, wrapped
+	nav       screens.Nav
+	p         Player
+	musicDir  string
+	rescan    func()
+	ix        *library.Index
+	filter    int
+	views     [filterCount]views.Grid
+	counts    [filterCount]string    // the filters' counts
+	oneCount  [filterCount]string    // the chosen filter's count alone, when all don't fit
+	rows      [filterCount][]listRow // the artists', songs' and genres' rows, made as they first show
+	laidOut   bool
+	measured  bool            // allCounts is known for this index
+	allCounts bool            // every filter's count fits in the row
+	reading   bool            // the first scan is running with nothing indexed yet
+	state     widgets.Wrapped // the empty or reading state's description, wrapped
 }
 
-// listRow is what an artist's or a song's row shows that takes making.
+// listRow is what an artist's, a song's or a genre's row shows that takes
+// making.
 type listRow struct {
 	art      widgets.ArtSpec
 	subtitle string
@@ -55,25 +62,33 @@ type listRow struct {
 func New(nav screens.Nav, p Player, musicDir string, rescan func()) *Library {
 	l := &Library{nav: nav, p: p, musicDir: musicDir, rescan: rescan}
 	l.views[albumsFilter] = screens.AlbumGrid()
-	for _, f := range []int{artistsFilter, songsFilter} {
+	for _, f := range []int{artistsFilter, songsFilter, genresFilter} {
 		l.views[f] = views.Grid{Cols: 1, CellW: theme.ScreenW - 2*side, CellH: widgets.RowHeight, Pad: pad,
 			ViewH: contentBot - listTop}
 	}
 	return l
 }
 
-// SetIndex shows ix, keeping each filter's focus on the same album, artist or
-// song when it is still there.
+// SetIndex shows ix, keeping each filter's focus on the same album, artist,
+// song or genre when it is still there. Without genres, the genres filter
+// gives way to the songs.
 func (l *Library) SetIndex(ix *library.Index) {
 	old := l.ix
 	l.ix = ix
-	l.counts = [filterCount]string{screens.Count(len(ix.Albums)), screens.Count(len(ix.Artists)), screens.Count(len(ix.Songs))}
+	l.counts = [filterCount]string{screens.Count(len(ix.Albums)), screens.Count(len(ix.Artists)),
+		screens.Count(len(ix.Songs)), screens.Count(len(ix.Genres))}
+	l.measured = false
 	l.rows[artistsFilter] = make([]listRow, len(ix.Artists))
 	l.rows[songsFilter] = make([]listRow, len(ix.Songs))
+	l.rows[genresFilter] = make([]listRow, len(ix.Genres))
+	if l.filter >= l.shown() {
+		l.filter = songsFilter
+	}
 	if old == nil {
 		l.views[albumsFilter].SetCount(len(ix.Albums))
 		l.views[artistsFilter].SetCount(len(ix.Artists))
 		l.views[songsFilter].SetCount(len(ix.Songs))
+		l.views[genresFilter].SetCount(len(ix.Genres))
 		return
 	}
 	g := &l.views[albumsFilter]
@@ -85,6 +100,17 @@ func (l *Library) SetIndex(ix *library.Index) {
 	g = &l.views[songsFilter]
 	g.SetCountFocus(len(ix.Songs), refocus(old.Songs, ix.Songs, g.Focus(),
 		func(s *library.Track) string { return s.Path }))
+	g = &l.views[genresFilter]
+	g.SetCountFocus(len(ix.Genres), refocus(old.Genres, ix.Genres, g.Focus(),
+		func(g *library.Genre) string { return strings.ToLower(g.Name) }))
+}
+
+// shown is how many filters show: the genres only when there are some.
+func (l *Library) shown() int {
+	if len(l.ix.Genres) == 0 {
+		return genresFilter
+	}
+	return filterCount
 }
 
 // refocus finds the item that was at f in old within now, by key; without it
@@ -107,7 +133,8 @@ func (l *Library) SetReading() { l.reading = true }
 func (l *Library) empty() bool { return l.ix != nil && len(l.ix.Albums) == 0 }
 
 // Handle switches filters with L2/R2, moves with the D-pad, opens or plays
-// with A and queues with Y. The empty library rescans with Y.
+// with A and queues with Y. X shuffles an artist or a genre. The empty
+// library rescans with Y.
 func (l *Library) Handle(ev input.Event, now time.Time) bool {
 	if ev.Kind == input.Release || l.ix == nil {
 		return false
@@ -128,7 +155,7 @@ func (l *Library) Handle(ev input.Event, now time.Time) bool {
 			if ev.Button == input.R2 {
 				f = l.filter + 1
 			}
-			if f < 0 || f >= filterCount {
+			if f < 0 || f >= l.shown() {
 				return false
 			}
 			l.filter = f
@@ -144,6 +171,12 @@ func (l *Library) Handle(ev input.Event, now time.Time) bool {
 				l.nav.Toast(screens.AddedToQueue)
 			}
 			return true
+		case input.X:
+			if l.filter != artistsFilter && l.filter != genresFilter || g.Count() == 0 {
+				return false
+			}
+			shuffle(l.p, l.tracksAt(g.Focus()))
+			return true
 		}
 	}
 	return g.Move(ev.Button, now)
@@ -156,12 +189,10 @@ func (l *Library) open(i int) {
 	case artistsFilter:
 		l.nav.Push(NewArtistPage(l.nav, l.p, l.ix.Artists[i]))
 	case songsFilter:
-		songs := make([]player.Track, len(l.ix.Songs))
-		for j, s := range l.ix.Songs {
-			songs[j] = screens.TrackOf(s)
-		}
 		l.p.SetShuffle(false)
-		l.p.Play(songs, i)
+		l.p.Play(songTracks(l.ix.Songs), i)
+	case genresFilter:
+		l.nav.Push(NewGenrePage(l.nav, l.p, l.ix.Genres[i]))
 	}
 }
 
@@ -171,14 +202,9 @@ func (l *Library) tracksAt(i int) []player.Track {
 	case albumsFilter:
 		return screens.Tracks(l.ix.Albums[i].Tracks)
 	case artistsFilter:
-		ar := l.ix.Artists[i]
-		ts := make([]player.Track, 0, ar.Songs)
-		for _, a := range ar.Albums {
-			for j := range a.Tracks {
-				ts = append(ts, screens.TrackOf(&a.Tracks[j]))
-			}
-		}
-		return ts
+		return artistTracks(l.ix.Artists[i])
+	case genresFilter:
+		return songTracks(l.ix.Genres[i].Songs)
 	}
 	return []player.Track{screens.TrackOf(l.ix.Songs[i])}
 }
@@ -210,21 +236,38 @@ func (l *Library) Draw(u *ui.Context) {
 	widgets.HintBar(u, l.hints())
 }
 
-// drawFilters draws L2, the three filters with their counts, and R2.
+// drawFilters draws L2, the filters with their counts, and R2. When the
+// counts don't all fit, only the chosen filter shows its count.
 func (l *Library) drawFilters(u *ui.Context) {
-	widgets.Filters(u, filterNames[:], l.counts[:], l.filter, side, contentTop)
+	n := l.shown()
+	if !l.measured {
+		l.measured = true
+		l.allCounts = widgets.FiltersWidth(u, filterNames[:n], l.counts[:n]) <= theme.ScreenW-2*side
+	}
+	counts := l.counts[:n]
+	if !l.allCounts {
+		l.oneCount = [filterCount]string{}
+		l.oneCount[l.filter] = l.counts[l.filter]
+		counts = l.oneCount[:n]
+	}
+	widgets.Filters(u, filterNames[:n], counts, l.filter, side, contentTop)
 }
 
-// row is item i's row in the artists or songs, made the first time it shows
-// rather than every frame.
+// row is item i's row in the artists, songs or genres, made the first time
+// it shows rather than every frame.
 func (l *Library) row(i int) *listRow {
 	r := &l.rows[l.filter][i]
 	if r.subtitle != "" {
 		return r
 	}
-	if l.filter == artistsFilter {
+	switch l.filter {
+	case artistsFilter:
 		ar := l.ix.Artists[i]
 		r.art, r.subtitle = screens.ArtistArt(ar), artistLine(len(ar.Albums), ar.Songs)
+		return r
+	case genresFilter:
+		g := l.ix.Genres[i]
+		r.art, r.subtitle = screens.GenreArt(g), screens.SongsAndTime(len(g.Songs), g.Duration)
 		return r
 	}
 	s := l.ix.Songs[i]
@@ -246,9 +289,12 @@ func (l *Library) drawView(u *ui.Context) {
 	g.Draw(u.Now, side, listTop, func(i int, x, y, k float32) {
 		lr := l.row(i)
 		r := widgets.Row{Art: &lr.art, Subtitle: lr.subtitle, Duration: lr.duration}
-		if l.filter == artistsFilter {
+		switch l.filter {
+		case artistsFilter:
 			r.Title, r.Round = l.ix.Artists[i].Name, true
-		} else {
+		case genresFilter:
+			r.Title = l.ix.Genres[i].Name
+		default:
 			s := l.ix.Songs[i]
 			r.Title, r.Playing = s.Title, s.Path == playing
 		}
@@ -262,11 +308,13 @@ func (l *Library) drawView(u *ui.Context) {
 }
 
 // The tab's hint bars: before the first index, for an empty library, and
-// with albums or artists, or songs, shown.
+// with albums, artists or genres, or songs shown.
 var (
 	tabHints    = []widgets.Hint{{Key: "L1/R1", Label: "Tabs"}}
 	rescanHints = []widgets.Hint{{Key: "Y", Label: "Rescan SD card"}, {Key: "L1/R1", Label: "Tabs"}}
 	openHints   = []widgets.Hint{{Key: "A", Label: "Open"}, {Key: "Y", Label: "Add to queue"},
+		{Key: "L2/R2", Label: "Filter"}, {Key: "L1/R1", Label: "Tabs"}}
+	shuffleHints = []widgets.Hint{{Key: "A", Label: "Open"}, {Key: "X", Label: "Shuffle"}, {Key: "Y", Label: "Add to queue"},
 		{Key: "L2/R2", Label: "Filter"}, {Key: "L1/R1", Label: "Tabs"}}
 	songHints = []widgets.Hint{{Key: "A", Label: "Play"}, {Key: "Y", Label: "Add to queue"},
 		{Key: "L2/R2", Label: "Filter"}, {Key: "L1/R1", Label: "Tabs"}}
@@ -280,6 +328,8 @@ func (l *Library) hints() []widgets.Hint {
 		return rescanHints
 	case l.filter == songsFilter:
 		return songHints
+	case l.filter == artistsFilter, l.filter == genresFilter:
+		return shuffleHints
 	}
 	return openHints
 }

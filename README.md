@@ -10,7 +10,7 @@ See [CHANGELOG.md](CHANGELOG.md) for what each release adds.
 
 ## Features
 
-- **Your music:** MP3, FLAC, Opus and M4A (AAC), gapless, with ReplayGain levelling. Browse by album, artist or song; the queue has shuffle and repeat and is kept between launches.
+- **Your music:** MP3, FLAC, Opus and M4A (AAC), gapless, with ReplayGain levelling. Browse by album, artist, song or genre; the queue has shuffle and repeat and is kept between launches.
 - **Covers** from the files, folder pictures or the Cover Art Archive.
 - **Synced lyrics** from the files, `.lrc` files or LRCLIB, with the line being sung highlighted.
 - **YouTube Music:** search, browse albums and artists, and download songs as tagged Opus files with covers and lyrics. A song that is still downloading plays as soon as it lands.
@@ -50,7 +50,7 @@ The Downloader card updates yt-dlp, which YouTube Music downloads use, the same 
 | D-pad | Move |
 | A | Play or open |
 | B | Back |
-| X | Download (YouTube Music) |
+| X | Download (YouTube Music); shuffle an artist or a genre (Library) |
 | Y | Add to the queue; on Now Playing, lyrics |
 | L1, R1 | Switch tabs; on Now Playing, previous and next track |
 | L2, R2 | Filters in the Library and YouTube Music |

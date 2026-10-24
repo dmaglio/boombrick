@@ -40,9 +40,16 @@ func NewArtistPage(nav screens.Nav, p Player, ar *library.Artist) *ArtistPage {
 }
 
 // Handle moves through the albums, opens one with A and queues one with Y.
+// X shuffles all the artist's songs.
 func (pg *ArtistPage) Handle(ev input.Event, now time.Time) bool {
 	if ev.Kind == input.Release {
 		return false
+	}
+	if ev.Button == input.X {
+		if ev.Kind == input.Press {
+			shuffle(pg.p, artistTracks(pg.artist))
+		}
+		return ev.Kind == input.Press
 	}
 	if ev.Kind == input.Press && pg.grid.Count() > 0 {
 		a := pg.artist.Albums[pg.grid.Focus()]
@@ -91,7 +98,7 @@ func drawAlbums(u *ui.Context, g *views.Grid, albums []*library.Album, top float
 	u.PopClip()
 }
 
-var artistHints = []widgets.Hint{{Key: "A", Label: "Open"}, {Key: "Y", Label: "Add to queue"}, {Key: "B", Label: "Back"},
-	{Key: "L1/R1", Label: "Tabs"}}
+var artistHints = []widgets.Hint{{Key: "A", Label: "Open"}, {Key: "X", Label: "Shuffle all"}, {Key: "Y", Label: "Add to queue"},
+	{Key: "B", Label: "Back"}, {Key: "L1/R1", Label: "Tabs"}}
 
 func (pg *ArtistPage) hints() []widgets.Hint { return artistHints }
